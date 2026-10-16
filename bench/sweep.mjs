@@ -98,311 +98,26 @@ export function prodSweepOptions(opts = {}) {
 }
 
 // ────────────────────────────────────────────────────────────── 合成语料
-
-/** 虚构服务名（与 core-30-v1 的 Orchid/Kestrel/Harborlight 不重叠，避免撞词）。 */
-const SERVICES = Object.freeze([
-  'Lumenpath', 'Quartzwell', 'Tidalmark', 'Fernbrook', 'Copperloom', 'Nightjar',
-  'Saltshade', 'Rookfield', 'Pinecrest', 'Millrace', 'Amberdrift', 'Cinderbay',
-]);
-
-/**
- * 事实模板。`shared` 是**跨服务共用**的动作词（所以它在语料里的 df 随语料一起涨），
- * `property` 是「问哪一项」，`unit` 决定字数。
- *
- * 关键设计：可答题的题面由「服务名 + 共用动作词 + 疑问式」组成 —— **不含取值**，
- * 所以它的每个词项在语料里都**不稀有**（df 约 0.1n ~ 0.2n）。这正是危险的地方：
- * 稀有词闸门会把「真的能答」的题也判成没有信息量。装置要能量出这件事。
- */
-const FACTS = Object.freeze([
-  // `subject` 是「判别词」：只有这一类的笔记含它，所以它的 df ≈ 12（每个服务一篇）。
-  // 这是**可答题的关键**，也是整台装置最关键的一个设计：真实使用里，你能答上一句
-  // 「X 的 Y 是多少」，靠的正是查询和笔记**共用同一个判别词**。
-  // 第二版没有 `subject`（题面只有服务名 + 通用动作词），于是 200 篇档上
-  // `df/n ≤ 0.05` 把所有词项都判成没信息量，**可答题 recall 直接 0.0%** ——
-  // 那不是一个「闸门太严」的结论，那是夹具根本不具备可答性。
-  //
-  // `property` + `subject` 拼出正文里的复合词，题面里也必须出现 `subject`。
-  { key: 'deploy_port', shared: '部署', subject: '监听端口', unit: 'v' },
-  { key: 'cache_ttl', shared: '缓存', subject: '过期时间', unit: 'v' },
-  { key: 'retry_count', shared: '失败', subject: '重试次数', unit: 'v' },
-  { key: 'config_path', shared: '运行', subject: '配置文件路径', unit: 'v' },
-  { key: 'batch_limit', shared: '同步', subject: '单批条数上限', unit: 'v' },
-  { key: 'log_keep', shared: '日志', subject: '保留天数', unit: 'v' },
-  { key: 'api_quota', shared: '接口', subject: '每分钟限流', unit: 'v' },
-  { key: 'runner_count', shared: '构建', subject: '机器台数', unit: 'v' },
-  { key: 'theme_name', shared: '站点', subject: '主题名称', unit: 'w' },
-  { key: 'db_engine', shared: '应用', subject: '数据库引擎', unit: 'w' },
-]);
-
-/**
- * 每类事实**自己的词表**。这是让 BM25 能分清「同一个服务的十几件事」的唯一办法。
- *
- * 走过的弯路（记在这里，免得下一个人再走）：第一版里所有事实的填充句取自同一个
- * 句池，只有「服务名」一个变量。结果是同一个服务的十几篇笔记**词法几乎相同**，
- * BM25 分数差不到千分之一，`saturateRelevance` 一压，全部落到 0.878±0.002 ——
- * 真答案靠 id 的字典序在决定排第几。recall 因此与闸门无关，纯粹是掷骰子。
- * 真实的库不是这样：讲「重试」的笔记用重试的词，讲「端口」的笔记用端口的词。
- */
-const CONTEXT = Object.freeze({
-  deploy_port: { nouns: ['监听端口', '入口网关', '转发规则', '开通申请'], prose: '端口开通要走变更单，安全组那边一起提' },
-  cache_ttl: { nouns: ['过期时间', '回源策略', '预热脚本', '命中率'], prose: '过期时间调短之后回源压力会涨，要盯着' },
-  retry_count: { nouns: ['重试次数', '退避算法', '失败队列', '熔断阈值'], prose: '重试次数调大能扛住抖动，但也可能把下游压垮' },
-  config_path: { nouns: ['配置文件路径', '默认加载顺序', '覆盖规则', '环境变量'], prose: '配置文件路径有好几层，后加载的会盖掉前面的' },
-  batch_limit: { nouns: ['单批条数上限', '分页游标', '限速窗口', '断点续传'], prose: '单批条数上限调大之后内存会抖，别一次开太猛' },
-  log_keep: { nouns: ['保留天数', '归档策略', '采样比例', '检索索引'], prose: '保留天数从三十天改成九十天之后磁盘要重新算' },
-  api_quota: { nouns: ['每分钟限流', '令牌桶容量', '突发额度', '配额告警'], prose: '每分钟限流是按调用方维度算的，不是全局' },
-  runner_count: { nouns: ['机器台数', '排队策略', '镜像预热', '缓存挂载'], prose: '机器台数不够的时候任务会在队列里等很久' },
-  theme_name: { nouns: ['主题名称', '模板覆盖', '静态资源', '构建产物'], prose: '主题名称换了之后要清一次构建缓存才生效' },
-  db_engine: { nouns: ['数据库引擎', '连接串', '迁移脚本', '只读副本'], prose: '数据库引擎升级要停机，得提前排窗口' },
-});
-
-/**
- * 「换个说法问同一件事」的同义说法。**这是让扫描真的有意义的那个变量**：
- * 如果可答题的题面就是把笔记标题抄一遍，那么任何覆盖率闸门都必然放行
- * （coverage = 1.000），扫出来的曲线是一根平线 —— 第一版就是这样，7 个覆盖率
- * 取值全给出 100% recall，等于什么都没测。
- * 真实使用里提问的人不会记得笔记怎么写；同义说法让 coverage 落回 0.6 附近，
- * 闸门的高低才真的会把答案拦下来。
- */
-const ALIASES = Object.freeze({
-  // `keep`：换掉通用动作词，但**留住判别词** —— 现实里同一个东西换个说法问，
-  //         判别词是不会变的。这一档是覆盖率与证据性两条闸门都该放行的正常情况。
-  // `drop`：连判别词一起换掉，只留服务名 —— 覆盖率与证据性的最低档。
-  // 三档（照原话 / keep / drop）让 120 道可答题横跨 coverage 的整条量程。
-  deploy_port: { keep: ['对外服务的监听端口是多少', '监听端口开在哪个号上'], drop: ['外面怎么连进来'] },
-  cache_ttl: { keep: ['过期时间设的是多久', '过期时间到了会怎样'], drop: ['数据多久刷新一次'] },
-  retry_count: { keep: ['重试次数上限设成几', '重试次数能不能调'], drop: ['任务不稳的时候怎么兜底'] },
-  config_path: { keep: ['配置文件路径在哪里', '配置文件路径改过吗'], drop: ['机器上的参数从哪读'] },
-  batch_limit: { keep: ['单批条数上限是多少', '单批条数上限能调吗'], drop: ['怎么控制搬运的量'] },
-  log_keep: { keep: ['保留天数设的是多少', '保留天数要不要改'], drop: ['出问题之后还能翻多久的记录'] },
-  api_quota: { keep: ['每分钟限流卡在多少', '每分钟限流会不会调'], drop: ['外面调得太猛怎么办'] },
-  runner_count: { keep: ['机器台数一共几台', '机器台数够不够用'], drop: ['排队等机器的情况'] },
-  theme_name: { keep: ['主题名称叫什么', '主题名称换过吗'], drop: ['前端看起来怎么样'] },
-  db_engine: { keep: ['数据库引擎选的是哪个', '数据库引擎换过没有'], drop: ['数据到底放在哪'] },
-});
-
-/**
- * 题面。**题面与正文必须共用同一个复合词**（`${shared}${property}`），否则这道题
- * 测的不是闸门，是「我造的夹具自己打不通」—— 第一版题面写「监听端口是多少」、
- * 正文写「部署监听端口是…」，共享二元组只有 `监听/听端/端口`，而每条同服务的
- * 笔记标题都带这三元组，于是十二件事互相压 score，recall@5 只有 4.2%。
- * 修法是把 `shared` 拼进 `property`：正文 `部署监听端口` ↔ 题面 `部署监听端口是多少`，
- * 歧义只剩「同一个服务里的十几件事」这一层，那才是覆盖率闸门该处理的事。
- */
-function queryOf(fact) {
-  return `${fact.shared}${fact.subject}`;
-}
-
-/** 取值：同时是「服务序号」与「版本序号」的函数，保证三元组在语料里唯一。 */
-function literalOf(fact, si, v) {
-  if (fact.unit === 'w') return `${SERVICES[si % SERVICES.length].toLowerCase()}-${fact.key}-v${v}`; // 取值只认全局服务表：同一个服务在大小档上取值必须一样
-  return String(1000 + si * 37 + v * 13);
-}
-
-/**
- * 正文句子的模板池。**每一条都要带 `{svc}` 或 `{id}` 填充**，否则同一句话会在
- * 几十篇笔记里逐字重复：那些字的 df 直接顶到 1.0，任何查询的 coverage 都是 1.000。
- * 第一版的收尾句「上次有人直接改了机器上的配置，…」就是这么把整张曲线压平的 ——
- * 7 个覆盖率取值全给 100% recall，闸门高低一点动静都没有。
- */
-const SENTENCE_POOL = Object.freeze([
-  '{svc} 这边是先在小范围试，稳一周再全量。',
-  '改之前记得跟 {svc} 的值班同学打个招呼。',
-  '{id} 这件事以前踩过坑，别再省略审批。',
-  '如果 {svc} 那边有意见，以他们的为准。',
-  '这条只对 {svc} 生效，别的服务不一样。',
-  '上个月 {svc} 刚复盘过一次，结论是流程没问题。',
-  '{id} 相关的改动都走同一个发布窗口。',
-  '临时绕过的要先记在 {svc} 的待办里。',
-  '遇到不确定的地方先问 {svc} 的负责人。',
-  '这几个数字每季度对一次，对不上就报上去。',
-  '{svc} 的文档更新得比较慢，以实际为准。',
-  '之前有人按老经验做，结果在 {svc} 上翻车了。',
-  '这条规则从去年沿用到现在，没改过。',
-  '{id} 出问题的话优先看最近一次变更。',
-]);
-
-/** 一句确定性的填充话：由 (noteId, 序号) 决定，不用随机源。 */
-function fillerSentence(noteId, seq, svc) {
-  const t = SENTENCE_POOL[(hashStr(noteId) + seq) % SENTENCE_POOL.length];
-  return t.replaceAll('{svc}', svc).replaceAll('{id}', noteId);
-}
-
-/** 极简字符串散列：只要确定性，不需要密码学强度。 */
-function hashStr(x) {
-  let h = 2166136261;
-  for (let i = 0; i < x.length; i += 1) {
-    h ^= x.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return Math.abs(h);
-}
-
-/** 一条笔记：正文是 3~4 句，够 `SECTION_CHARS` 之下（单桶），免得分桶影响覆盖率口径。 */
-function noteDoc(id, title, lines) {
-  return { id, title, body: `# ${title}\n\n${lines.join('\n')}`, kind: 'semantic', trust: 'user_stated' };
-}
-
-/**
- * 造一档语料 + 题目。
- *
- * 规模 n 的构成（比例固定，规模变、比例不变 —— 否则「语料变大」这件事被别的变量污染）：
- *  · 每个服务一套「自有笔记」：服务名出现在标题，df ≈ n/12（每个服务的笔记数）
- *  · 共用动作词（部署/缓存/重试…）出现在所有服务的同类笔记上，df ≈ 0.6n（**故意高频**）
- *  · 一批「别的话题」填充笔记，让语料里有真正的长尾，而不是同一句话抄 n 遍
- *
- * 题目两类：
- *  · 可答（answerable）：问「某服务的某项」，库里**真有**那条笔记；题面不含取值。
- *  · 不可答（refusal）：问「某服务的某项」，但这一项**从没写过**（题面的动作词仍在语料里）。
- */
-export function buildCorpus(n, { fixed = false } = {}) {
-  const notes = [];
-  const tasks = [];
-
-  // 每个服务摊到多少条「自有笔记」。服务名是标题词，也是题面的锚点。
-  // 服务数按 `n` 缩放（每个服务约 8 条），否则小档语料会被「每服务至少 3 条 ×
-  // 12 个服务」的地板顶到 120 篇 —— `--docs 50` 实际上造出 120 篇，
-  // 档位表上写着 50、装置里其实是 120，两个量级都不对。
-  const active = Math.max(4, Math.min(SERVICES.length, Math.round(n / 8)));
-  const universe = SERVICES.slice(0, active);
-  const perService = Math.max(4, Math.floor(n / universe.length));
-  const totalServices = universe.length;
-
-  // ① 自有笔记：服务 × 事实
-  const answerable = [];
-  for (let si = 0; si < totalServices; si += 1) {
-    const svc = universe[si];
-    for (let fi = 0; fi < FACTS.length; fi += 1) {
-      const fact = FACTS[fi];
-      const v = 1 + ((si + fi) % 3);
-      const id = `${svc.toLowerCase()}-${fact.key}-v${v}`;
-      const title = `${svc} ${fact.shared}${fact.property}`;
-      const value = literalOf(fact, si, v);
-      // 正文里刻意放一个**只在这篇出现**的词（现实里的专有名词/工单号就是这样）：
-      // `${svc} 这边的 ${slug}`。它的 df = 1，是「这篇笔记真的有这条信息」的旗帜。
-      // 这一点直接决定扫描的结论：证据性闸门如果按 df/n ≤ 0.05 判，连这面旗帜都
-      // 不算证据，于是整条查询被拒答 —— 可答题 recall 会掉。装置要量出掉多少。
-      const slug = `${svc.toLowerCase()}-${fact.key}`;
-      const cx = CONTEXT[fact.key];
-      // 第 2~4 句只用**本类事实自己的名词**：同一个服务的十篇笔记因此词法可分，
-      // 真答案能靠 BM25 分数站住，recall 才是一个关于闸门的读数。
-      notes.push(noteDoc(id, title, [
-        `${svc} 的${queryOf(fact)}是 ${value}，这是当前生效的取值。`,
-        `${svc} 这边的${cx.nouns[1]}跟${cx.nouns[0]}是一起定的，改一个要跟着改另一个。`,
-        `${cx.prose}。${svc} 的${cx.nouns[2]}里记着当初为什么这么定。`,
-        `${svc} 的${fact.shared}工单号是 ${slug}，出问题的时候报这个号。`,
-      ]));
-      // 交替出题：一半「照原话问」，一半「换个说法问」。后一半才是覆盖率闸门的
-      // 压力来源；前一半保证 recall 有一个不该被闸门影响的上界。
-      const alias = ALIASES[fact.key] ?? null;
-      // 三档轮转，让 12 个服务把这三种问法都摊到：
-      //   fi % 3 === 0 → 照原话问（coverage 1.000，recall 的上界）
-      //   fi % 3 === 1 → keep（留住共用动作词，coverage 中间档）
-      //   fi % 3 === 2 → drop（只留服务名，coverage 最低档）
-      const level = fi % 3;
-      let query = `${svc} 的${queryOf(fact)}是多少？`;
-      if (alias && level === 1) query = `${svc} ${alias.keep[(si + fi) % alias.keep.length]}？`;
-      // drop 档：判别词换成**同一类事实的另一个名词**（所以仍然是一次真实的提问，
-      // 而不是「随便找句话」）。这一档的查询质量最低，是 recall 的下界来源。
-      if (alias && level === 2) query = `${svc} 的${cx.nouns[3]}怎么样？`;
-      answerable.push({
-        kind: 'answerable',
-        id: `${svc.toLowerCase()}-${fact.key}`,
-        query,
-        level: ['verbatim', 'keep', 'drop'][level],
-        gold: id,
-        answer: value,
-      });
-    }
-  }
-
-  // ② 填充笔记：让语料有长尾。以「服务 × 别的主题」的形式，标题仍锚在服务上。
-  const TOPICS = ['值班表', '发布窗口', '告警阈值', '灰度策略', '巡检清单', '容量评估', '依赖清单', '演练计划'];
-  let filler = 0;
-  const targetOwn = Math.min(n, perService * totalServices);
-  for (let si = 0; notes.length < targetOwn; si += 1) {
-    const svc = universe[si % totalServices];
-    const topic = TOPICS[Math.floor(si / totalServices) % TOPICS.length];
-    const seq = Math.floor(si / (totalServices * TOPICS.length));
-    notes.push(noteDoc(
-      `${svc.toLowerCase()}-${filler}-${topic}`,
-      `${svc} ${topic}`,
-      [
-        `${svc} 的${topic}每季度过一遍，负责人轮流当。`,
-        `上一次过 ${svc} 的${topic}是在上个月，结论是没有需要动的。`,
-        fillerSentence(`${svc.toLowerCase()}-${filler}-${topic}`, 0, svc),
-      ],
-    ));
-    filler += 1;
-    if (filler > n * 2) break; // 兜底：别死循环
-  }
-
-  // ③ 补到 n 篇：用「多服务 + 多主题」的组合继续填，保持词汇分布不塌。
-  let extra = 0;
-  while (notes.length < n) {
-    const svc = universe[extra % totalServices];
-    const topic = TOPICS[(extra + 3) % TOPICS.length];
-    notes.push(noteDoc(
-      `${svc.toLowerCase()}-extra-${extra}`,
-      `${svc} ${topic}记录`,
-      [
-        `${svc} 这份${topic}记录是给新人看的，写得比较啰嗦。`,
-        `真正要记的只有一句：${svc} 的${topic}照旧，不用特殊处理。`,
-        fillerSentence(`${svc.toLowerCase()}-extra-${extra}`, 1, svc),
-      ],
-    ));
-    extra += 1;
-  }
-
-  // ④ 不可答题：问「这一项」，但任何服务都没写过这一项。动作词照旧共用。
-  // 不可答题与可答题**结构完全一样**（同一个服务名、同一个共用动作词、同一句式），
-  // 差别只在「这一项从没写过」。这样拒答率才是在测闸门，而不是在测「题面读起来不一样」。
-  // 不可答题参照真实拒答题的样子：**话题贴着库里真有的那篇**，问的却是那一篇
-  // 从没写过的一项（`docs/06-architecture.md §5.4` 里 `memory recall --query
-  // "量子色动力学里的胶子禁闭"` 命中了 92 条、coverage 1.000 的那个病灶就是这类）。
-  // 每一条都与某个**真实存在**的事实共用「服务名 + 一类动作词」，只差一个词项：
-  // 用的恰好是覆盖率闸门与证据性闸门的分界处，所以两个闸门的高低都会改这条的读数。
-  const MISSING = [
-    { near: '缓存', property: '命中率目标', ask: '命中率目标是多少' },
-    { near: '接口', property: '每天总配额', ask: '每天总共放多少次' },
-    { near: '部署', property: '回滚耗时', ask: '回滚要花多长时间' },
-    { near: '同步', property: '平均耗时', ask: '一次平均多久跑完' },
-    { near: '日志', property: '单条大小上限', ask: '单条日志最大多少' },
-    { near: '构建', property: '排队时间', ask: '平均排多久队' },
-    { near: '站点', property: '配色方案', ask: '配色方案是什么' },
-    { near: '应用', property: '连接池上限', ask: '连接池最多几个' },
-  ];
-  const refusals = MISSING.map((m, i) => {
-    const svc = universe[(i * 5) % totalServices];
-    return {
-      kind: 'refusal',
-      id: `miss-${i}`,
-      query: `${svc} 的${m.ask}？`,
-      near: m.near,
-      gold: null,
-      answer: null,
-    };
-  });
-
-  // `--fixed`：题目数量不随语料增长。抽一份**固定比例**的子集，且按索引均匀抽，
-  // 免得「题目变少」和「题目变简单」同时发生。
-  const pickFixed = (list, want) => {
-    if (!fixed || list.length <= want) return list;
-    const out = [];
-    for (let i = 0; i < want; i += 1) out.push(list[Math.floor((i * list.length) / want)]);
-    return out;
-  };
-
-  return {
-    n,
-    notes,
-    tasks: [
-      ...pickFixed(answerable, Math.max(8, Math.floor(SWEEP_DEFAULTS.fixedTasks * 0.8))),
-      ...pickFixed(refusals, Math.max(4, Math.floor(SWEEP_DEFAULTS.fixedTasks * 0.2))),
-    ],
-  };
-}
-
+// 语料与题面生成已抽到 `bench/sweep-fixtures.mjs`（M5 重建的装置）。
+//
+// 为什么抽出去、并整段重写：旧的生成器把可答题与不可答题都锚在**服务名**上，
+// 而服务名在每一档语料里的 df ≈ n/12 —— 闸门按「df ≤ 64」把它当证据，
+// 于是「命中服务名」的文档覆盖率就是 1.000。实测结果是两类题的覆盖率完全重合
+// （不可答题 top-5 最大覆盖率五档全是 1.000，可答题里最小的 12 条也全是 1.000），
+// 全网格 1960 格没有一个满足「recall ≥ 0.80 且拒答 ≥ 0.75」。
+// 归因是夹具不可分，不是闸门不够严。
+//
+// 新夹具让判别词的 df 随语料规模真实增长（服务 ≈ n/服务数、领域词 ≈ 0.4n、
+// 知识点号 = 覆盖服务数 2→4），并把不可答题改成「库里有近邻、事实不同」的形状：
+// 题面与可答题**完全同形**，差别只在「这个知识点号没有覆盖这个服务」。
+// 设计依据与实测见 `bench/sweep-fixtures.mjs` 头部注释与
+// `docs/06-architecture.md §5.5.1`。
+//
+// 注意：`export { buildCorpus } from …` 只把名字重新导出，**不会**在本模块里
+// 建立本地绑定 —— `sweep()` 里调 `buildCorpus(n)` 会直接 ReferenceError。
+// 所以要 import 一次再 export（`node bench/sweep.mjs` 真炸过这一处）。
+import { buildCorpus } from './sweep-fixtures.mjs';
+export { buildCorpus } from './sweep-fixtures.mjs';
 // ────────────────────────────────────────────────────────────── 判定
 
 /**
@@ -644,20 +359,24 @@ export function sweep(opts = {}) {
   for (const corpus of corpora) {
     for (const minCoverage of cfg.coveragePoints) {
       for (const dfRatio of cfg.dfRatioPoints) {
-        for (const dfFloor of cfg.dfFloorPoints) {
-          // 闸门关掉时地板没有意义：跳过重复格子，免得同一件事算 8 遍。
-          if (dfRatio === null && dfFloor !== cfg.dfFloorPoints[0]) continue;
-          const params = {
-            k: cfg.k,
-            minRelevance: cfg.minRelevance,
-            minScore: cfg.minScore,
-            minCoverage,
-            dfRatio,
-            minDocs: cfg.minDocsPoints[0],
-            dfFloor,
-          };
-          const point = runPoint(corpus, params);
-          points.push({ ...params, ...point, rows: cfg.detail ? point.rows : undefined });
+        for (const minDocs of cfg.minDocsPoints) {
+          for (const dfFloor of cfg.dfFloorPoints) {
+            // 闸门关掉时地板/门槛都没有意义：跳过重复格子，免得同一件事算 8×5 遍。
+            if (dfRatio === null && (dfFloor !== cfg.dfFloorPoints[0] || minDocs !== cfg.minDocsPoints[0])) {
+              continue;
+            }
+            const params = {
+              k: cfg.k,
+              minRelevance: cfg.minRelevance,
+              minScore: cfg.minScore,
+              minCoverage,
+              dfRatio,
+              minDocs,
+              dfFloor,
+            };
+            const point = runPoint(corpus, params);
+            points.push({ ...params, ...point, rows: cfg.detail ? point.rows : undefined });
+          }
         }
       }
     }

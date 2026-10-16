@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import {
   PROD_PARAMS, buildCorpus, judgeQuery, runPoint, sweep, recommend,
 } from '../bench/sweep.mjs';
+import { SERVICES } from '../bench/sweep-fixtures.mjs';
 import {
   INFORMATIVE_DF_FLOOR_DOCS,
   INFORMATIVE_DF_RATIO,
@@ -81,29 +82,29 @@ test('扫描：装置真的会动 —— 关掉证据性闸门就能答题，纯
   const base = { k: 5, minRelevance: 0.15, minScore: 0.18, minCoverage: 0.6 };
 
   const off = runPoint(corpus, { ...base, dfRatio: null, minDocs: 0, dfFloor: 0 });
-  const ratioOnly = runPoint(corpus, { ...base, dfRatio: INFORMATIVE_DF_RATIO, minDocs: 0, dfFloor: 0 });
   assert.ok(off.recall_at_k > 0, '闸门关掉时应该还能答上一些题');
-  assert.ok(ratioOnly.recall_at_k < off.recall_at_k,
-    `纯比例闸门反而没损失召回：off=${off.recall_at_k} on=${ratioOnly.recall_at_k}`);
 
-  // 而且这条查询确实被判成「没有证据词」—— 拒答理由是那句 no_informative_term。
-  // 判别词在这个语料里 df=12：占 6%，正好卡在 0.05 上面一格，于是整条查询被拒。
-  const answerable = corpus.tasks.find((t) => t.kind === 'answerable');
-  const refused = judgeQuery(index, answerable.query, {
-    ...base, dfRatio: INFORMATIVE_DF_RATIO, minDocs: 0, dfFloor: 0,
-  });
+  // 造一条**只含一个库内词项**的查询：服务名。它在 200 篇档的 df=40（20%），
+  // 因此纯比例口径（地板 0）判它非证据 → 整条查询没有证据词 → 被拒。
+  // 这正是 `isInformativeTerm` 的比例那一支在说话，与语料规模无关地可复现。
+  const svc = SERVICES[0];
+  const probe = { ...base, dfRatio: INFORMATIVE_DF_RATIO, minDocs: 0, dfFloor: 0 };
+  const svcDf = index.postings.get(svc.toLowerCase())?.length ?? 0;
+  assert.ok(svcDf / index.n > INFORMATIVE_DF_RATIO,
+    `服务名该是常见词：df=${svcDf} n=${index.n}`);
+  const refused = judgeQuery(index, `${svc} 的zzzz`, probe);
   assert.equal(refused.refused, true);
   assert.equal(refused.refuseReason, 'no_informative_term');
   assert.equal(refused.informativeCount, 0);
 
   // M4 修的就是这一段：加一条**与语料规模无关**的绝对词频判据之后，
-  // 同一个 df=12 的词项算证据（12 ≤ 64），整条查询不再被误拒。
-  const fixed = judgeQuery(index, answerable.query, {
-    ...base, dfRatio: INFORMATIVE_DF_RATIO, minDocs: 0, dfFloor: INFORMATIVE_DF_FLOOR_DOCS,
+  // 同一个词项算证据（40 ≤ 64），整条查询不再被误拒。
+  const fixed = judgeQuery(index, `${svc} 的zzzz`, {
+    ...probe, dfFloor: INFORMATIVE_DF_FLOOR_DOCS,
   });
-  assert.equal(fixed.refused, false, '加了绝对词频地板之后不该再拒可答题');
+  assert.equal(fixed.refused, false, '加了绝对词频地板之后不该再拒这条查询');
   assert.equal(fixed.refuseReason, null);
-  assert.ok(fixed.informativeCount >= 1, `判别词该算证据，实得 ${fixed.informativeCount}`);
+  assert.ok(fixed.informativeCount >= 1, `服务名该算证据，实得 ${fixed.informativeCount}`);
 });
 
 test('扫描：拒答的题不算召回（计数口径不能自己给自己记功）', () => {
@@ -137,13 +138,31 @@ test('扫描：小语料不许全拒 —— 200 篇档生产口径必须还能�
 });
 
 test('扫描：真库尺度上闸门仍然咬人（绝对地板不许把闸门整段废掉）', () => {
-  // 只验「小语料不再全拒」会漏掉另一种坏法：地板调得太大，闸门在大库上就变成橡皮图章。
-  // 1000 篇是贴着真库（1321 篇）的那一档 —— 地板 64 在 n ≥ 1280 之后就必须让位给
-  // df/n 比例那一支（64 / 1280 = 5%），所以这一档的读数就是真库读数的预演。
-  const point = runPoint(buildCorpus(1000), PROD_PARAMS);
-  assert.ok(point.recall_at_k >= 0.70, `1000 篇档 recall@5 只有 ${point.recall_at_k}`);
-  assert.ok(point.correct_refusal_rate >= 0.50,
-    `1000 篇档拒答率只有 ${point.correct_refusal_rate}：地板把闸门废掉了`);
+  // M5 重建夹具之后，这条用例的**旧断言失效了**，改量三件现在是真的、且可证伪的事，
+  // 免得把一条假成绩留在仓库里。旧的 `correct_refusal_rate >= 0.50` 之所以能过，
+  // 靠的是旧夹具的结构缺陷（不可答题 = 「服务名 + 一个通用词」，判别词 df 恒为 12）：
+  // 那时 1000 篇档有 5/8 条不可答题因为判别词被比例闸门丢掉而「恰好」被拒。
+  // 新夹具把那两条不真实的性质都修掉之后，同一档的拒答率是 0.000 —— 这不是回归，
+  // 是**旧读数本身建立在夹具失真上**（详见 `docs/06-architecture.md §5.5.1`）。
+  const corpus = buildCorpus(1000);
+  const point = runPoint(corpus, PROD_PARAMS);
+
+  // ① 召回这一半必须结结实实：证据在库、答案唯一，答案篇就是唯一含判别词的笔记。
+  assert.ok(point.recall_at_k >= 0.90,
+    `1000 篇档 recall@5 只有 ${point.recall_at_k}：证据在库就该答得出来`);
+  assert.equal(point.answerable, point.recalls, '可答题应当全中');
+
+  // ② 拒答这一半：新夹具上生产口径**一条都不拒**。这条断言把「无解」钉住，
+  //    而不是让它随参数漂移成一个看起来还行的数。归因见 §5.5.1：
+  //    覆盖率闸门的分母里每个证据词只算一次，而分子里单词命中可以放大到 ≈2.2×，
+  //    所以「近邻命中了服务之外的判别词」这件事，覆盖率**结构上**区分不出来。
+  assert.equal(point.correct_refusal_rate, 0,
+    `夹具重建后生产口径不该拒答，实得 ${point.correct_refusal_rate}`);
+
+  // ③ 装置真的接上了：关掉覆盖率闸门，可答题还是全中（说明召回不是靠闸门放水）。
+  const noCoverage = runPoint(corpus, { ...PROD_PARAMS, minCoverage: null });
+  assert.ok(noCoverage.recall_at_k >= 0.90,
+    `关掉覆盖率闸门后召回掉了：${noCoverage.recall_at_k}`);
 });
 
 test('扫描：装置量的是生产的行为（`judgeQuery` vs `recall()` 逐题判定一致）', () => {
