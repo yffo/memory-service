@@ -320,6 +320,102 @@
       "expect": [],
       "forbid": ["99.5%"],
       "source": []
+    },
+    {
+      "id": "r09",
+      "kind": "refusal",
+      "prompt": "Kestrel 的同步任务一天跑几次？",
+      "expect": [],
+      "forbid": ["5 次"],
+      "source": []
+    },
+    {
+      "id": "r10",
+      "kind": "refusal",
+      "prompt": "Kestrel 的日志文件会保留多长时间？",
+      "expect": [],
+      "forbid": ["90 天"],
+      "source": []
+    },
+    {
+      "id": "r11",
+      "kind": "refusal",
+      "prompt": "Orchid 的文案规范要求一句话最多写多少字？",
+      "expect": [],
+      "forbid": ["50 字"],
+      "source": []
+    },
+    {
+      "id": "r12",
+      "kind": "refusal",
+      "prompt": "Harborlight 的构建流水线一共分几个阶段？",
+      "expect": [],
+      "forbid": [],
+      "source": []
+    },
+    {
+      "id": "r13",
+      "kind": "refusal",
+      "prompt": "Kestrel 同步任务的超时时间设置成多少秒？",
+      "expect": [],
+      "forbid": [],
+      "source": []
+    },
+    {
+      "id": "r14",
+      "kind": "refusal",
+      "prompt": "Harborlight 的预发布环境用哪个域名？",
+      "expect": [],
+      "forbid": [],
+      "source": []
+    },
+    {
+      "id": "r15",
+      "kind": "refusal",
+      "prompt": "Orchid 的后台管理界面默认开在哪个端口上？",
+      "expect": [],
+      "forbid": [],
+      "source": []
+    },
+    {
+      "id": "r16",
+      "kind": "refusal",
+      "prompt": "图鉴服务的数据库备份任务安排在每周几？",
+      "expect": [],
+      "forbid": ["每周"],
+      "source": []
+    },
+    {
+      "id": "r17",
+      "kind": "refusal",
+      "prompt": "Kestrel 的同步任务失败后重试的间隔是多少分钟？",
+      "expect": [],
+      "forbid": [],
+      "source": []
+    },
+    {
+      "id": "r18",
+      "kind": "refusal",
+      "prompt": "Harborlight 的构建日志一共保留多少个版本？",
+      "expect": [],
+      "forbid": [],
+      "source": []
+    },
+    {
+      "id": "r19",
+      "kind": "refusal",
+      "prompt": "Orchid 站点现在每天大概有多少访问量？",
+      "expect": [],
+      "forbid": [],
+      "source": []
+    },
+    {
+      "id": "r20",
+      "kind": "refusal",
+      "prompt": "Kestrel 的同步记录保存在哪个表里？",
+      "expect": [],
+      "forbid": [],
+      "source": []
     }
   ]
 }
