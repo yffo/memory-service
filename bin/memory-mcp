@@ -1,0 +1,128 @@
+#!/usr/bin/env node
+/**
+ * `memory-mcp` —— MCP 的 stdio 服务器（薄壳，协议在 `src/mcp/protocol.js`）。
+ *
+ * stdio 的硬要求（`03-hosts-and-interfaces.md §1.4`）：
+ *
+ * - 每行一条 JSON-RPC 消息，**消息内 MUST NOT 含换行**（`JSON.stringify` 天然满足）；
+ * - 服务器 **MUST NOT** 往 stdout 写任何非 MCP 消息 —— 所以日志一律走 stderr，
+ *   这里连 `console.log` 都不允许出现在这个文件里；
+ * - **stdin EOF 时 SHOULD 尽快退出**（唯一可移植的优雅关闭信号）。
+ *
+ * 默认**只读**：工具面是 `search` / `read` / `list` / `status`。
+ * `--allow-write` 才把 `remember` 挂上去（§6.3「工具 5±2、默认只读」）。
+ *
+ * 用法：
+ *   memory-mcp [--store DIR] [--allow-write] [--ledger]
+ * 环境变量：`MEMORY_STORE`（与 CLI 同一个默认值解析）。
+ */
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
+import { createHandler, SUPPORTED_PROTOCOL_VERSIONS } from '../src/mcp/protocol.js';
+import { defaultStorePath } from '../src/api.js';
+
+export function parseMcpArgs(argv) {
+  const out = { store: null, allowWrite: false, ledger: false, help: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (token === '--store') {
+      out.store = argv[i + 1] ?? null;
+      i += 1;
+    } else if (token.startsWith('--store=')) {
+      out.store = token.slice('--store='.length);
+    } else if (token === '--allow-write') {
+      out.allowWrite = true;
+    } else if (token === '--ledger') {
+      out.ledger = true;
+    } else if (token === '--help' || token === '-h') {
+      out.help = true;
+    }
+  }
+  return out;
+}
+
+const USAGE = `memory-mcp — 记忆库的 MCP stdio 服务器（默认只读）
+
+用法：memory-mcp [--store DIR] [--allow-write] [--ledger]
+  --store DIR    库目录（默认 $MEMORY_STORE 或 ~/memory/memory-service）
+  --allow-write  挂上 remember 工具（写入仍过闸门）
+  --ledger       把 search/read 也记进账本（默认不写）
+
+协议版本：${SUPPORTED_PROTOCOL_VERSIONS.join(' / ')}（双时代：server/discover + initialize）
+日志走 stderr，stdout 只有 MCP 消息。stdin 关闭即退出。`;
+
+/**
+ * 跑 stdio 循环。
+ *
+ * @param {object} options `{store, allowWrite, ledger, input, output, error, onExit}`
+ * @returns {Promise<number>} 退出码
+ */
+export function serveStdio(options = {}) {
+  const input = options.input ?? process.stdin;
+  const output = options.output ?? process.stdout;
+  const err = options.error ?? process.stderr;
+  const ctxStore = options.store ?? defaultStorePath();
+
+  let handler;
+  try {
+    handler = createHandler({ store: ctxStore, allowWrite: options.allowWrite, ledger: options.ledger });
+  } catch (e) {
+    err.write(`memory-mcp 打不开库 ${ctxStore}：${e?.message ?? e}\n`);
+    return Promise.resolve(2);
+  }
+
+  const write = (message) => {
+    if (message === null || message === undefined) return;
+    // 消息内绝不能有换行：JSON.stringify 不会产生字面换行，但保险起见再断言一次。
+    const text = JSON.stringify(message);
+    output.write(text.includes('\n') ? text.replace(/\n/g, '\\n') : text);
+    output.write('\n');
+  };
+
+  return new Promise((resolvePromise) => {
+    const rl = createInterface({ input, crlfDelay: Infinity, terminal: false });
+    let closed = false;
+    const finish = (code) => {
+      if (closed) return;
+      closed = true;
+      rl.close();
+      resolvePromise(code);
+    };
+    rl.on('line', (line) => {
+      try {
+        write(handler.handleLine(line));
+      } catch (e) {
+        // 任何未捕获异常都不能让进程带着半条消息死掉：回一条 -32603，继续服务。
+        err.write(`memory-mcp 处理失败：${e?.stack ?? e}\n`);
+        write({ jsonrpc: '2.0', id: null, error: { code: -32603, message: String(e?.message ?? e) } });
+      }
+    });
+    // stdin EOF（客户端关管道）= 唯一的优雅关闭信号。
+    rl.on('close', () => finish(0));
+    input.on?.('error', (e) => {
+      err.write(`memory-mcp stdin 出错：${e?.message ?? e}\n`);
+      finish(2);
+    });
+  });
+}
+
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+if (invokedDirectly) {
+  const args = parseMcpArgs(process.argv.slice(2));
+  if (args.help) {
+    process.stdout.write(`${USAGE}\n`);
+    process.exitCode = 0;
+  } else {
+    process.stderr.write(
+      `memory-service MCP stdio 已启动（store=${args.store ?? defaultStorePath()}，${args.allowWrite ? '可写' : '只读'}）\n`,
+    );
+    process.exitCode = await serveStdio({
+      store: args.store ? resolve(args.store) : undefined,
+      allowWrite: args.allowWrite,
+      ledger: args.ledger,
+    });
+  }
+}
+
+export { USAGE };

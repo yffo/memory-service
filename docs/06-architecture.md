@@ -1,0 +1,572 @@
+# 架构设计：memory-service
+
+- 状态：M0 出口物之一（草案，待评审）
+- 上游文档：`00-brief.md`（立项书）· `01-landscape-systems.md`（竞品与接口层）· `02-evaluation.md`（评测方法）· `03-hosts-and-interfaces.md`（宿主与接口）· `04-cost-model.md`（成本）· `05-agi-direction.md`（长期方向）
+- 基线：`/Users/yangfu/yffto/dsh-engramory-recall`（第一条线，必须赢过它，而不是取代它）
+- 读者：出资方（看 §1 §8 §10 就够）与实现者（§2–§7 §9）
+
+**规矩**：本文所有数字都从上面六份文档原样搬运，并标出来源。没有来源的数字不写。每条关键决策都带「代价」与「什么情况下该换」。
+
+---
+
+## 1. 一句话定位与边界
+
+**memory-service 是一个跨宿主的本地长期记忆服务**：一份纯文本事实库 + 一个 MCP 服务 + 一个空闲期巩固进程；任何 CLI / IDE / 自研 agent 通过 MCP 工具按需读写它，拿到的是带来源、带有效期、带信任等级的记忆内容。
+
+三个词各自落到实处。**跨宿主**：唯一一等接口是 MCP，DSH 插件与 CLI 都只是壳；靠「读同一批文件 + 同一套工具语义」保持一致，不靠同步。**服务而不是插件**：插件可以只服务一个宿主、可以深挖那个宿主的私有能力；服务要在 11 个宿主里至少 3 个上跑通同一套语义（宿主清单见 `03-hosts-and-interfaces.md`）。**本地长期**：默认零 API 成本、纯文本落盘、`cat` 得出、git 管得住、随时带走。
+
+**不做的事（写清楚，避免以后扯皮）**：
+
+| 不做 | 为什么 | 何时重议 |
+|---|---|---|
+| 云 SaaS、托管服务 | 不做多用户/团队共享（`00-brief.md §4`）；也不碰别人的数据 | 不做。这是定位不是阶段 |
+| 模型训练 / 微调 | 训练侧记忆到今天没有一项能力是「花钱就能买到」（`05-agi-direction.md §3`）；对用户数据做在线权重更新不可回滚 | 等模型厂商把记忆能力商品化再谈对接 |
+| 碰用户的密钥 | 密钥只走 `${VAR}` / env 插值，我们只读、只使用、不落盘、不进日志（`03-hosts-and-interfaces.md`） | 永不放松 |
+| 通用知识库 / RAG 平台 | 只服务 agent 的长期记忆，不替代文档检索（`00-brief.md §4`） | 不做 |
+| 自动记录一切 | 「有话说就记」是旧项目的病（`00-brief.md §4`） | 永不 |
+| 第一年接通所有宿主 | MCP 是一等接口，先通 3 个（`00-brief.md §4`） | M3 |
+
+**为什么这值得做**：长上下文确实杀死了「为了答对而检索」的论证，但没杀死检索——真正站得住的是成本/延迟，以及跨会话、跨宿主、可审计、可纠正（`02-evaluation.md §3`）。旧项目 131 轮注入 655 条指针、基础打开率 2.4%（`00-brief.md §2`），说明失败不在算法而在形态。
+
+---
+
+## 2. 组件边界
+
+### 2.1 三层与依赖方向
+
+```
+core/      纯逻辑：数据模型、检索、打分、闸门判定、巩固决策、账本事件
+   ↑                    ↑                      ↑
+adapters/   宿主接口壳                data/     真相源与派生索引
+```
+
+依赖规则（**单向，反向禁止，进 lint**）：
+
+- `core/` **零依赖**：不 import adapters、不 import 宿主 SDK、不直接读写文件系统、不发网络请求。它只吃数据结构、吐数据结构。
+- `adapters/` 可以 import `core/`，以及各自的宿主 SDK。**adapters 之间不许互相 import**。
+- `data/` 是纯文本目录，不是代码包；只有 `core/` 通过注入进来的 `store` 接口访问它，索引只是可重建的派生物。
+- 任何一门语言实现都要能通过同一套 `core` 行为测试（一致性测试向量随包发布）。
+
+### 2.2 目录草案
+
+```
+memory-service/
+├─ packages/
+│  ├─ core/                 # 零依赖纯逻辑（npm: @yffto/memory-core）
+│  │  ├─ model/             # 记录类型、frontmatter 解析、schema 版本与迁移
+│  │  ├─ gate/              # 写入闸门：去重、价值、信任分级、fail-closed 检查
+│  │  ├─ retrieve/          # BM25/词法 → 向量 → 融合 → 预算裁剪 → 拒答判定
+│  │  ├─ score/             # 三因子打分、指数衰减、命中恢复、晋升/降级
+│  │  ├─ consolidate/       # 巩固决策（去重/合并/摘要/时效化）产出 operation 列表
+│  │  └─ ledger/            # 事件模型与口径定义（hit/injected/used/opened 四个独立事件）
+│  ├─ adapters/
+│  │  ├─ mcp/               # Dual-era MCP server（stdio 薄壳 + 常驻核心两种载体共用）
+│  │  ├─ dsh-plugin/        # DSH 插件壳（薄，不直接写文件）
+│  │  └─ cli/               # memory recall|remember|consolidate|forget|explain|doctor
+│  ├─ eval/                 # 评测跑分器与题集（与 core 同级，不许被 core import）
+│  └─ import-engramory/     # 旧库导入器（一次性，不进运行时依赖）
+├─ suite/core-30-v1/        # 30 条任务 + 最小语料快照
+├─ data/                    # 运行时数据（默认 ~/memory/<product>/，与代码分离）
+└─ docs/
+```
+
+`data/` 草案（详见 §3）：
+
+```
+notes/<id>.md        <!-- 一条事实一个 md 文件：真相源 -->
+index/               <!-- 全部是生成物，删掉能重建：ledger.jsonl（追加型事件日志）+ bm25/ vec/ entities.json -->
+runs/<run-id>.json   <!-- 每次巩固的 receipt（含 .diff.jsonl，可回放、可撤销） -->
+.engramory-recall.jsonl   <!-- 旧库账本：只读挂载当评测输入（02-evaluation.md §4.8） -->
+```
+
+**代价**：三层分离让「加一个宿主」变成写一个薄壳，但也让每次改动都得跨包联调；`core` 零依赖意味着文件系统、时间、随机数、模型调用全部要注入（多写一堆接口）。**什么情况下该换**：如果到 M2 结束 `core` 里出现了第二处「为了适配某个宿主而加的分支」，说明边界画错了，该按能力（读/写/巩固）而不是按层重切。
+
+---
+
+## 3. 数据模型
+
+### 3.1 一条事实一个 markdown 文件 + 索引
+
+沿用旧系统已验证的形态（`00-brief.md §9` 的倾向，以及 Anthropic memory tool 把真相源放在客户端纯文件目录的事实，见 `01-landscape-systems.md`），但**索引改为生成物**。
+
+```markdown
+---
+schema: memory.note/1
+id: 01J8QK7M4P2V6N3R8T5W9XYZAB     # ULID，时间有序，写入即定，永不变
+scope: project:github.com/yffto/yffto   # 或 user
+kind: semantic                     # core|semantic|episodic|procedural（CoALA 四分类）
+trust: user_stated                 # user_stated|system_derived|external
+provenance:
+  written_by: mcp:user               # 谁写的：mcp:user | cli:import | consolidator:v1
+  source_ref: "session:2026-10-17/dsh#turn-42"
+  derived_from: []                   # 若来自巩固：被合并/被摘要的 note id 列表
+valid_from: 2026-10-17T02:56:53+08:00
+valid_to: null
+supersedes: []
+superseded_by: null
+confidence: 0.9
+verify_after: 2027-04-17              # 到点进体检队列，不自动删除
+tags: [preference, tooling]
+---
+
+用户要求：给 agent 用的记忆服务默认零 API 成本也能跑；语义检索是可选增强。
+```
+
+索引是 `notes/` 的纯函数：`index = f(notes)`。删掉 `index/` 只损失时间，不损失事实。这条是所有可审计性的前提。
+
+### 3.1.1 索引是**分层路由**，不是一张平铺的清单（M2 落定）
+
+旧系统（以及本项目的 M1）把索引做成一屏「一行一条指针」。这条路有一个致命的容量：`MEMORY.md` 被 200 行 / 25KB 盯着，而一行只能放一条笔记。M2 把真实旧库导进来之后的实测是：
+
+| | 笔记数 | 索引列得出的 | `status` 报的 |
+|---|---|---|---|
+| 平铺索引（M1） | 1321 | **127** | `indexHidden: 1194` |
+| 分层路由（M2） | 1321 | **1321** | `indexHidden: 0` |
+
+**127/1321 —— 也就是说「读索引」这条路九成是瞎的。** 检索面一直是好的（它全扫 `notes/`），坏掉的只有「读索引」：人和 agent 翻开 `MEMORY.md` 会以为库里只有 127 篇，剩下的 1194 篇**在索引里不存在**。这不是「索引有点旧」，是**沉默地告诉读者一半的库不存在**。
+
+方案的关键认识是一条不对称：**索引的行数有上限，而索引的文件数没有。** 于是把「一行一条记录」换成「一行一个主题组」：
+
+```
+index/MEMORY.md              路由层：一行一个主题组（真实库 72 行 / 7.5KB）
+index/groups/<nnn>-<组名>.md 清单层：一组一行指针（每文件 ≤ 400 行，超过分页不截断）
+```
+
+容量算一下就清楚：路由层一行约 40 字节、装得下约 190 个组；清单层每个文件装 400 条 ⇒ **约 190 × 400 = 76000 条**，而且每一篇都有**一条能走到的路**。这是「换维度」而不是「压缩」——把指针压得更短只能多装几十条，改不动「上限 200 条 vs 有 1321 条」这个量级差。
+
+组的定义：笔记 id 里第一个 `#` 之前的部分（`reference-x#137` → `reference-x`；真实库 1321 篇只有 72 个这样的前缀）。为什么按 id 而不是按 `kind`/`tag`：`kind` 只有 4 个组、每组几百条，路由层装得下但清单层一个文件装不下，等于把问题往下推一层；id 前缀是人自己写文件时形成的**天然主题**，组数与组内条数都落在「人扫得动」的量级。
+
+**为什么没有采用原定的「consolidate 把碎片合成整篇」那一半。** 架构文档早先给的方向是「先合并碎片笔记，再分层索引」。把真实库读进来之后，这个前提不成立，理由是可验证的：
+
+- 1164/1321 集中在 7 个大组（最大一组 200 篇），它们**不是同一件事的碎片**，而是同名主题的高频重复记录（`…#1` 到 `…#200`）。合并它们 = 把 200 条记录压成 1 条，丢的是内容不是重复。
+- 真正该合并的（同主题的 3–4 条改写）合起来省几十行，救不了 1194 的缺口 —— 量级对不上。
+- 最要紧的是：consolidate 会**改真相源**（`notes/`）。为了让索引好看去改写记忆内容，是把「生成物装不下」的问题转嫁给唯一手可编辑的真源。这个交换不划算。
+
+所以分层索引只动 `index/`，`notes/` 一个字不动。巩固（§4.2）仍然要做，但它的理由是内容质量与时效，**不是给索引腾地方**。
+
+**诚实边界**（这些也是 `memory index --json` 要报的账）：路由层消除的是**结构性**盲区（前 N 条可见、其余不存在）。它不消除**分组**盲区：组数超过路由预算时会把相邻小组打包成中间层（digest，文件里仍列出子组真名），打包到底还装不下就明着报 `hidden` / `unreachable`，**不静默截断**。路由层的字节维度同样要自觉遵守：生成器先削（丢最小组）再交给闸门，否则闸门拒写会让库从「索引不全」直接退化成「没有索引」——旧项目正是这么丢过一次索引。
+
+**为什么够用**：① `cat` 得出的东西才谈得上「用户拥有」；② 文件粒度天然对齐旧库的索引上限实践（`01-landscape-systems.md` 引 Claude Code auto memory 的硬限制）——但上限只该约束**单个文件**，不该约束「一个库能被索引多少条」，分层就是把这两件事拆开；③ 跨宿主共享同一批文件比跨宿主同步数据库简单一个数量级；④ git diff 就是审计记录。
+
+
+**什么时候不够用**：① 记录数进万级后「目录扫描 + 词法索引重建」会变慢，缓解是索引持久化 + 增量更新——**这不是现在就换数据库的理由**；② 需要双时态多跳图查询（「三个月前我认为 A，后来因为 B 改成 C」这类遍历）时，文件 + 邻接索引的表达力不如时序图，**到那时再引入图，且只作为 `index/` 的一种，不是真相源**（Zep/Graphiti 用 Neo4j 当真相源，我们不跟，见 `01-landscape-systems.md`）。另外，单条事实**必须 ≤ 200 token / ≤ 400 字核心档**（`04-cost-model.md` 省钱清单第 13 条），超长内容写入时切分为多条，否则重排成本按整篇计。
+
+### 3.2 生命周期状态
+
+`draft → active → stale → superseded → archived`（`archived` 不硬删，只从默认检索面消失）。
+
+- 进入 `stale`：`recency` 分数连续 K 轮低于阈值且从未被注入过（默认 K 与阈值可配，规则形状照抄 `05-agi-direction.md §4.3`）。
+- 进入 `superseded`：被新记录在 (subject, predicate) 上取代，**写 `superseded_by` 而不是删除**。
+- 进入 `archived`：低置信 + 从未命中 + 无来源（这一条旧项目缺，是 200 行索引膨胀的根因之一，见 `05-agi-direction.md §4.2`）。
+
+### 3.3 时间与冲突
+
+四个字段把「时间」这件事说清：`valid_from` / `valid_to` / `supersedes[]` / `superseded_by`。
+
+- 冲突规则（确定性，不需要模型）：新记录与旧记录同一 `(subject, predicate)` 且值不同 → 旧记录 `valid_to = now`、`superseded_by = 新 id`；**两条都留着**。
+- 因为「用户 5-14 前偏好 Python，之后 TypeScript」与「用户偏好 TypeScript」是不同信息，服务必须能同时回答 **as-of** 查询与 **changed-since** 查询（`05-agi-direction.md §4.1`）。
+- 已知会咬人的四个边界（清单来自 `05-agi-direction.md §5.2` 的 2026 年实践批评）：标签过滤被静默忽略、date-only as-of 解析到午夜、删后重建产生重复、时区混用。**这四条直接进评测用例**。
+
+### 3.4 schema 版本与迁移
+
+- 每个文件自带 `schema: memory.note/1`；读侧遇到更高版本**拒绝解释、原样透出**，不做「猜着解析」。
+- 迁移是**离线批处理 + 可回滚**：`memory migrate --to 2 --dry-run` 先产 diff，落 `runs/migrate-<id>.diff.jsonl`，再原子替换；旧文件备份为 `notes/.v1-backup/`（保留到下一次迁移）。迁移脚本与索引重建脚本是同一类东西：**都不许在服务运行中改真相源**。
+- 索引自带 `index_manifest.json` 记录构建时的 schema 版本、embedding 模型指纹、代码版本；指纹不匹配就重建（模型指纹绑索引这个做法来自 `01-landscape-systems.md` 里的 HippoRAG 2 实践）。
+
+**代价**：文件即真相源 = 每次查询都要面对「文件可能是人手改坏的」。我们的对策是解析失败时 fail-closed（跳过该文件并记事件），代价是可能静默漏掉一条记忆；因此 `doctor` 必须把解析失败数当一等指标暴露。**什么时候该换**：如果 `doctor` 长期报告 >1% 文件解析失败，说明手改成本超过收益，该加「只有工具能写」的模式开关（默认仍开手改）。
+
+---
+
+## 4. 写入与巩固管线
+
+### 4.1 热路径只追加（零 LLM）
+
+```
+用户/agent 调用 remember
+  → gate 判定（确定性规则，无模型调用）
+       ├─ scope 合法性        （越权写 user scope → deny）
+       ├─ 去重               （同 scope 下 8-gram 重叠 > 阈值 → 返回 duplicate + 已有 id）
+       ├─ 价值闸门           （寒暄/空/短于 4 字 → 静默 skip；「大多数轮次什么都不该记」）
+       ├─ 信任分级           （外部内容 → trust: external，且 kind 不得为 procedural）
+       └─ fail-closed 检查   （外部内容试图成为规则/指令 → deny）
+  → 追加一条 note 文件（原子写：临时文件 + rename）+ 一条 append 事件
+  → 返回 { id, status: "stored" | "duplicate" | "skipped" | "denied", reason }
+```
+
+热路径**不做**：不改旧记录、不做冲突消解、不合并、不摘要、不调模型。三条独立证据指向同一结论（mem0 2026-04 起单次 LLM 调用只 ADD；Letta 把整理放 sleep-time；dsh-mneme 冲突冻结进人工队列），见 `01-landscape-systems.md`。
+
+### 4.2 空闲期巩固（唯一的「改」入口）
+
+触发：显式 `consolidate`、空闲期后台、或每晚一次（可关）。巩固分两步，**决策与执行分离**：
+
+```
+consolidate(dry_run=true)  → 产出 operations[]（纯决策，写 runs/<id>.plan.json）
+consolidate(apply=true)    → 逐条执行 + 每条一个 receipt（runs/<id>.json + diff.jsonl）
+```
+
+operation 类型与护栏：
+
+| operation | 动作 | 护栏 |
+|---|---|---|
+| `merge` | N 条同类 → 1 条，原记录 `archived` + `derived_from` 指回 | 原文永不出库；合并结果正文里必须能追到源 id |
+| `summarize` | 长记录 → 摘要，摘要进新 note，原文降为 `archived` | 摘要必须带 `source_ref`；只允许压缩，不允许新增事实 |
+| `invalidate` | 冲突胜出方 → 旧记录 `valid_to=now` | **只写时间戳，不改旧记录正文**（Graphiti 式失效而非删除） |
+| `promote` | 同类事实 ≥ N 条且覆盖 ≥ M 个时间点 → 候选规则 | **只产候选**，落 `notes/candidates/`，要人确认才进主库 |
+| `archive` | 满足 §3.2 条件的记录移出检索面 | 不删除；可一条命令恢复 |
+
+**护栏（写进代码，不靠模型自觉）**：
+
+1. **巩固绝不能悄悄改事实**：任何操作必须留下 receipt，receipt 里含操作前后的正文 hash（sha256）与 diff；没有 receipt 的写入被视为 bug。
+2. **可回放**：`consolidate --replay runs/<id>.json` 能在库的副本上重放出同一结果；跑不出同一结果即视为不可信，撤销该 run。
+3. **可撤销**：`consolidate --undo runs/<id>` 把该 run 的所有操作逆序回退（因为我们从不物理删除，撤销总是可能的）。
+4. **原文优先**：检索命中一条被 `summarize` 覆盖的记录时，默认返回摘要 + 原文链接；用户要原文时永远取得到。
+5. **一次 run 的改动量上限**（默认不超过库的 5%，可配），超限中止并要求人工确认——这是防「一次巩固把库改烂」的保险丝。
+
+**代价**：决策/执行分离 + receipt 让巩固代码量至少翻倍，且「原文永不删除」会让库持续变大。**什么时候该换**：如果库年增长 >50 万条或单次巩固 >10 分钟，说明文件粒度太细，该引入「合卷」（多个相关事实合并为一个文件、内部再分级），但**不放弃 receipt 与可撤销**——那两条是审计性，不可谈判。
+
+---
+
+## 5. 检索
+
+### 5.1 默认 pull，push 只留极小核心
+
+- **默认形态**：宿主 agent 主动调 `recall`。行业事实标准就是 pull（mem0/Letta/Claude memory tool/MCP memory/Basic Memory 全是主动调一次），旧项目 push 指针的打开率是少数派且已被自己的数据证伪（`01-landscape-systems.md`）。
+- **always-on 极小核心**：仅 `kind: core`（身份/硬偏好），**≤ 400 字**，可关（`00-brief.md §6` 架构原则 1）。这个量级与 Claude Code auto memory「只注入首 200 行 / 25KB」的官方硬限制同数量级，数字有出处（`01-landscape-systems.md`）。
+- **push 不下判断**：推送只发**内容**（不是指针）——旧项目的教训是「注入指针 = 把『要不要读』的判断外包给宿主模型」，2.4% 打开率是接口形状造成的（`05-agi-direction.md §7`）。指针模式降级为「台账放不下时」的兜底通道。
+
+### 5.2 分层热度 + 硬预算
+
+检索顺序（每一层都可能直接返回，后层是增强不是必需）：
+
+1. **词法**（BM25 + 同义扩展 + 中英文归一化）：默认档、零成本、零依赖。旧项目实测 103ms / 71 篇（`03-hosts-and-interfaces.md` 引 `dsh-engramory-recall/docs/release.md`），说明这个量级纯词法完全够快。
+2. **本地向量**（若检测到本地端点，如 `http://127.0.0.1:11434`）：`Qwen3-Embedding-0.6B` 真库 hit@1 68.4% vs 云端 `Embedding-3` 74.7%，差约 6pt，可用（`04-cost-model.md`）。
+3. **重排**（默认**关**）：只喂摘要，候选池默认 10、上限 20，单篇 ≤200 token。
+
+**硬预算**：调用方传 `budget_tokens`，服务端裁剪并**说明裁掉了什么**（这一条来自 `00-brief.md §6` 原则 5）。裁剪顺序：先丢 `episodic`、再丢低 trust、最后才丢 `core`。
+
+**三因子打分**（照抄 Generative Agents 形状，确定性、零模型成本，`05-agi-direction.md §4.3`）：
+
+```
+score = w1*importance + w2*recency + w3*relevance
+recency = exp(-Δdays / τ)          # τ 默认 30 天；被命中时抬高 base（MemoryBank 式恢复）
+```
+
+### 5.3 拒答路径（一等公民）
+
+没有足够证据时必须能说「不知道」。返回 `status: "insufficient_evidence"` 而不是拼凑最相关的三条。理由（`05-agi-direction.md §5.2`）：自信地用陈旧记忆作答比说「我不知道」更糟；弃答在所有公开基准里被系统性低估。
+
+拒答判定必须**可解释**：返回 `why_not`（最高分低于阈值 / 只有 external 低信任来源 / 命中的记录都已 `valid_to` 过期 / 命中之间值互相冲突且无法用时间排序）。拒答率是评测的一等指标，用它去调阈值，不要凭感觉。
+
+### 5.4 命中判定的口径（M2 落定，代码在 `src/core/recall.js` + `src/core/bm25.js`）
+
+这一段是把「什么样的命中算数」从代码注释里搬上来。**口径写在文档里，代码是实现**；两者不一致时以本文档为准，改口径要连文档一起改。
+
+**① 覆盖率闸门（`score.coverage`，M1 就有）**
+
+```
+coverage(doc) = 该文档某个 400 字桶里命中的词项权重之和 / 整条查询的权重之和
+权重 = 词项的 idf × 它在查询里的出现权重（bridge 词 0.6、单字 0.5）
+MIN_COVERAGE = 0.6（默认，可被 --min-coverage 覆盖）
+逐桶算、取**最大**：一条长笔记里只有一段真正相关时，取 max 而不是全文平均，
+    否则「一句话的答案埋在一篇 4000 字的笔记里」会被自己的长度摊薄成不达标。
+总权重只算**索引里存在的**查询词项：查不到的词项贡献 0，不参与分母。
+```
+
+**② 证据性闸门（`no_informative_term`，M2 新增，与 ① 是「且」的关系）**
+
+```
+INFORMATIVE_DF_RATIO = 0.05      # 词项的证据线：df / 语料条数 ≤ 0.05 才算「有信息量」
+INFORMATIVE_MIN_DOCS = 200       # 语料小于这个数时，整条闸门关闭
+查询的全部词项都**不是**有信息量的（都太常见）→ 拒答，reason = 'no_informative_term'。
+```
+```
+为什么语料小就关闸：df/n 在 5 篇语料上（甚至 51 篇上）没有统计意义 —— 一个普通词
+轻松占到 1/5，拿它判死会变成「小库什么都搜不到」。而拒答是破坏性的：少答一次的代价
+比多答一次的代价还高（用户看到的是「它说它不知道，可我明明记过」）。
+```
+
+为什么需要 ②：覆盖率闸门有一个结构性的洞。当**整条查询的所有词项**都是常用词时，`totalMass` 本身就很小，于是「命中了其中一个常用词」就很容易把 coverage 顶到 1.0。实测（真实库 1321 篇）：
+
+```
+memory recall --query "量子色动力学里的胶子禁闭"
+  → 切词：量子 子色 色动 动力 力学 学里 [里的] 的胶 胶子 子禁 禁闭
+  → 只有「里的」在语料里存在（df 96/1321 = 0.073）⇒ 所有含「里的」的文档 coverage = 1.000
+  → 92 条命中、refused:false、top score 0.646 —— 库里没有任何一条与量子色动力学有关
+```
+
+**③ 修在切词层，不修在打分层（M1 的教训）**
+
+同一个洞还有第二个成因，比 ② 更常见：切词器把相邻二字组一律生成，于是**跨词边界**会拼出并不存在的词 —— 「闸门」+「的」→ `门的`，「闸门」+「的默认值」→ `的默`。这些碎片是**高频**的，它们的存在让「整条查询都由常用词组成」这件事变得更常见。
+
+M1 曾经试过在**打分层**修：给高 df 词项按 idf 打折。结果是真答案被一起压掉了 —— `recall@5` 从 0.844 掉到 0.563，已回退。**教训：不要把「这个词项是不是证据」和「这个词项有多重要」混成一个连续折扣。** 前者是二值的、属于切词与词表，后者才是权重。
+
+M2 的正解落在切词层（`src/core/tokenize.js`）：
+
+- **结构助词当边界**：`CJK_BOUNDARY_CHARS = {的, 了, 是, 在, 和, 与}` —— 在这六个字处把 CJK 串**断开**再取二元组，于是 `门的` / `里的` / `的数` / `和与` 这类碎片**根本不会被生成**（不是事后过滤，是不生成）。断开后只剩边界字的 run（如「的的」）整段丢弃：那种 run 没有内容。
+- 集合刻意保持**最小**（六个字），每加一个都要有「不加就出假命中」的实例。改前实测：`tokenize('闸门的默认值是什么')` → `[闸门, 门的, 的默, 默认, 认值, 是什, 什么]`；改后 → `[闸门, 默认, 认值, 什么]`。
+- **为什么是「断开 + 丢弃」而不是「降权」**：`的 / 了 / 是` 这类字在中文里的出现频率与「是不是证据」无关，它们**从不**是内容词。降权只是把假命中压小，仍然让它占着查询信息量的分母；丢弃才是把「跨词碎片根本不成立」说清楚。
+- **明确没做**：没有把实词也切碎（`数据库` → `数据 / 据库` 这种相邻二字仍然保留）。那是另一件事，会动摇已经跑通的召回；这一期只处理「跨结构助词的碎片」这一种已确诊的病灶。也没有引入词表/最长匹配 —— 实测不需要（上表 `recall@5` 一条没掉就说明了）。
+
+**④ 这一改动的实测账（`node bench/run-eval.mjs --same-corpus`，同一语料前后对比）**
+
+| 指标 | 改前 | 改后 | 阈值 | 说明 |
+|---|---|---|---|---|
+| `recall@5` | 0.844 | **0.844** | ≥ 0.80 | 真答案一条都没被压掉（这是 M1 那次失败的反面） |
+| `correct_refusal_rate` | 0.125 | **0.750** | ≥ 0.75 | 从「几乎不拒答」到刚好达标 |
+| `injected_tokens_mean` | 299.9 | **310.0** | ≤ 500 | 略升：多出来的拒答不注入上下文 |
+| `token_efficiency` | 2.251 | **2.177** | ≥ 2.0 | 略降，仍在阈值内 |
+
+拒答率能一次涨 0.625，主因是**切词层**：任务集里的拒答题问的是「库里没有的值」，而改前它们能靠 `的数` / `存的` 这类跨词碎片把 coverage 顶到门槛以上（假命中）；碎片不再生成之后，这些题自然落回拒答。`correct_refusal_rate` 在语料 51 条时**不**受 ② 影响（② 在 <200 条语料上关闭），所以涨的这 0.625 全部来自切词层 —— 这也是「口径与实现要能对得上账」的一个例子。
+
+**⑤ 证据性闸门在评测语料上不生效，这是有意的**：`INFORMATIVE_MIN_DOCS = 200` 而 `core-30-v1` 只有 51 篇，所以 `correct_refusal_rate` 从 0.125 涨到 0.750 **全部来自切词层**，与 ② 无关。两件事分开记，才能在真实库上归因：真实库 1321 篇，② 是生效的。
+
+**⑥ 明确没做的事**：没有给覆盖率闸门加「稀有词计数」这类新阈值。在 `core-30-v1` 的 51 篇语料上逐题算过：**每一个可答题的最小 df 比都是 1/51 或 2/51**，所以「至少一个稀有词」这种判据会把可答题和拒答题一起放行，等于没加。加了只会多一层永远不触发的代码。
+覆盖率闸门的机制一个字没改（`MIN_COVERAGE = 0.6`、逐 400 字桶取最大、分母只算索引里存在的词项）—— 改的是**喂给它的词项**。
+
+**代价**：默认纯词法 = 召回质量比语义检索低约 6pt（hit@1 口径，`04-cost-model.md`）；拒答路径会让「记忆明明有过但被答成不知道」的情况变多。**什么时候该换**：如果判据 1 的 `recall@5` 在纯词法档低于 0.80 而开向量后达标，说明词法档不该做默认档——那就把「本地向量」提到默认（代价是用户必须跑一个本地端点，见 `04-cost-model.md` 的取舍）。
+
+---
+
+## 6. 评测与可验证性
+
+### 6.1 判据落盘
+
+判据不是文档里的口号，是 `suite/` 里的题集 + `results/` 里的 JSON。每条结论必须能追到：题集版本、系统 git hash、配置 hash、判分器版本（`02-evaluation.md §4.7` 的 run schema）。
+
+三条判据沿用 `02-evaluation.md §5`（与 `00-brief.md §5` 的判据 A/C 对应）：
+
+| 判据 | 阈值（初始，测出基线后定稿） | 测量方式 | **不成立时怎么办** |
+|---|---|---|---|
+| **1 召回压力测试** | `core-30-v1` 上 `recall@5 ≥ 0.80` 且 `correct_refusal_rate ≥ 0.75` | 纯集合运算，无 LLM 裁判；`run_eval.py --system new --budget 500` | 先查索引是否坏（单跳事实题命中 <90% 即索引问题）；索引没坏就是检索算法不行，停掉 M1 全部功能开发，专心修检索 |
+| **2 成本不劣化** | `injected_tokens_mean ≤ 545`（旧账本基线）且 `token_efficiency ≥ 2.0` | 每轮记 `injected_tokens`，画 200/500/1000/2000 四档成本曲线 | 若存在「加预算不涨准确率」的档位 → 预算旋钮改成固定 500；若注入量已逼近 full-context → **停下来换方案**：检索层没有存在理由，改为「按需全量投喂 + 缓存」 |
+| **3 不腐烂、不害人** | 4 周回放后 `staleness_rate ≤ 0.05` 且 `negative_transfer ≤ 0.02`；陷阱题落入率 ≤25%；**未被用到率 ≤ 0.40**；**provenance 完整性 = 100%** | 时间回放（t0 / t0+2 周 / t0+4 周）+ 三档对照（closed_book / oracle_gold / real）；未被用到率 = 账本里 `times_carried ≥ 8 且 times_used = 0` 的条数 ÷ 总条数（旧库同口径为 23/72 ≈ 32%，但只有 3 天数据）；provenance 完整性 = schema 校验（每条都能答「谁写的 / 何时写的 / 依据是什么 / 上次验证何时」），缺一项算 0 分且不许写进库 | 若 `negative_transfer > 0`（加记忆反而更差）→ 立刻关掉 push、只留 pull，并逐条审巩固 receipt；若 `staleness_rate` 高 → 问题在巩固的 `invalidate` 规则，不在检索；若未被用到率高而召回指标合格 → 是**写入侧**在攒没人要的东西，先收紧「什么值得记」的判据再加功能 |
+
+判据 1–2 的数据来源：旧账本 `~/memory/engramory/.engramory-recall.jsonl`（344 行，**只读**）：141 次注入 / 705 个注入口 / 去重后 60 条笔记；`spent` 均值 **545.1** / 中位 554（n=65）；注入后打开率 **8.1%**（槽位口径）、去重口径 **11.7%**。**注意口径冲突**：`00-brief.md §2` 用的 2.4%（16/655）与上面两个数都对不上，`measuring.md:155` 另有 2.86%，三个数换分母就能互相解释——所以新项目**第一件事是把口径写进 schema**，在口径定死之前不引用任何打开率数字（`02-evaluation.md §4.8` 与 `05-agi-direction.md` 前情警告）。
+
+**M2 实测基线（2026-10-17，`node bench/run-eval.mjs --same-corpus`，40 题 / 51 篇语料）**：
+
+| 指标 | `new` 臂 | 阈值 | 出处 |
+|---|---|---|---|
+| `recall@5` | **0.844**（27/32） | ≥ 0.80 | 判据 1 |
+| `correct_refusal_rate` | **0.750**（6/8） | ≥ 0.75 | 判据 1 |
+| `injected_tokens_mean` | **310.0** | ≤ 500（判据 1）/ ≤ 545（判据 2） | 判据 1、2 |
+| `token_efficiency` | **2.177** | ≥ 2.0 | 判据 2 |
+
+`correct_refusal_rate` 是**只在拒答题上**算的（8 题里对 6 题），这是相对 `02-evaluation.md §5` 的有意偏离：若按全部 40 题算，一个「永不拒答」的系统白拿 32/40 = 0.80，闸门形同虚设。文档口径的原始值单独保留为 `refusal_calibration` 并一起打印，两个数都能看到。
+
+**三条口径各自查什么**（出红时按这个顺序定位，不要一上来调算法）：
+
+1. `recall@5` 低 → **先查索引**：`memory index --json` 的 `unreachable` 不为 0 就不是检索的问题（§3.1.1 的 `indexHidden` 就是这一类）。单跳事实题命中 <90% 即判定为索引问题。
+2. `correct_refusal_rate` 低 → 查是**假命中**（不该命中的命中了）还是**阈值太松**。M2 的实测是前者：拒答题靠跨词碎片刷到 coverage ≥ 0.6（§5.4）。
+3. `injected_tokens_mean` / `token_efficiency` 变差 → 查预算裁剪（`src/core/select.js`）有没有按 §5.2 的顺序丢，以及拒答是否照常返回（拒答不注入上下文）。
+
+### 6.2 每题可追溯来源
+
+一题一条记录，字段见 `02-evaluation.md §4.6` 的 `yffto.eval.suite/1`：`id / capability / gold_notes[] / expected{answer, judge} / negative_transfer_probe`。关键纪律：① **反向构题**——先选定一条记忆，再写一道只有它能回答的题，`gold_notes` 构造时即确定，不需要事后标注；② **防泄漏**——任务文本与 gold_notes 正文的字符 8-gram 重叠 >30% 退回重写，期望答案限长 ≤60 字，同答案命中多条 gold 只算一次；③ **判分器优先级**——`substring/regex/归一化` > `set_match` > `refusal_match` > `cheap_judge`（配额 ≤20%）> 人工抽检（20%），拒答**必须用 refusal_match 判，不许让 LLM 裁判判「拒绝」**；④ **判分器本身要被评测**——用「含糊但切题」的对抗答案打自己的裁判（接受率目标 <20%），人工抽检记录 Cohen's κ，κ<0.6 则该裁判分数不采信。
+
+### 6.3 CI 怎么跑
+
+| 频率 | 跑什么 | 门禁 |
+|---|---|---|
+| 每次 push | `core` 纯逻辑单测 + 一致性向量 + 索引重建幂等性（删掉 `index/` 重建，结果 hash 必须一致） | 必须绿 |
+| 每次 push | 判据 1 的**子集**（单跳 6 题 + 拒答 4 题），纯集合判分，零模型成本 | 必须绿 |
+| 每次 push | `memory index --json`：`unreachable == 0` 且 `stale == false`（索引健康是**可机检**的，不靠人记得去跑 `status`） | 必须绿 |
+| nightly | 判据 1 全量 + 判据 2 成本曲线 + 判分器对抗测试 | 红则当日不许合入检索改动 |
+| 每周 | 判据 3 时间回放的一个刻度（t0+2 周样本） | 红则冻结巩固功能 |
+
+**索引重建的幂等性怎么验**（M2 落定，因为分层索引比平铺索引更容易踩到）：删掉 `index/` 重建，两次结果的 **hash 必须一致**。实现里有两个具体的不变量：
+
+- **排序显式化**：叶组按 `(条数 desc, 组名 asc)` 排，不依赖 `Map` 的插入序 —— 只靠插入序会让「同名同条数的两个组」在两次重建之间对调，文件名里的序号跟着变，幂等性就成了随机通过。
+- **生成的账要自洽**：写进索引的「列了多少条」必须等于实际指针行数。M2 在这里抓到一个真 bug：截断提示行 `- … 还有 N 条未列入索引` 自己以 `- ` 开头，被计数逻辑当成一条指针，于是 `indexHidden` 永远少 1；更要命的是当列出的条数恰好等于总数时，`truncated` 会算成 `false` —— 索引少了 1193 条而 `status` 报一切正常。**一个 off-by-one 能让整套账说谎**，所以 `countPointerLines` 必须排除提示行，且这条要有单测钉住。
+
+评测成本上限来自 `00-brief.md §5` 判据 B：一次完整评测本地一条命令跑完、≤15 分钟、≤$2；单轮评测总量级 ≈10^5 tokens（`02-evaluation.md §4.4`）。`--system ledger_replay` 与 `--system none` 两条对照线用来验证评测脚手架本身没坏。
+
+**代价**：把「注入 token」当一等指标意味着检索质量提升如果靠多注入换来的，一律不算数——这会让 M1/M2 的进度看起来比实际慢。**什么时候该换**：如果连续两个里程碑都卡在判据 2 且用户真实反馈是「答不出来」，说明我们的成本闸门比用户的耐心还紧，该把默认预算从 500 抬到 1000 并重测拐点，而不是继续优化算法。
+
+---
+
+## 7. 与旧系统的关系
+
+- **旧库是数据源**：`~/memory/engramory` 的 72 篇 / 646 KB 直接作为导入样本与真实语料（`00-brief.md §8`）。导入器 `packages/import-engramory/` 负责把旧 frontmatter 映射到 `memory.note/1`，冲突字段进人工队列，不猜。
+- **旧库是基线**：`--system ledger_replay` 把旧账本回放成检索侧基线；判据 1 的对照三档是 `none`（无记忆）/ `engramory`（旧插件）/ `new`（本服务）（`02-evaluation.md §4.7`）。
+- **赢了才算数**：判据 A 要求新服务显著优于旧插件与无记忆（`00-brief.md §5`）。**赢的是长板，不是把旧插件判死**（`00-brief.md §10`）。**第一条线不冻结**（杨总 2026-10-16 定调）。
+- **共享内核**：`00-brief.md §10` 定了「存储、检索、账本、评测口径抽成 `memory-core`，两个壳都依赖它」。本文的 `packages/core` 就是这个包；旧插件接入方式为「依赖发布版 `@yffto/memory-core`」，共享内核的破坏性变更要同时跑两边测试，发布互不阻塞。
+- **不共享运行时数据**：旧插件继续用 `~/memory/engramory/`；新服务用自己的 `data/`（默认 `~/memory/<product>/`）。
+
+**代价**：两边共享内核意味着 `core` 的 API 变更要过两套测试、两套发布节奏，任何激进重构都会变慢；不共享数据意味着「在 DSH 里聊定的东西在 Claude Code 里看不见」，跨宿主连续这个卖点要等本服务自己用起来才成立。**什么时候该换**：如果到 M4 旧插件的用户数仍远大于新服务，说明「通用化」的用户价值低于「深挖单宿主」——那时该把 `core` 冻结成只读兼容层，把预算全投回第一条线，而不是继续两头维护。
+
+---
+
+## 8. 分期
+
+| 期 | 交付物 | 出口条件（验收判据） | **停下来换方案的条件** |
+|---|---|---|---|
+| **M0**（已完成调研） | 6 份文档 + `suite/core-30-v1` 题集 + `run_eval.py` 骨架 + `ledger_replay` 适配器 | 判据 1 的对照基线跑出数字（`--system none` 与 `--system ledger_replay` 两条命令能出结果） | 若 `ledger_replay` 都跑不出可用数字，说明评测脚手架或帐本口径有问题 → 先修评测，不许开写检索代码 |
+| **M1 垂直切片** | `core` 词法检索 + `adapters/mcp`（Dual-era + 薄壳）+ 写入闸门 + 旧库导入 | **判据 1**：`recall@5 ≥ 0.80` 且 `correct_refusal_rate ≥ 0.75`（`02-evaluation.md §5`） | 若纯词法档达不到 0.80 且开本地向量也达不到 → 停下，问题在数据模型而不在检索（回到 §3 重切 `(subject,predicate)`） |
+| **M2 巩固与生命周期** | 巩固进程（决策/执行分离 + receipt + 撤销）、provenance、冲突时效化、衰减与归档、核心档 push（≤400 字）；**另加两件 M1 遗留的洞**：分层索引（§3.1.1，修掉「读索引九成瞎」）与切词层跨词碎片（§5.4，把 `correct_refusal_rate` 从 0.125 修到 0.75） | **判据 2 + 判据 3**：`injected_tokens_mean ≤ 545`、`token_efficiency ≥ 2.0`、4 周模拟回放 `staleness_rate ≤ 0.05`、`negative_transfer ≤ 0.02`；**判据 1 复测**：M2 开工时 `correct_refusal_rate` 只有 0.125（不达标），应当在同一期修到达标 | 若 `negative_transfer > 0` 且已关 push 仍为正 → 停掉巩固进程的自动 apply，退回「只产候选 + 人工确认」模式；若 4 周回放只能在时间压缩下通过、真实 30 天过不了，说明膨胀问题未解，先做删减不做分发 |
+| M3 | 三宿主实机验证 + npm/MCP registry 分发 | 三宿主各有端到端录屏/日志（`00-brief.md §7`） | — |
+| M4 | 黄页/市场/文档站，第一个外部用户 | 外部用户装上并留下反馈（`00-brief.md §7`） | — |
+
+每期结束必须留下数字，没有数字的里程碑不算完成（`00-brief.md §7` 与 §8 风险表第一条）。
+
+---
+
+## 9. 关键接口草案
+
+五个操作，收敛到 5±2 个（`03-hosts-and-interfaces.md` 的结论）。默认只读；写操作带行为提示（`read-only` / `idempotent` / `destructive`，照抄 Basic Memory 的渐进式工具发现做法）。下面保留关键字段与全部返回形态（成功 / 幂等 / 拒绝 / 跳过 / 错误），实现者按此签名建类型。
+
+```js
+// ── remember：写入。热路径，零 LLM 调用。幂等（同 scope 同内容返回已有 id）
+remember({
+  content,                      // string，≤400 字；超长由调用方切分（04-cost-model.md 第 13 条）
+  kind,                         // core | semantic | episodic | procedural
+  scope,                        // user | project:<git origin 指纹>；默认由宿主注入
+  trust,                        // user_stated | system_derived | external
+  provenance: { written_by, source_ref, derived_from? },
+  valid_from?, valid_to?,
+  subject?, predicate?          // 有这两个字段才参与自动冲突消解
+})
+// → 成功
+{ ok: true, id, status: "stored", superseded: [id...] }   // superseded 只在提供了 subject/predicate 时非空
+// → 幂等 / 拒绝 / 跳过（都是正常返回，不是异常）
+{ ok: false, status: "duplicate", existing_id }
+{ ok: false, status: "skipped",   reason: "chitchat" | "too_short" | "no_durable_content" }
+{ ok: false, status: "denied",    reason: "scope_forbidden" | "trust_violation"
+                                            | "would_promote_external_to_instruction" }
+// → 错误（真异常：IO / schema / 库不可写）
+{ error: { code: "E_STORE_READONLY" | "E_SCHEMA_UNSUPPORTED" | "E_LOCK_TIMEOUT", message, retryable } }
+
+// ── recall：读取。默认操作，永远只读。
+recall({
+  query,
+  scope?,                       // 省略 = user + 当前 project
+  budget_tokens = 500,          // 硬预算；服务端裁剪并报告裁掉了什么
+  kinds?, as_of?, since?,       // as_of：按 valid_from/valid_to 取「当时为真」的快照
+  explain = false               // true 时返回 why_these，用于面板与调试
+})
+// → 有证据（items 里每条都带来源、有效期与打分拆解，why 即「为什么给了它」）
+{ ok: true, status: "ok", items: [
+    { id, content, kind, trust, confidence, valid_from, valid_to, supersedes, superseded_by,
+      source: { written_by, source_ref },
+      score: { importance, recency, relevance, total },
+      why: "core 档：身份/硬偏好" | "词法命中 3.2" | "被 2 条 episodic 支撑" } ],
+  budget: { requested: 500, used: 412, dropped: [{ id, reason: "episodic_low_trust" }] } }
+// → 证据不足（一等公民，不是错误）
+{ ok: true, status: "insufficient_evidence",
+  why_not: "top_score_below_threshold" | "only_external_low_trust"
+          | "all_hits_expired" | "conflicting_values_no_time_order",
+  nearest: [ { id, score } ] }   // 供调用方决定要不要放宽
+// → 拒绝
+{ ok: false, status: "denied", reason: "scope_forbidden" | "budget_below_minimum" }
+
+// ── consolidate：整理。显式、可选、可预算。绝不在热路径被调用。
+consolidate({
+  scope?,
+  dry_run = true,               // 默认 true：先出计划给人看，要动数据必须显式 apply
+  budget_tokens?,               // 本次巩固允许烧多少 token（默认 0 = 纯确定性规则，不调模型）
+  kinds?, max_change_ratio = 0.05   // 保险丝：单次 run 的改动量上限
+})
+// → 计划（dry_run）
+{ ok: true, status: "planned", run_id, operations: [
+    { op: "merge" | "summarize" | "invalidate" | "promote" | "archive",
+      targets: [id...], produces?: id, rationale, est_tokens } ],
+  stats: { scanned, planned, est_tokens } }
+// → 已执行
+{ ok: true, status: "applied", run_id, receipt_path: "runs/<run-id>.json",
+  applied: n, skipped: n, reversible: true }
+// → 主动中止（保险丝）
+{ ok: false, status: "aborted", reason: "change_ratio_exceeded" | "receipt_write_failed"
+                                        | "budget_exceeded" }
+// 配套：consolidate.replay(run_id) / consolidate.undo(run_id)
+
+// ── forget：遗忘。两级，默认软。
+forget({ id?, query?, scope?,
+         mode = "archive" })    // archive（软，可恢复） | expire（设 valid_to=now） | purge（真删，需二次确认）
+// → { ok: true, status: "archived" | "expired" | "purged", ids: [...], recoverable_until? }
+// → { ok: false, status: "denied", reason: "purge_requires_confirmation" | "core_kind_protected" }
+
+// ── explain：可观测性。回答「为什么给了它 / 为什么没给」。
+explain({ query?, id?, turn_id? })
+// → { ok: true, answer: {
+//      recalled: [ { id, score_breakdown, why } ],
+//      not_recalled: [ { id, why_not: "below_threshold" | "scope_mismatch"
+//                                | "expired_at_as_of" | "budget_dropped" | "never_indexed" } ],
+//      ledger_events: [ { ts, kind, ... } ] } }
+```
+
+**为什么这样切**：① **`remember` 与 `consolidate` 彻底分开**——热路径不许改旧记录，合成一个 API 会让「整理」重新爬回热路径（旧项目的病）；② **`insufficient_evidence` 是 `ok: true`，`deny` 也是正常返回**——拒答是正常结果不是错误，写成 `error` 会诱导调用方重试或编造，而写入闸门被绕过的主要原因就是它报异常、调用方 catch 之后照样往下走；③ **`consolidate` 默认 `dry_run: true`**——默认不动数据，要动必须显式 `apply`；④ **`recall` 返回 `why` 与 `budget.dropped`，所有写操作带 `scope`**——`00-brief.md §6` 原则 8（一切可观测）的落地形态，作用域是隔离的基本单位而不是可选项。
+
+**代价**：五个原语意味着模型侧记忆工具（Anthropic `memory_20250818` 的 view/create/str_replace/insert/delete/rename）无法直接映射，将来若要对接得写一层适配；`budget_tokens` 这种「调用方管预算」的设计把压力转移给宿主，宿主实现得不好时我们会看起来很贵。**什么时候该换**：若 MCP 规范出现官方记忆原语（赌注 B 不成立，见 `05-agi-direction.md §6`），写一个 adapter 即可迁移——因为它是「工具 + 记录」形状，不是专有协议。
+
+---
+
+## 10. 风险与代价
+
+每条都是「为什么选它 / 代价是什么 / 什么时候该换」。
+
+**1. 真相源 = 纯文本文件（而不是数据库）**
+选它：可 `cat`、可 git、可带走、跨宿主零同步；被 Anthropic 客户端 memory tool 与 `AGENTS.md` 约定两条独立线索验证（`05-agi-direction.md` 赌注 A）。
+代价：万级记录后扫描与索引重建变慢；手改文件会破坏解析（对策：fail-closed + `doctor` 暴露失败数）；无法做原子跨文件事务。
+该换：记录数进万级且增量索引仍超预算，或出现必须跨文件原子性的场景（如带配额的团队共享）——那时引入数据库，但**它只能是索引不是真相源**。
+
+**2. 默认零 API 成本（纯词法 + 可选本地向量）**
+选它：插件市场用户必须「装上就跑」，`onnxruntime-node` 解包 301 MB、`@huggingface/transformers` 实际 ≈310 MB+，作为默认依赖不可接受（`04-cost-model.md`）；默认档成本 ¥0。
+代价：召回质量比云端低约 6pt（hit@1 68.4% vs 74.7%）；要开向量得让用户先跑一个本地端点（Ollama / llama.cpp server）。
+该换：若判据 1 在纯词法档不达标而本地向量达标（见 §5.3）。
+
+**3. 默认 pull，push 只留 ≤400 字核心档**
+选它：全行业事实标准是 pull；旧项目 push 的打开率只有 2.4%（`00-brief.md §2`）。省钱清单里「pull 而非 push」标为必须做（`04-cost-model.md`）。
+代价：模型不主动问就拿不到记忆 → 短期体验上「记忆能力变弱」；核心档那 400 字永远占上下文。
+该换：若真实使用中宿主 agent 的 `recall` 调用率长期过低（说明宿主侧集成没做好），该改的是工具描述与系统提示，而不是回到 push。
+
+**4. 热路径零 LLM，整理全放空闲期**
+选它：sleep-time compute 有可复现数字（同等准确率测试时算力 ↓~5×；加大 sleep-time 算力准确率 +13%/+18%，`05-agi-direction.md §3.5`）。
+代价：巩固滞后 → 刚写完的重复/冲突事实有一段时间共存；`consolidate` 必须显式触发或常驻，多一个进程要保活。
+该换：若查询可预测性高的场景下（论文明确说查询越可预测收益越大）注入质量明显输给对手，可提高巩固频率，但**不把整理搬回热路径**——那是旧项目已经证伪过的形态。
+
+**5. 写入带信任等级 + 记忆内容不得成为指令**
+选它：提示注入通过记忆传播是已知攻击链（不可信内容被读 → 被写入 → 后续被当既定事实注入），硬约束是「记忆内容永远不能提升为指令」（`05-agi-direction.md §5.3`），且这可静态检查。
+代价：外部来源的记忆基本只能进 `semantic`，不能进 `procedural`，能力上限被压低；每条都要带 provenance，写入路径更长。
+该换：永不放松。若某天要支持「外部文档自动成为规则」，那必须是显式人工确认的流程，不是默认行为。
+
+**6. MCP 单一接口 + 常驻核心 + stdio 薄壳**
+选它：stdio 是 11 个宿主全部支持的公共子集；常驻核心做唯一写者，避免多宿主并发写坏库（`03-hosts-and-interfaces.md`）。Dual-era（同时兼容 2026-07-28 与 2025-11-25）是必须的，因为两个方向都会直接失败。
+代价：两套入口各自要测；核心不在时的行为必须显式设计（退化为只读）；本地 HTTP 是攻击面（只绑 127.0.0.1、token 文件 0600、禁止进日志）；老客户端兼容矩阵要长期维护。
+该换：若沙箱/容器环境里 HTTP 长期不通（`03-hosts-and-interfaces.md` 已提示这个风险），退化到「纯 stdio，每宿主一个进程 + 跨进程文件锁」，代价是写并发与索引重复构建变常态成本。
+
+**7. 索引必须是可重建的派生物**
+选它：真相源唯一化之后，索引正确性问题全部变成「重建一次」的问题；`index = f(notes)` 让 CI 可以断言「重建结果 hash 一致」。
+代价：增量索引逻辑与重建逻辑必须严格等价，否则会出现「日常用增量、重建后才暴露」的漂移（对策：CI 每次 push 跑幂等性测试）；向量索引绑定模型指纹，换模型 = 全量重建。
+该换：不做。这条是审计性的地基。
+
+**8. 成本闸门默认 `degrade` 而不是 `block`**
+选它：超预算时退回纯词法仍可用；阻塞会让服务在预算用尽后彻底不可用（`04-cost-model.md`）。
+代价：用户可能长期在降级状态下使用而毫无察觉，质量悄悄变差。
+该换：如果 `explain` 显示降级状态持续 >7 天，说明预算定得太低——该调预算，而不是把 `degrade` 改成 `block`。
+
+**9. 评测先行（先写 schema 与基线，再写检索代码）**
+选它：整个领域没有一个可以直接采信的公开数字（`02-evaluation.md`）；旧项目的真正尸检报告是 `hit_but_unused_rate`——「命中」「注入」「使用」必须拆成三个独立事件。
+代价：M0/M1 的产出看起来「没有功能」；判据严苛会让进度显得慢。
+该换：不做。没有这条，判据 A 会在两周内变成摆设（`00-brief.md §5` 判据 B 的原话）。
+
+**10. 最值得下注的一条（同时是最大风险）**
+选它：赌「记忆的形态固定在文件/记录约定 + 能读它的工具」而不是独立 SaaS（`05-agi-direction.md` 赌注 A，最硬的证据是 Anthropic 把 memory tool 放在客户端、记忆存在用户自己的应用里）。
+代价：如果三年内模型原生记忆吃掉个人助手场景，文件层会显得冗余，用户价值被吃掉大半。
+该换：坚持纯文本可导出——这条不成立时用户至少能迁移，我们随时能变成「导出 + 审计 + 跨宿主搬运」的补充工具；**反之若一开始把数据锁进私有存储，这条不成立时会死透**。
+
+---
+
+## 附：与 `00-brief.md §6` 架构原则的逐条对照
+
+| 立项书原则 | 本文落点 |
+|---|---|
+| 1 默认 pull，push 例外（always-on ≤400 字） | §5.1、风险 3 |
+| 2 分层而不是平铺（四层各有生命周期） | §3.1 `kind`、§3.2 状态机、§5.2 裁剪顺序 |
+| 3 写入有闸门，模型只在巩固/冲突检测上可选 | §4.1 gate、§4.2 operation 表、`consolidate.budget_tokens` 默认 0 |
+| 4 文件和 schema 是真相源 | §3.1、§3.4、风险 1、风险 7 |
+| 5 预算感知检索 + 可降级到纯词法 | §5.2、风险 2、风险 8 |
+| 6 记忆是不可信输入，绝不拼进系统指令 | §4.1 fail-closed、§9 `denied` 形态、风险 5 |
+| 7 成本是约束（月预算 + 降级，默认零 API） | 风险 2、风险 8（配置形态见 `04-cost-model.md`） |
+| 8 一切可观测（为什么给了它 / 为什么没给） | §9 `explain`、`recall.why`、`budget.dropped`、§6.1 账本口径 |
+
+**尚未定、且本文故意不定的三件事**：产品名（`00-brief.md §9` 待定问题 1）；30 天真实腐烂率的实测值（M2 才可能有数据，现在写任何数字都是编）；多设备同步的具体机制（立项书 §4 已把多设备推给「同步文件夹」，本文只保证 `data/` 可被同步工具处理）。

@@ -1,0 +1,443 @@
+/**
+ * BM25 词法索引。零依赖、零出网、零模型。
+ *
+ * 参数取值与理由（都来自旧项目 `bm25.js` 实测，不是拍脑袋）：
+ *
+ *  - `K1 = 1.2`：教科书默认值（也是 DSH-SEP 用的值），便于对照。
+ *  - `B = 0.4`：**不是**教科书的 0.75。机制是长度归一按 `len/avgLen` 惩罚长文档，
+ *    而我们的库里绝大多数记录都是长文，这个惩罚就变成「谁长谁吃亏」，与相关性无关。
+ *    旧项目在三把尺子上扫过 0.2–0.9，0.3–0.5 是一片平台，取中间偏下的 0.4。
+ *  - `TITLE_EXTRA = 3` / `TAG_EXTRA = 2`：字段加权（BM25F 的廉价近似）＝把标题/标签里的
+ *    词项多计几遍。旧项目从 3 调到过 24，但那是靠「标题当查询」的对照组堆出来的，
+ *    那个构造对标题权重**结构性偏袒**，不构成证据。这里取保守值 3（它自己最初的取值）。
+ *    要重调请先按 `02-evaluation.md §4.3` 第 3 条把 dev/test 切开，别在跑分集上调。
+ *  - `QUERY_TERM_CAP = 24`：超长查询里高频词会淹没真正特异的词，按 IDF 只留最特异的
+ *    这么多个（抄 hindsight 的 bm25 词项选择 cap）。
+ *  - `PHRASE_BONUS = 0`：整句子串命中奖励**实测否决**过（奖励「抄了查询的笔记」会把
+ *    更该命中的那篇挤下去）。常量与实现留在代码里当证据，不是待办。
+ */
+import { tokenize, expandQuery } from './tokenize.js';
+
+export const K1 = 1.2;
+export const B = 0.4;
+export const TITLE_EXTRA = 3;
+export const TAG_EXTRA = 2;
+export const QUERY_TERM_CAP = 24;
+export const PHRASE_BONUS = 0;
+
+/** 索引里的版本号：口径变了就 +1，旧索引会被判指纹不匹配而重建。 */
+/**
+ * 词项在**多少比例的文档里出现过**就不再算证据。
+ *
+ * 中文按二字切之后，`的构`/`是什`/`么` 这类碎片会出现在几乎每篇笔记里：它们是
+ * 分词噪声，不是证据。不设这道闸的后果是「查一个库里根本不存在的东西，也能凑出
+ * 0.3 的相关性」——那是把拒答能力直接烧掉（判据 1 的 `correct_refusal_rate`）。
+ *
+ * 0.8 是刻意保守的：一个真在 8 成以上笔记里出现的词，本来就区分不了任何东西；
+ * 而小语料（n < 5）下这个闸基本不生效（`df/n` 波动太大）。
+ */
+export const MAX_DF_RATIO = 0.8;
+export const MIN_DF_DOCS = 5;
+
+/**
+ * **查询必须至少有一个「有信息量的词项」，否则整条查询不算证据。**
+ *
+ * 「有信息量」= 在参考语料里出现的文档比例不超过 `INFORMATIVE_DF_RATIO`。
+ * 这是 `CJK_BOUNDARY_CHARS` 之后的**第二道网**，防的是同一类失败的另一半：
+ * 切词边界能干掉 `门的`/`里的` 这种横跨助词的碎片，但**干不掉那些本身就是词、
+ * 却在库里几乎无处不在**的词项（`什么` df 115/1321、`默认` df 110/1321）。
+ *
+ * 机制（为什么这一条能治病）：覆盖率 = 命中词项的信息量 / 查询的信息量总量。
+ * 当查询里**只有**一个词项在库里存在时（无论它多常见），覆盖率恒等于 1.0 ——
+ * 这不是「覆盖得很全」，而是分母退化了。实测未修前：「量子色动力学里的胶子禁闭」
+ * 只剩 `里的`（df 96）一个词项，**92 篇无关笔记覆盖率全是 1.0**，全部越过
+ * `minCoverage=0.6` 的拒答闸；「中世纪欧洲的封建采邑制度」只剩 `的封`（df 1）
+ * 一个词项，也照样答。加了这道网之后这三条查询都正确拒答（见 M2 报告）。
+ *
+ * 为什么**不**是「给常见词按 idf 打折」：M1 试过，它把真答案一起压掉了
+ * （计分集 recall@5 0.844 → 0.563，见 `scoreDocs` 里那段注释）。打折动的是**分数**，
+ * 而这里的病灶是**分母退化**；把退化这件事直接判成「没有证据」才是对症的。
+ *
+ * 为什么阈值是 5%：它等同于「这个词项在 20 篇里出现不超过 1 篇」。低于它就区分不出
+ * 任何东西（出现在 5% 以上文档里的词，靠它自己挑不出 20 篇里的一篇）。
+ * 0.05 与已有的 `MAX_DF_RATIO = 0.8` 是两个不同用途的闸，**不要合并**：
+ *  - `MAX_DF_RATIO`：**逐词**过滤（这个词还能不能算一个证据）；
+ *  - `INFORMATIVE_DF_RATIO`：**整条查询**过滤（这条查询整体还值不值得答）。
+ * 小语料（`n < INFORMATIVE_MIN_DOCS`）下这条闸不生效：df/n 在 5 篇语料上没有统计意义，
+ * 而评测语料只有 51 篇——那时 `df=1` 的罕见词项到处都是，闸开了只会误拒。
+ * 它只在真库（1321 篇）这种规模上才会咬人，这正是它要治的场景。
+ */
+export const INFORMATIVE_DF_RATIO = 0.05;
+export const INFORMATIVE_MIN_DOCS = 200;
+
+export const INDEX_VERSION = 1;
+export const INDEX_BUILDER = 'bm25-lexical-1';
+
+/**
+ * 单条记录的字数上限：超过就切桶。
+ *
+ * 为什么切桶而不是截断：旧项目真库里出现过一篇 267KB 的追加式日志，占全库七成体积，
+ * 在 30 条查询里霸榜 17 条。截断能压住霸榜，但后面那 259KB 就永远检索不到了；
+ * 切桶既不丢内容，又只让「真正含查询词的那一节」得分。
+ */
+const SECTION_CHARS = 400;
+const MAX_SECTIONS = 40;
+
+/** 一条笔记（已归一化字段）→ 若干可检索记录。 */
+export function sectionsOf(note) {
+  const id = String(note.id);
+  const body = String(note.body ?? '');
+  const title = String(note.title ?? '');
+  if (body.length <= SECTION_CHARS) {
+    return [{ id, section: 0, title, body, weightLabel: '' }];
+  }
+  const parts = [];
+  for (let i = 0; i < body.length && parts.length < MAX_SECTIONS; i += SECTION_CHARS) {
+    parts.push(body.slice(i, i + SECTION_CHARS));
+  }
+  return parts.map((part, i) => ({
+    id,
+    section: i,
+    // 标题只喂给首桶：否则同一个标题被计入几十次，把长笔记的分数抬虚。
+    title: i === 0 ? title : '',
+    body: part,
+    weightLabel: i === 0 ? '' : `§${i + 1}`,
+  }));
+}
+
+/** 一条记录的加权词项表：标题 ×3、标签 ×2、正文 ×1。 */
+export function tokenizeRecord(rec) {
+  const tf = new Map();
+  const add = (term, n) => {
+    if (!term) return;
+    tf.set(term, (tf.get(term) ?? 0) + n);
+  };
+  for (const t of tokenize(rec.body)) add(t, 1);
+  for (const t of tokenize(rec.title)) add(t, TITLE_EXTRA);
+  for (const t of tokenize((rec.tags ?? []).join(' '))) add(t, TAG_EXTRA);
+  let len = 0;
+  for (const n of tf.values()) len += n;
+  return { tf, len };
+}
+
+/**
+ * 建索引：`docs = [{ id, section, title, body, tags, kind, trust, times }]`。
+ *
+ * 返回的结构**可 JSON 序列化**（真相源是文件，索引只是可重建的派生物，
+ * 所以索引必须能被写进 `index/` 再读回来，见架构文档风险 7）。
+ */
+export function buildIndex(docs) {
+  const postings = new Map();
+  const docLen = [];
+  const metas = [];
+  let totalLen = 0;
+  docs.forEach((doc, i) => {
+    const { tf, len } = tokenizeRecord(doc);
+    docLen.push(len);
+    totalLen += len;
+    metas.push({
+      id: String(doc.id),
+      section: doc.section ?? 0,
+      title: doc.title ?? '',
+      kind: doc.kind ?? 'semantic',
+      trust: doc.trust ?? 'user_stated',
+      tags: doc.tags ?? [],
+      chars: String(doc.body ?? '').length,
+    });
+    for (const [term, n] of tf) {
+      let plist = postings.get(term);
+      if (!plist) {
+        plist = [];
+        postings.set(term, plist);
+      }
+      plist.push([i, n]);
+    }
+  });
+  return {
+    version: INDEX_VERSION,
+    builder: INDEX_BUILDER,
+    n: docs.length,
+    k1: K1,
+    b: B,
+    avgLen: docs.length ? totalLen / docs.length : 0,
+    docLen,
+    metas,
+    postings,
+  };
+}
+
+/** 序列化：Map → 数组（JSON 不认 Map）。 */
+export function serializeIndex(index) {
+  return {
+    version: index.version,
+    builder: index.builder,
+    n: index.n,
+    k1: index.k1,
+    b: index.b,
+    avgLen: index.avgLen,
+    docLen: index.docLen,
+    metas: index.metas,
+    postings: [...index.postings.entries()],
+  };
+}
+
+/** 反序列化；形状不对返回 null（调用方负责重建，绝不猜着解析）。 */
+export function deserializeIndex(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (raw.version !== INDEX_VERSION || raw.builder !== INDEX_BUILDER) return null;
+  if (!Array.isArray(raw.postings) || !Array.isArray(raw.metas)) return null;
+  if (raw.n !== raw.metas.length || raw.docLen?.length !== raw.n) return null;
+  const postings = new Map();
+  for (const entry of raw.postings) {
+    if (!Array.isArray(entry) || entry.length !== 2 || !Array.isArray(entry[1])) return null;
+    postings.set(String(entry[0]), entry[1]);
+  }
+  return {
+    version: raw.version,
+    builder: raw.builder,
+    n: raw.n,
+    k1: raw.k1,
+    b: raw.b,
+    avgLen: raw.avgLen,
+    docLen: raw.docLen,
+    metas: raw.metas,
+    postings,
+  };
+}
+
+function idf(df, n) {
+  return Math.log(1 + (n - df + 0.5) / (df + 0.5));
+}
+
+/**
+ * 一个词项是否**算得上证据**：在参考语料里出现的文档比例 ≤ `INFORMATIVE_DF_RATIO`。
+ *
+ * 语料太小（< `INFORMATIVE_MIN_DOCS`）时一律算「有信息量」——df/n 在小语料上没有
+ * 统计意义，硬判会把评测语料（51 篇）上的正常查询误拒。这条闸只该在真库规模上咬人。
+ */
+export function isInformativeTerm(df, n) {
+  if (!Number.isFinite(n) || n < INFORMATIVE_MIN_DOCS) return true;
+  const freq = Number.isFinite(df) ? df : 0;
+  return freq / n <= INFORMATIVE_DF_RATIO;
+}
+
+/**
+ * 查询侧词项选择：按 IDF 降序只留 `QUERY_TERM_CAP` 个。
+ *
+ * 只对**出现在索引里**的词项排序：不在索引里的词项 IDF 取最大值，
+ * 若把它们排进来会挤掉真正有用的词（它们本来也贡献 0 分）。
+ */
+export function selectTerms(index, expansions, cap = QUERY_TERM_CAP) {
+  const present = expansions.filter((e) => index.postings.has(e.term)).filter((e) => {
+    // 语料内停用词闸：只在语料够大时生效。n 很小时 df/n 本身没有统计意义。
+    if (index.n < MIN_DF_DOCS) return true;
+    const df = index.postings.get(e.term).length;
+    return df / index.n <= MAX_DF_RATIO;
+  });
+  // idf/df 一律带上，**不能只在超 cap 时才算**：调用方要拿它算「这个词有多稀罕」，
+  // 少了字段会算出 NaN，而 NaN 的比较全是 false —— 静默失效，最难查的那种。
+  const scored = present.map((e) => {
+    const df = index.postings.get(e.term).length;
+    return { ...e, df, idf: idf(df, index.n) };
+  });
+  if (scored.length <= cap) return scored;
+  scored.sort((a, b) => b.idf - a.idf || b.weight - a.weight || (a.term < b.term ? -1 : 1));
+  return scored.slice(0, cap);
+}
+
+/**
+ * 打分：返回 `[{ docIndex, score, terms: [...] }]`，只含得分 > 0 的记录。
+ *
+ * 纯函数：同一份索引 + 同一份查询，结果永远一致（可回放是审计性的地基）。
+ */
+export function scoreDocs(index, query, options = {}) {
+  const cap = options.termCap ?? QUERY_TERM_CAP;
+  const expansions = Array.isArray(query)
+    ? query
+    : expandQuery(query, { bridge: options.bridge });
+  // `keepCommon: true` 时跳过停用词闸（诊断/调试用：这里要看的是原始匹配，
+  // 不是「够不够格当证据」）。
+  const terms = options.keepCommon
+    ? expansions
+        .filter((e) => index.postings.has(e.term))
+        .map((e) => {
+          const df = index.postings.get(e.term).length;
+          return { ...e, df, idf: idf(df, index.n) };
+        })
+    : selectTerms(index, expansions, cap);
+  // 查询的「信息量总量」：每个词按 idf × 词权重计一次（同一个词只计一次 ——
+  // 同一个 term 可能同时来自字面与桥接两种 source，计两次会让分母虚高）。
+  //
+  // **分母用参考语料的 idf，样本用本次检索的 idf**（两者默认是同一个索引）。
+  // 为什么要有这个区分：`recall()` 会先把「过期/被替换/超范围」的笔记滤掉再建索引，
+  // 于是同一句查询在有 50 篇和有 41 篇时算出的覆盖率**不是同一个数** ——
+  // 表现就是「昨天问它答，今天同一句它说没证据」，而库里一个字都没改。
+  // 参考语料取「整个库」，覆盖率就不再随过滤结果漂移。
+  const refIndex = options.referenceIndex ?? index;
+  const massOf = new Map();
+  for (const t of terms) {
+    if (massOf.has(t.term)) continue;
+    const refDf = refIndex.postings.get(t.term)?.length ?? 0;
+    const refIdf = refDf > 0 ? idf(refDf, refIndex.n) : t.idf;
+    massOf.set(t.term, refIdf * t.weight);
+  }
+  // **分母退化保护**：查询里有没有一个「算得上证据」的词项（见 `INFORMATIVE_DF_RATIO`）。
+  //
+  // 一条查询只命中了库里的常见词（或只剩一个碎片词项）时，覆盖率的分母塌成一个数，
+  // 于是任何含这个词项的笔记都拿到 coverage = 1.0。那不是「覆盖得很全」，
+  // 是**问题本身没有信息量**：这时正确动作是「不算证据」而不是「答它」。
+  //
+  // **`df = 0`（库里根本没有这个词项）不算证据** —— 这一条很容易写反：
+  // 桥表扩展出来的英文词（`闸门` → `gate`）在库里往往一次都没出现过，
+  // 把它也算成「稀有证据」的话，分母就被一个**没人命中得了**的词项撑大了，
+  // 于是只命中常见词的那些笔记又拿到一个不大不小的覆盖率，这道闸就白设了。
+  // 「有信息量」= **存在** 且 **不常见**，两个条件缺一不可。
+  // 注意 `keepCommon`（诊断/nearest 路径）不走这条：那条路要看的正是原始匹配。
+  const informative = options.keepCommon
+    ? { terms: [], set: new Set(), count: 0, ratio: INFORMATIVE_DF_RATIO, enabled: false }
+    : (() => {
+        const kept = terms.filter((t) => {
+          const df = refIndex.postings.get(t.term)?.length ?? 0;
+          return df > 0 && isInformativeTerm(df, refIndex.n);
+        });
+        return {
+          terms: kept.map((t) => t.term),
+          // 判定用 Set，公开的 `terms` 用数组（JSON 友好）：查询词项可达上限几十个，
+          // 但分母那一层是逐词项查的，别用 `includes` 写成 O(n²)。
+          set: new Set(kept.map((t) => t.term)),
+          count: kept.length,
+          ratio: INFORMATIVE_DF_RATIO,
+          enabled: refIndex.n >= INFORMATIVE_MIN_DOCS,
+        };
+      })();
+  // **分母只算「有信息量」的词项**（`INFORMATIVE_DF_RATIO`）。
+  //
+  // 为什么不是「所有词项都进分母」：像 `什么`（df 115/1321）这种满库皆是的词项，
+  // 在分母里占的份额会让一篇**只命中它**的笔记拿到一个不大不小的覆盖率，
+  // 而那个数没有任何鉴别力可言 —— 分母里混进多少噪声，覆盖率就有多少水分。
+  // 把分母收窄到「能区分出东西的词项」，覆盖率才真的是「这篇解释了问题里
+  // 有鉴别力的那部分没有」。
+  //
+  // 一条查询**一个**有信息量的词项都没有时，分母塌成 0，所有笔记覆盖率都是 0：
+  // 这不是「覆盖率算不出来」，而是「这条查询在库里构不成证据」，调用方据此拒答
+  // （`recall.js` 报 `no_informative_term`）。
+  const totalMass = informative.count === 0
+    ? 0
+    : terms.reduce((sum, t) => (massOf.has(t.term) && informative.set.has(t.term) ? sum + massOf.get(t.term) : sum), 0);
+  // ⚠️ 试过但**没采用**：把常用词的贡献按稀有度打折（`idf/idf(1)`，一次方或平方）。
+  // 动机是真实的旧库上有假命中 —— 「量子色动力学里的胶子禁闭」里唯一在库里出现过的
+  // 词项可能只是 `里的`（df 96/1332），于是无关笔记的覆盖率被顶到 1.0。
+  // 折扣确实把这个数压到了 0.39，但它**同时**压掉了真答案：计分集上
+  // recall@5 从 0.844 掉到 0.563（平方折扣更差），
+  // 而且需要的闸门值从 0.6 挪到 0.5（余量没了）。
+  // 结论：问题不在「分母没按稀有度加权」，而在「切词器会把 `闸门` + 的 切成 `门的`」
+  // 这类跨词碎片上 —— 那该在 M2 的切词层解决（需要词表），不是拿覆盖率闸去顶。
+  // **M2 已按这个结论落地**：`tokenize.js` 的 `CJK_BOUNDARY_CHARS` 消掉跨词碎片，
+  // 上面那段 `informative` 处理分母退化。两条都是**判定**，不是打分折扣 ——
+  // 这正是它与「打折」的关键区别：真答案的分数一个字都没动。
+  // 覆盖率**逐桶算**（`covered / totalMass`），笔记层取各桶最大值。
+  //
+  // 为什么不是「把一篇笔记各桶命中的词取并集再算」——那样覆盖率会虚高，
+  // 而且方向恰好是错的那种虚高：一篇讲了好几个相近主题的笔记
+  // （「Kestrel 配置路径」里顺带提到了「默认」），会因为**不同段落各命中一个词**
+  // 而拿到 0.63 的覆盖率，于是「换个说法问同一个东西」被当成有证据。
+  // 实测：并集口径下 8 条拒答题有 3 条被放过（正确拒答率 0.875 → 0.625）。
+  // 逐桶口径下，一个桶必须**自己**覆盖住问题才算数，这才是「有人正面回答了它」。
+  const acc = new Map();
+  // 分母收窄到「有信息量」的词项之后，**分子也必须用同一把尺**——
+  // 否则只命中常见词（本来不参与分母）的笔记仍会往分子里加质量，
+  // 分子分母口径不一致就是这个函数最容易出的错（`density` 那段注释讲的是同一件事）。
+  const massEligible = (term) => options.keepCommon || informative.set.has(term);
+  for (const { term, weight, source, df } of terms) {
+    const plist = index.postings.get(term);
+    if (!plist) continue;
+    const termIdf = idf(df, index.n);
+    const qWeight = weight * termIdf;
+    const termMass = massOf.get(term) ?? qWeight;
+    for (const [docIndex, tf] of plist) {
+      const len = index.docLen[docIndex] || 0;
+      const norm = 1 - B + (B * len) / (index.avgLen || 1);
+      const contribution = (qWeight * (tf * (K1 + 1))) / (tf + K1 * norm);
+      let entry = acc.get(docIndex);
+      if (!entry) {
+        entry = { docIndex, score: 0, mass: 0, terms: [] };
+        acc.set(docIndex, entry);
+      }
+      entry.score += contribution;
+      // 分子与分母用同一个打折口径（见上面 `density` 处的注释）
+      if (massEligible(term)) entry.mass += termMass;
+      entry.terms.push({ term, source, weight: Math.round(contribution * 1e6) / 1e6 });
+    }
+  }
+  for (const entry of acc.values()) {
+    entry.coverage = totalMass > 0 ? Math.min(1, entry.mass / totalMass) : 0;
+    entry.queryMass = totalMass;
+    entry.queryTerms = massOf.size;
+  }
+  const result = [...acc.values()].sort(
+    (a, b) => b.score - a.score || (a.docIndex < b.docIndex ? -1 : 1),
+  );
+  attachQueryInfo(result, {
+    // 「查询里算得上证据的词项」。空数组 = 这条查询整体不构成证据（分母退化），
+    // 调用方必须据此拒答，而不是「挑个最高分答了」。
+    informativeTerms: informative.terms,
+    informativeRatio: informative.ratio,
+    informativeGateEnabled: informative.enabled,
+    queryTerms: massOf.size,
+    queryMass: totalMass,
+  });
+  return result;
+}
+
+/**
+ * 把查询侧的口径挂在返回值上（**不可枚举**）。
+ *
+ * 为什么用不可枚举属性：`scoreDocs` 的返回类型必须继续是「一个数组」——
+ * 已有调用方与用例对着它 `deepEqual([])`、`map`、`slice`。多挂几个可枚举字段
+ * 会**静默**改变那些断言的语义（数组属性参与 `deepEqual`），而这是最容易埋下的
+ * 「测试还绿，行为已经变了」。挂不可枚举属性则两头都成立：形状不变，口径可查。
+ */
+function attachQueryInfo(arr, info) {
+  Object.defineProperty(arr, 'queryInfo', { value: Object.freeze(info), enumerable: false });
+  return arr;
+}
+
+/**
+ * 把「桶级」命中聚合成「笔记级」命中：同一 id 只留分最高的那一桶。
+ *
+ * 对调用方而言「一篇笔记仍然只是一条命中」——切桶是实现细节，不能漏到接口上
+ * （旧项目 `store.js` 的注释就是这么定的，这里沿用）。
+ */
+export function aggregateByNote(scored, index) {
+  const byId = new Map();
+  for (const hit of scored) {
+    const meta = index.metas[hit.docIndex];
+    if (!meta) continue;
+    const prev = byId.get(meta.id);
+    if (!prev) {
+      byId.set(meta.id, {
+        id: meta.id,
+        score: hit.score,
+        coverage: hit.coverage ?? 0,
+        queryTerms: hit.queryTerms ?? 0,
+        best: hit,
+        sections: [meta.section ?? 0],
+        buckets: [hit.docIndex],
+      });
+      continue;
+    }
+    // `sections` 是**桶号**（人看得懂的 §2），`buckets` 是文档下标（程序要用的）。
+    // 原来只存文档下标却叫 sections，诊断时会读出一串与正文对不上的数。
+    if (!prev.sections.includes(meta.section ?? 0)) prev.sections.push(meta.section ?? 0);
+    prev.buckets.push(hit.docIndex);
+    // 笔记的覆盖率取**各桶最大值**：一篇长笔记只要有一段正面回答了问题，
+    // 这篇就算覆盖到了。取平均会让长笔记因为大量无关段落被判成「不够格」，
+    // 而长笔记恰恰是这个库里的常态。
+    if ((hit.coverage ?? 0) > prev.coverage) prev.coverage = hit.coverage ?? 0;
+    if (hit.score > prev.best.score) {
+      prev.best = hit;
+      prev.score = hit.score;
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : 1));
+}

@@ -1,0 +1,43 @@
+{
+  "name": "memory-service",
+  "version": "0.1.0",
+  "description": "显式记忆服务：文件是唯一真相源，词法检索 + 预算感知选片，写入过闸门。零运行时依赖。",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "bin": {
+    "memory": "bin/memory",
+    "memory-mcp": "bin/memory-mcp"
+  },
+  "main": "src/api.js",
+  "exports": {
+    ".": "./src/api.js",
+    "./mcp": "./src/mcp/protocol.js",
+    "./import": "./src/import/engramory.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "docs/07-usage.md",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "test:one": "node --test --test-name-pattern",
+    "status": "node bin/memory status",
+    "mcp": "node bin/memory-mcp"
+  },
+  "keywords": [
+    "memory",
+    "mcp",
+    "bm25",
+    "agent-memory",
+    "local-first"
+  ],
+  "dependencies": {},
+  "devDependencies": {}
+}
