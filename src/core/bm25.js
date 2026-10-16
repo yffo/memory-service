@@ -63,11 +63,31 @@ export const MIN_DF_DOCS = 5;
  * 0.05 与已有的 `MAX_DF_RATIO = 0.8` 是两个不同用途的闸，**不要合并**：
  *  - `MAX_DF_RATIO`：**逐词**过滤（这个词还能不能算一个证据）；
  *  - `INFORMATIVE_DF_RATIO`：**整条查询**过滤（这条查询整体还值不值得答）。
- * 小语料（`n < INFORMATIVE_MIN_DOCS`）下这条闸不生效：df/n 在 5 篇语料上没有统计意义，
- * 而评测语料只有 51 篇——那时 `df=1` 的罕见词项到处都是，闸开了只会误拒。
- * 它只在真库（1321 篇）这种规模上才会咬人，这正是它要治的场景。
+ * 为什么判据是**双阈值**（`MIN_DOCS` **或** `RATIO`）而不是单看比例：只看比例时，
+ * 判据的分母是语料规模，于是同一条闸在小语料上会**反过来**咬人。M3 的
+ * `bench/sweep.mjs` 扫出：200 篇档上判别词 `df=12` 只占 6% > 5%，被整条判成
+ * 「没有信息量的词」→ `no_informative_term` 误触 → 120 道可答题全被拒
+ * （recall@5 0.0%、拒答率 87.5%）。500 篇档同病，2000 篇档才回到 80.0% / 62.5%。
+ * 也就是说：**n 越小，这道闸越像「什么都拒」**，而它本该只在大库上拦分母退化。
+ *
+ * 修法是把「常见词」的判据改成与语料规模无关的那一半先说：
+ * `df <= INFORMATIVE_DF_FLOOR_DOCS`（绝对词频）**或** `df/n <= INFORMATIVE_DF_RATIO`
+ * （比例）就算证据。绝对词频这一支有统计意义、**不需要**语料够大：
+ *  - 50 篇语料里出现在 ≥ 10 篇的词就是常见词（那是全部笔记的 20%），这跟语料有 50 篇
+ *    还是 5000 篇无关；「同一句话被抄进上百篇笔记」本身就是结构性的信号。
+ *  - 小语料恰恰是最容易被 n 放大误判的地方：n=50 时服务名只落在 10 篇笔记里，
+ *    按比例算是 20% 常见词，可那 10 篇是 10 篇**不同**的笔记——闸门不该据此
+ *    把「服务名 + 判别词」的正常提问整条拒掉。绝对词频 `10 ≤ 64` 就不会这么判。
+ * 所以这条闸**在任何语料规模上都成立**，不再有 `n < 200 时整条闸失效` 的空档
+ * （那正是缺陷的温床：闸要么全关要么全拒，中间没有过渡）。
+ *
+ * 两个阈值的分工：`FLOOR` 管小语料（n < 1280 时它更宽松，是先"放行"的那一支），
+ * `RATIO` 管大库（n ≥ 1280 时它更宽松）。真库 1321 篇的行为因此**不变**：
+ * 那个规模上仍然是 `df/n ≤ 0.05` 说了算，`df ≥ 67` 的词照旧不算证据。
  */
 export const INFORMATIVE_DF_RATIO = 0.05;
+export const INFORMATIVE_DF_FLOOR_DOCS = 64;
+/** @deprecated 不再参与判定（闸门现在在所有语料规模上生效）；保留导出只为兼容既有引用与文档。 */
 export const INFORMATIVE_MIN_DOCS = 200;
 
 export const INDEX_VERSION = 1;
@@ -210,15 +230,27 @@ function idf(df, n) {
 }
 
 /**
- * 一个词项是否**算得上证据**：在参考语料里出现的文档比例 ≤ `INFORMATIVE_DF_RATIO`。
+ * 一个词项是否**算得上证据**：绝对词频 `df <= INFORMATIVE_DF_FLOOR_DOCS`
+ * **或** 文档比例 `df/n <= INFORMATIVE_DF_RATIO`。
  *
- * 语料太小（< `INFORMATIVE_MIN_DOCS`）时一律算「有信息量」——df/n 在小语料上没有
- * 统计意义，硬判会把评测语料（51 篇）上的正常查询误拒。这条闸只该在真库规模上咬人。
+ * 两支里取更宽松的一支（或），判据因此**不随语料规模退化**：
+ *  - 小语料（n < 1280）：`df <= 64` 生效 —— 50 篇档里 `df=12` 的判别词不再被
+ *    5% 的比例误杀，可答题不会被整条拒掉；
+ *  - 大库：`df/n <= 0.05` 生效 —— 真库（1321 篇）上仍是 `df ≥ 67` 才算常见词，
+ *    与改动前的行为逐字一致；
+ *  - 两边都不满足才判「没有信息量」（n=200 档的 `df=120`、n=1321 档的 `df ≥ 67`）。
+ *
+ * `df` 为 0（语料里根本没有这个词）时**不算常见词**，返回 true：这个词压根不在库里，
+ * 「常见 / 稀罕」对它无从谈起。真正要判「有没有证据」的是**在库里存在**的词项，
+ * 调用方（`scoreDocs`）与装置（`bench/sweep.mjs` 的 `judgeQuery`）都各自做了这件事
+ * —— 两边都是 `df > 0 && isInformativeTerm(df, n)`。把这层判断压在 `df=0` 上会把
+ * 「库里没有」与「库里太常见」混成同一个结论，它们该给的拒答理由并不相同。
+ * 边界：n 非有限数或 ≤ 0 时按「不能判断」处理 —— 一律算证据（宁可答错，不可整条拒掉）。
  */
 export function isInformativeTerm(df, n) {
-  if (!Number.isFinite(n) || n < INFORMATIVE_MIN_DOCS) return true;
-  const freq = Number.isFinite(df) ? df : 0;
-  return freq / n <= INFORMATIVE_DF_RATIO;
+  if (!Number.isFinite(n) || n <= 0) return true;
+  if (!Number.isFinite(df) || df <= 0) return true;
+  return df <= INFORMATIVE_DF_FLOOR_DOCS || df / n <= INFORMATIVE_DF_RATIO;
 }
 
 /**
@@ -296,9 +328,13 @@ export function scoreDocs(index, query, options = {}) {
   const informative = options.keepCommon
     ? { terms: [], set: new Set(), count: 0, ratio: INFORMATIVE_DF_RATIO, enabled: false }
     : (() => {
+        let dropped = false; // 闸门这次有没有**改变判定**（删掉过词项）
         const kept = terms.filter((t) => {
           const df = refIndex.postings.get(t.term)?.length ?? 0;
-          return df > 0 && isInformativeTerm(df, refIndex.n);
+          if (df <= 0) return false; // 库里没有这个词项：不是证据，但也不算「被闸门删掉」
+          if (isInformativeTerm(df, refIndex.n)) return true;
+          dropped = true;
+          return false;
         });
         return {
           terms: kept.map((t) => t.term),
@@ -307,7 +343,14 @@ export function scoreDocs(index, query, options = {}) {
           set: new Set(kept.map((t) => t.term)),
           count: kept.length,
           ratio: INFORMATIVE_DF_RATIO,
-          enabled: refIndex.n >= INFORMATIVE_MIN_DOCS,
+          // `enabled` 的语义是「**这道闸这次有没有改变判定**」，不是「闸门开没开」。
+          // 两处会报 false：① 全部候选词项都在库里不存在（`df = 0`，选择层的事）；
+          // ② 存在的词项全都过闸（小语料上 `df <= 地板` 一一放行）。
+          // 这两种情况下「有没有证据词」这个结论与「不设闸」逐字相同，报 true 只会把
+          // 成因不同的拒答（选择层空手 vs 真的只有常见词）混成同一个 `no_informative_term`。
+          // M4 之前这里是 `refIndex.n >= INFORMATIVE_MIN_DOCS` —— 那个按语料规模开关的
+          // 判据造成的空档正是 200 篇档全拒的成因（见 §5.5.1）。
+          enabled: dropped,
         };
       })();
   // **分母只算「有信息量」的词项**（`INFORMATIVE_DF_RATIO`）。
