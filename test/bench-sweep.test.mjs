@@ -152,12 +152,18 @@ test('扫描：真库尺度上闸门仍然咬人（绝对地板不许把闸门�
     `1000 篇档 recall@5 只有 ${point.recall_at_k}：证据在库就该答得出来`);
   assert.equal(point.answerable, point.recalls, '可答题应当全中');
 
-  // ② 拒答这一半：新夹具上生产口径**一条都不拒**。这条断言把「无解」钉住，
-  //    而不是让它随参数漂移成一个看起来还行的数。归因见 §5.5.1：
-  //    覆盖率闸门的分母里每个证据词只算一次，而分子里单词命中可以放大到 ≈2.2×，
-  //    所以「近邻命中了服务之外的判别词」这件事，覆盖率**结构上**区分不出来。
-  assert.equal(point.correct_refusal_rate, 0,
-    `夹具重建后生产口径不该拒答，实得 ${point.correct_refusal_rate}`);
+  // ② 拒答这一半：M5 时这里写的是 `=== 0`（「生产口径一条都不拒」，用来把「无解」
+  //    钉住，免得它随参数漂移成一个看起来还行的数）。M6 补上了**组合级共现核对**
+  //    （`src/core/cooccurrence.js`）之后这一半解得开了，所以断言换成双向的：
+  //    拒答率必须达标，**而且**关掉这条机制就得掉回 0 —— 后者是防伪的那一半，
+  //    没有它，这条用例挡不住「把阈值调严之后顺手把 0 改成 1」的假成绩。
+  assert.ok(point.correct_refusal_rate >= 0.75,
+    `1000 篇档拒答率只有 ${point.correct_refusal_rate}：共现核对没接上或判据被放宽了`);
+  const noCooc = runPoint(corpus, { ...PROD_PARAMS, coocRatio: null });
+  assert.equal(noCooc.correct_refusal_rate, 0,
+    `关掉共现核对仍有 ${noCooc.correct_refusal_rate} 的拒答率：那这个数不是这条机制挣的`);
+  assert.ok(noCooc.recall_at_k >= 0.90,
+    `关掉共现核对召回也掉了：${noCooc.recall_at_k}（机制不该靠牺牲召回换拒答）`);
 
   // ③ 装置真的接上了：关掉覆盖率闸门，可答题还是全中（说明召回不是靠闸门放水）。
   const noCoverage = runPoint(corpus, { ...PROD_PARAMS, minCoverage: null });

@@ -189,7 +189,15 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
   const filtered = kept.length !== entries.length;
   const refIndex = filtered ? buildIndex(toDocs(entries)) : index;
   const expansions = expandQuery(query);
-  const scoredDocs = scoreDocs(index, expansions, { referenceIndex: refIndex });
+  // **组合级共现核对**（`cooccurrence.js`）：`scoreDocs` 会把每条候选命中了几个
+  // 「稀有锚点」标在桶上，这里按笔记聚合后当**准入条件**用。参数从 `options` 透传
+  // （`cooccurrence: false` 可关掉；装置要拿它当扫描轴）。
+  const scoredDocs = scoreDocs(index, expansions, {
+    referenceIndex: refIndex,
+    cooccurrence: options.cooccurrence,
+    maxAnchorDfRatio: options.maxAnchorDfRatio,
+    minClasses: options.minClasses,
+  });
   // 查询侧的口径（哪些词项算证据、分母塌没塌）。挂在数组的不可枚举属性上，
   // 形状仍是数组（见 `bm25.js` 的 `attachQueryInfo`）。
   const queryInfo = scoredDocs.queryInfo ?? {
@@ -222,10 +230,40 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
     });
 
   const scored = [];
+  // 组合级共现核对的结果（`{id, cooc}` 列表）。这两个集合只用于**理由归因**，
+  // 不参与打分（分数口径不变是硬要求：改分数就会连带动到既有 1321 篇库的
+  // `recall@5 = 0.844` 基线）。
+  const coocFailed = [];
+  let coocChecked = 0;
+  // 诊断用的共现读数（**一处**格式化，两条返回路径共用）。
+  const coocReport = (c) => ({
+    required: c.required,
+    requiredRaw: c.requiredRaw,
+    count: c.count,
+    evidence: c.evidence,
+    minEvidence: c.minEvidence,
+    ok: c.ok,
+    missing: c.missing,
+    absent: c.absent,
+    forgiven: c.forgiven,
+    matched: c.matched,
+    classes: c.classes,
+  });
   for (const hit of byNote) {
     const entry = entryById.get(hit.id);
     if (!entry) continue;
     const breakdown = scoreNote({ note: entry.note, bm25: hit.score, coverage: hit.coverage ?? null, nowMs: nowMsValue });
+    // **组合级共现闸**（`cooccurrence.js`）：`required > 0` 才代表这次查询里
+    // 存在「可被问的组合」，也才核得动；`required === 0`（查询里一个库里可核的
+    // 稀有类都没有）时 `cooc` 恒为 null（放行）—— 那种查询这条机制不构成证据。
+    // 判定的**唯一副本**在 `cooccurrence.js`（`aggregateByNote` 只搬运每桶的读数）。
+    // 这里只挑「这篇笔记命中的最多类的那个桶」的判定，别在这里重算一遍 ——
+    // 重算就会与 `minEvidence`/`requiredNow` 那几处口径漂开（M6 踩过一次）。
+    const cooc = hit.coocVerdict ?? null;
+    if (cooc) {
+      coocChecked += 1;
+      if (!cooc.ok) coocFailed.push({ id: hit.id, cooc });
+    }
     scored.push({
       id: hit.id,
       entry,
@@ -238,6 +276,7 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
       coverage: hit.coverage ?? null,
       breakdown,
       why: breakdown.why,
+      cooc,
     });
   }
   scored.sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : 1));
@@ -254,6 +293,8 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
   // 覆盖率的守卫写成「有限数才能当阈值」，理由和 minScore 一样：
   // 传 null 的人本意是「用默认」，不是「把这个闸关掉」。
   const coverGateFull = Number.isFinite(thresholds.minCoverage) ? thresholds.minCoverage : 0;
+  // 传 `null` 表示「用默认」，不是「把这个闸关掉」—— 与 `minScore` 那条注释同一个理由。
+  // `null` 在 `finiteOr` 里会落回默认值，所以这里拿不到 `null`；真正要关闸请传 0。
   // 语料小到什么程度算「小」：20 篇。低于它时 idf 本身就没什么统计意义，
   // 覆盖率的分母会被「库里恰好只有 5 篇」放大成噪声，所以改用保底闸。
   // 小语料切换点本身也是可配的：否则「全量闸」这条路径在小语料上永远测不到，
@@ -278,7 +319,17 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
       //
       // 这个数是配置项（`memory search --min-coverage`）：`02-evaluation.md §6`
       // 不许在计分集上调参，所以要能把默认值摆到命令行上，用别的语料换。
-      (!Number.isFinite(s.coverage) || s.coverage >= coverGate),
+      (!Number.isFinite(s.coverage) || s.coverage >= coverGate) &&
+      // **组合级共现闸**（`cooccurrence.js`）：光「覆盖率够」还不够 ——
+      // 覆盖率的分母里每个证据词只算一次，所以「提问的实体」和「被问的知识点号」
+      // 分别出现在**两篇不同的笔记**里时，两篇的覆盖率都能顶到 1.000，
+      // 而它们谁也没回答这个问题。这一条要求这些词在**同一篇**里共现。
+      //
+      // 为什么放在覆盖率之后而不是最前：`cooc` 只在 `required > 0` 时不为 null，
+      // 而 `required > 0` 已经蕴含「查询里有稀有词」，和覆盖率的判别范围重叠；
+      // 放在这里让拒绝理由的分支顺序保持「分数 → 覆盖率 → 共现」，
+      // 归因时先报更基本的那条。
+      (!s.cooc || s.cooc.ok),
   );
   const ignored = scored.filter((s) => !eligible.includes(s));
   // 「只有外部低信任命中」也走拒答（§5.3 的四类理由之一）。
@@ -301,11 +352,24 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
   const noInformativeTerm = informativityGateOn && queryInfo.informativeTerms.length === 0;
   const mustRefuse = eligible.length === 0 || onlyExternal || noInformativeTerm;
   if (mustRefuse) {
+    // **共现失败单独报**：有候选过了覆盖率闸，却因为「被问的那几样东西不在**同一篇**里
+    // 共现」全被挡下 —— 这和「分数不够」是完全不同的诊断出口。前者是「库里有相关笔记
+    // 但没回答这个组合」，换阈值没用、补一篇对的笔记才有用。
+    //
+    // 只在**真凭实据**时才报这条：候选里存在一篇「被问的每一样都写到了」的（`co` 非空），
+    // 而其余候选都各缺一样 —— 那才叫「组合缺一篇」。反过来，如果**每一篇候选都在缺同一类**
+    // （比如问的东西库里根本没写过），那这是「查的词不在这座库里」，不是「组合没共现」；
+    // 报成共现失败会把「我不认识这个词」伪装成「事实没写过」（M6 的铁律：不许伪造成绩）。
+    const coocBlocked = !noInformativeTerm && !onlyExternal && eligible.length === 0
+      && coocFailed.length > 0
+      && coocFailed.some((s) => s.cooc.required > 0 && s.cooc.missing.length === 0);
     const reason = noInformativeTerm
       ? 'no_informative_term'
       : onlyExternal
         ? 'only_external_low_trust'
-        : refuseReason({ scored: eligible.length ? eligible : ignored, thresholds, skipped, kept, allScored: scored });
+        : coocBlocked
+          ? 'cooccurrence_required_pair_missing'
+          : refuseReason({ scored: eligible.length ? eligible : ignored, thresholds, skipped, kept, allScored: scored });
     return {
       ok: true,
       status: 'insufficient_evidence',
@@ -333,12 +397,24 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
         skipped,
         candidates: scored.length,
         eligible: 0,
-        ignored: ignored.map((s) => ({ id: s.id, relevance: round(s.relevance), coverage: round(s.coverage ?? 0) })),
+        ignored: ignored.map((s) => ({
+          id: s.id,
+          relevance: round(s.relevance),
+          coverage: round(s.coverage ?? 0),
+          // 被共现闸挡下来的条目把判据原样附上：审计要能回答
+          // 「是覆盖率不够还是组合没共现」，不能只给一个布尔。
+          cooccurrence: s.cooc ? coocReport(s.cooc) : null,
+        })),
         pulled: 0,
         core: 0,
         dropped: [],
         store: null,
         queryInfo,
+        cooccurrence: {
+          checked: coocChecked,
+          blocked: coocFailed.length,
+          blockedIds: coocFailed.slice(0, 20).map((x) => x.id),
+        },
       },
     };
   }
@@ -443,12 +519,14 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
         id: s.id,
         relevance: round(s.relevance),
         coverage: round(s.coverage ?? 0),
+        cooccurrence: s.cooc ? coocReport(s.cooc) : null,
       })),
       pulled: pulled.length,
       core: coreCandidates.length,
       dropped: selected.dropped,
       store: null,
       queryInfo,
+      cooccurrence: { checked: coocChecked, blocked: coocFailed.length, blockedIds: coocFailed.slice(0, 20) },
     },
   };
 }
@@ -456,11 +534,15 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
 /**
  * 拒答理由（`§9` 的 `why_not` 枚举）。
  *
- * 三个理由的判据必须**互斥且可解释**：
+ * 这里只处理**分数面/时间面/信任面**的三条，判据互斥且可解释：
  *  - 一条笔记都没进候选，而且有笔记是被 as-of/since 剔掉的 → `all_hits_expired`
  *    （调用方该放宽时间，而不是换词）；
  *  - 有候选但全是 external → `only_external_low_trust`（有料但不可当事实）；
  *  - 其余 → `top_score_below_threshold`。
+ *
+ * 另外两条理由不在这里判：`no_informative_term`（分母退化，由查询侧决定）
+ * 和 `cooccurrence_required_pair_missing`（组合没在同一篇共现，由共现闸决定）——
+ * 它们都在 `recall()` 里就地短路，因为判据来自查询侧与共现闸，不是这里的候选集。
  */
 function refuseReason({ scored, thresholds, skipped, kept, allScored }) {
   if (scored.length === 0) {

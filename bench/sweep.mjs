@@ -34,6 +34,16 @@ import {
 } from '../src/core/bm25.js';
 import { expandQuery } from '../src/core/tokenize.js';
 import { saturateRelevance } from '../src/core/score.js';
+import {
+  COOC_ANCHOR_MAX_DF_RATIO,
+  presentClasses,
+  COOC_MIN_CLASSES,
+  anchorTermsOf,
+  groupAnchorsByClass,
+  cooccurringClasses,
+  requiredCooccurrences,
+  checkCooccurrence,
+} from '../src/core/cooccurrence.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(HERE, '..');
@@ -69,6 +79,18 @@ export const SWEEP_DEFAULTS = Object.freeze({
    * 好让「地板多大才够」是量出来的，而不是拍的。
    */
   dfFloorPoints: Object.freeze([0, 8, 16, 32, 64, 200, 800, 3200]),
+  /**
+   * **M6 新增的轴**：组合级共现核对的锚点门槛（`COOC_ANCHOR_MAX_DF_RATIO`）。
+   *
+   * `null` = 关掉这条机制（得到修复前的基线格子，好让「是这条机制解开了反相关」
+   * 这件事在表里可读，而不是靠叙述）。其余取值扫「多稀的词才算得上核对点」：
+   * 门槛越松（0.5），越多词进锚点集、越容易判「缺了一样」而拒答；
+   * 门槛越紧（0.02），只有孤例级稀罕词参与核对。
+   *
+   * 判定公式（与 §5.5.3 一致）：**类**为核对单位，`required = min(2, 库里参与
+   * 复合键的类数)`；每一类至少命中一个锚点才算这一样东西「写在同一篇里」。
+   */
+  coocRatioPoints: Object.freeze([null, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5]),
 });
 
 /**
@@ -77,6 +99,9 @@ export const SWEEP_DEFAULTS = Object.freeze({
  * 渲染、CLI 的 JSON、比对脚本都读它，免得「文档里写的生产值」和「装置读的生产值」
  * 各写一份、改一处忘一处。
  */
+/** 生产默认覆盖率闸（`recall.js` 的 `DEFAULT_THRESHOLDS.minCoverage`）。 */
+export const DEFAULT_MIN_COVERAGE = 0.6;
+
 export const PROD_PARAMS = Object.freeze({
   k: SWEEP_DEFAULTS.k,
   minRelevance: SWEEP_DEFAULTS.minRelevance,
@@ -85,6 +110,8 @@ export const PROD_PARAMS = Object.freeze({
   dfRatio: INFORMATIVE_DF_RATIO,
   minDocs: 0,
   dfFloor: INFORMATIVE_DF_FLOOR_DOCS,
+  coocRatio: COOC_ANCHOR_MAX_DF_RATIO,
+  coocMinClasses: COOC_MIN_CLASSES,
 });
 
 /** 一次扫描的默认配置：在默认值上把证据性闸门的轴钉在生产口径上（渲染的对照点要存在）。 */
@@ -93,8 +120,60 @@ export function prodSweepOptions(opts = {}) {
     dfRatioPoints: [INFORMATIVE_DF_RATIO],
     dfFloorPoints: [INFORMATIVE_DF_FLOOR_DOCS],
     minDocsPoints: [0],
+    coocRatioPoints: [COOC_ANCHOR_MAX_DF_RATIO],
     ...opts,
   };
+}
+
+/**
+ * 组合级共现核对在某一档语料上的**判定套件**（M6）。
+ *
+ * 口径与 `src/core/bm25.js` 的 `annotateCooccurrence()` + `recall.js` 的准入层
+ * **逐字对齐**：只认字面词项（`source === 'term'`、长度 ≥ 2）、只绑定「在库里
+ * 真的与别的锚点类同篇出现过」的类、`required = min(2, 参与复合键的类数)`。
+ * `coocRatio === null` 时整条机制关掉（基线格子）。
+ *
+ * 为什么这里要重写一遍而不是 import 生产的结论：与 `coveredIds` 同一个理由 ——
+ * 装置要能把常量当参数扫，而生产只认模块常量。所以
+ * `test/bench-sweep.test.mjs` 的「装置量的是生产的行为」逐题对账必须覆盖它。
+ */
+export function coocSuite(index, expansions, coocRatio, coocMinClasses = COOC_MIN_CLASSES) {
+  if (coocRatio === null) return { enabled: false, groups: new Map(), required: 0, bindable: [], known: [] };
+  const anchors = anchorTermsOf(expansions, index, { maxAnchorDfRatio: coocRatio });
+  const groups = groupAnchorsByClass(anchors);
+  const bindable = cooccurringClasses(groups, index, { maxAnchorDfRatio: coocRatio });
+  // 可核的类数按 `presentClasses` 数（库里有这个词项就够），**不是** `bindable.length`。
+  // 两者的差别正是 M6 最要命的那个漏洞：`quartzwell`（df=17/50）算锚点、却因为
+  // 「没有一篇把它和别的类写在一起」掉出绑定集，而按绑定集算需求数就等于
+  // 放行「没写实体名」的近邻。详见 `cooccurrence.js` 的 `requiredCooccurrences`。
+  const known = presentClasses(groups, index);
+  return {
+    enabled: true,
+    anchors,
+    groups,
+    bindable,
+    known,
+    required: requiredCooccurrences(
+      known.length,
+      Number.isFinite(coocMinClasses) && coocMinClasses > 0 ? coocMinClasses : null,
+    ),
+  };
+}
+
+/** 一条候选过不过共现核对（`coocSuite` 的判定出口）。 */
+export function coocVerdict(hitTerms, suite, identityTerms = null) {
+  if (!suite.enabled || suite.required === 0) {
+    return { ok: true, count: 0, required: 0, bound: 0, evidence: 0, missing: [], absent: [], forgiven: [], classes: {}, matched: [] };
+  }
+  // `identityTerms`：笔记身份（文件名/标题/标签/别名）的词项，与生产
+  // `bm25.js` 把 `metas[docIndex].identityTerms` 传进去的那一处同口径。
+  // 装置漏传会让这里的判定比生产**严**，两边的 `cooc` 读数就对不上了
+  // （`test/bench-sweep.test.mjs` 有一条逐题一致的用例守着这件事）。
+  return checkCooccurrence(hitTerms, suite.groups, suite.required, {
+    bindableClasses: suite.bindable,
+    knownClasses: suite.known,
+    identityTerms,
+  });
 }
 
 // ────────────────────────────────────────────────────────────── 合成语料
@@ -132,6 +211,7 @@ export { buildCorpus } from './sweep-fixtures.mjs';
 export function judgeQuery(index, query, params) {
   const {
     k = 5, minRelevance, minScore, minCoverage, dfRatio, minDocs, dfFloor,
+    coocRatio = COOC_ANCHOR_MAX_DF_RATIO, coocMinClasses = COOC_MIN_CLASSES,
   } = params;
   const expansions = expandQuery(query);
   // 闸门口径：与 `src/core/bm25.js` 的 `isInformativeTerm()` 同形 ——
@@ -176,8 +256,12 @@ export function judgeQuery(index, query, params) {
   // 现在闸门在所有规模上都有判据（绝对词频地板兜底），分母就必须跟着换成证据词，
   // 否则本装置量的覆盖率会比生产宽，读数对不上（修复前 n=500 档读 63%、
   // 生产实际 75%，差的就是这一处）。
+  // **组合级共现核对**（M6，`cooccurrence.js`）：命中之后核「被问的那几样东西
+  // 是不是写在**同一篇**里」。`coocRatio === null` 时整条机制关掉 —— 那是修复前的
+  // 基线格子，用来说明「反相关」不是靠调参解开的。
+  const suite = coocSuite(index, expansions, coocRatio, coocMinClasses);
   const covered = coveredIds(scored, index, expansions, {
-    minRelevance, minScore, minCoverage, dfRatio, minDocs, dfFloor: floor, isInfo, gateOn: gateOn(),
+    minRelevance, minScore, minCoverage, dfRatio, minDocs, dfFloor: floor, isInfo, gateOn: gateOn(), suite,
   });
 
   const noInformative = gateOn() && informative.size === 0 && expansions.length > 0;
@@ -193,11 +277,15 @@ export function judgeQuery(index, query, params) {
     // 复刻生产口的读数，方便与 run-eval 对照。
     productionGateEnabled: qinfo.informativeGateEnabled !== false,
     productionInformativeCount: informativeTerms ? informativeTerms.length : null,
+    // 共现核对的读数：核了几条、挡了几条、这条查询有几个可核的类。
+    coocRequired: suite.required,
+    coocBound: suite.bindable.length,
+    coocBlocked: covered.coocBlocked,
   };
 }
 
 function coveredIds(scored, index, expansions, {
-  minRelevance, minScore, minCoverage, isInfo, gateOn,
+  minRelevance, minScore, minCoverage, isInfo, gateOn, suite,
 }) {
   const termDf = new Map();
   for (const e of expansions) {
@@ -213,6 +301,9 @@ function coveredIds(scored, index, expansions, {
   // `no_informative_term` 拒掉，覆盖率本来也不参与判定）。
   // 闸门关掉（`dfRatio === null`）时证据词集合等于「库里存在的词项」，退化成旧口径，
   // 于是「关掉闸门」那一列仍读得出「纯词项覆盖」。
+  // 词项 → 查询内权重（同一词项只计一次，与 `massByTerm` 同口径）。
+  const weightByTerm = new Map();
+  for (const e of expansions) if (!weightByTerm.has(e.term)) weightByTerm.set(e.term, e.weight);
   const eligibleTerm = new Map();
   for (const e of expansions) {
     if (eligibleTerm.has(e.term)) continue;
@@ -256,12 +347,36 @@ function coveredIds(scored, index, expansions, {
       if (!eligibleTerm.get(t.term)) continue;
       const df = index.postings.get(t.term)?.length ?? 0;
       if (df <= 0) continue;
+      // **词项必须真的出现在这个桶里**，这一支才存在。
+      //
+      // 这里踩过一次（M6）：漏掉 `tf` 的存在性判断，`tf` 缺省成 0 之后下面的
+      // 公式仍然给出 `qWeight · 0 · (K1+1) / (0 + K1·norm) = 0`，看着像没事 ——
+      // 但那一行算的是**别的桶**的质量：`e.terms` 是「这个桶命中过的词项」，
+      // 而 `secById` 是**逐桶**的，一篇只命中 `lumenpath` 的备忘笔记因此把
+      // 「扩容/容台/台量/kp00022」四个只写在**别的**笔记里的词也算进了自己的质量。
+      // 症状：装置算出 coverage 0.661，生产算 0.119（差 5.6 倍），于是装置
+      // 认为笔记过了覆盖率闸、生产认为没过 —— n=200/500 两档「装置判答、生产判拒」。
+      // 这个 bug 的方向恰好是**让装置比生产宽**，所以它会把拒答率压低。
+      const hit = index.postings.get(t.term).find(([d]) => d === e.docIndex);
+      if (!hit || !hit[1]) continue;
+      // 分子与生产 `scoreDocs` 的 `entry.mass` **同一条公式**：
+      // `mass += refIdf(term) × queryWeight(term)`，**不带** tf 饱和。
+      //
+      // 这里原来写的是 `score` 那一支的公式（`qWeight·tf(K1+1)/(tf+K1·norm)`）。
+      // 两支不一样：`score` 带 tf 饱和与长度归一，`mass` 两个都不带 ——
+      // 因为分母 `totalMass` 是「每个证据词只算一次」的 idf×权重和，
+      // 分子必须用同一把尺，否则覆盖率不再是「问题里有鉴别力的部分被解释了
+      // 多少」，而是「命中得多密」（`bm25.js` 里 `massEligible` 那段注释讲的是同一件事）。
+      // 拿错公式的后果是装置比生产**宽** 5.6 倍：`lumenpath-memo-00000` 这篇只命中
+      // `lumenpath` 的备忘，词项 idf=1.602、权重 2.987 —— 生产算 mass=1.602、
+      // coverage=0.119（被覆盖率闸挡下），装置算 mass=8.920、coverage=0.661（放行）。
+      // 实测症状就是 n=200/500 两档「装置判答、生产判拒」。
       const termIdf = idfOf(df);
-      const qWeight = t.weight * termIdf;
-      const tf = index.postings.get(t.term).find(([d]) => d === e.docIndex)?.[1] ?? 0;
-      const len = index.docLen[e.docIndex] || 0;
-      const norm = 1 - B + (B * len) / (index.avgLen || 1);
-      mass += (qWeight * (tf * (K1 + 1))) / (tf + K1 * norm);
+      // ⚠️ 权重取**查询词项表**里的 `weight`，不是 `e.terms[i].weight` ——
+      // 后者是 `scoreDocs` 算出来的**分数贡献**（`qWeight·tf(K1+1)/(tf+K1·norm)`，
+      // 已经等于 idf×norm 的那个数），拿它当权重复算一遍就是把 idf 平方。
+      // 症状：`lumenpath-kp00000` 的 mass 算成 10.93（应 2.467），coverage 0.74（应 0.166）。
+      mass += termIdf * (weightByTerm.get(t.term) ?? 0);
     }
     secById.set(e.docIndex, {
       id: meta.id,
@@ -295,11 +410,48 @@ function coveredIds(scored, index, expansions, {
     }
   }
   const all = [...best.values()].sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : 1));
-  const eligible = all.filter((s) => s.relevance > 0
-    && s.relevance >= minRelevance
-    && s.score >= minScore
-    && (minCoverage === null || !Number.isFinite(s.coverage) || s.coverage >= minCoverage));
-  return { hits: all, eligible, termDf };
+  // 共现核对按**桶**做，再按笔记取「命中的类最多」的那个桶 —— 与生产
+  // `aggregateByNote()` 的 max 聚合同口径（一篇长笔记里 A 写在第一段、B 写在
+  // 第三段，它们确实是同一篇里共现的）。
+  const coocByNote = new Map();
+  if (suite?.enabled && suite.required > 0) {
+    for (const e of scored) {
+      const meta = index.metas[e.docIndex];
+      if (!meta) continue;
+      const v = coocVerdict(e.terms, suite, meta.identityTerms);
+      const prev = coocByNote.get(meta.id);
+      if (!prev || v.count > prev.count || (prev.missing.length > 0 && v.missing.length === 0)) {
+        coocByNote.set(meta.id, v);
+      }
+    }
+  }
+  let coocBlocked = 0;
+  const eligible = all.filter((s) => {
+    const v = coocByNote.get(s.id);
+    if (v && !v.ok) coocBlocked += 1;
+    return s.relevance > 0
+      && s.relevance >= minRelevance
+      && s.score >= minScore
+      // `minCoverage === null`（扫描轴上的基线格）在生产里**不是**「放行」：
+      // `recall.js` 的 `finiteOr(options.minCoverage, DEFAULT)` 会落回默认 0.6，
+      // 所以那一格量的正是「生产默认口径」，覆盖率闸照样在咬人。
+      // 装置原来写成「null = 不核覆盖率」，于是同一格装置放行、生产拒绝 ——
+      // `test/bench-sweep.test.mjs` 的逐题对账会报 n=2000 档 16 道题判定不同。
+      && (!Number.isFinite(s.coverage) || s.coverage >= (minCoverage ?? DEFAULT_MIN_COVERAGE))
+      && (!v || v.ok);
+  });
+  // `hits` 必须是**过完闸门**的那个列表。
+  //
+  // 这里踩过一次：原来返回 `all`（只按分数排好序的原始候选），于是装置一边把
+  // `eligible` 判成空、一边又把被共现闸挡掉的笔记当命中报出来 —— 「拒答率」是
+  // 拿 `eligible` 算的、而「召回了什么」是拿 `all` 算的，两把尺子量同一个格子。
+  // 症状是 M6 第一次跑出 n=200/500 两档「召回 1.000 / 拒答 0.000」，看着像
+  // 「共现闸在小语料上不工作」，实际是这一行把被挡的候选又放回了 `hits`
+  // （`copperloom-kp00022` 的 `cooc ok=false`、却出现在 top-5 里）。
+  //
+  // 生产里 `recall()` 是拿 `eligible` 出 `items` 的（被挡的进 `ignored`），
+  // 所以这一行也是「装置量的是生产的行为」那条对账用例的前提。
+  return { hits: eligible, all, eligible, termDf, coocBlocked };
 }
 
 /** 在一档语料上跑一套参数，给出四个读数。 */
@@ -365,6 +517,7 @@ export function sweep(opts = {}) {
             if (dfRatio === null && (dfFloor !== cfg.dfFloorPoints[0] || minDocs !== cfg.minDocsPoints[0])) {
               continue;
             }
+            for (const coocRatio of cfg.coocRatioPoints) {
             const params = {
               k: cfg.k,
               minRelevance: cfg.minRelevance,
@@ -373,9 +526,11 @@ export function sweep(opts = {}) {
               dfRatio,
               minDocs,
               dfFloor,
+              coocRatio,
             };
             const point = runPoint(corpus, params);
             points.push({ ...params, ...point, rows: cfg.detail ? point.rows : undefined });
+            }
           }
         }
       }

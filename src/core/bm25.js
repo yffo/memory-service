@@ -17,6 +17,15 @@
  *    更该命中的那篇挤下去）。常量与实现留在代码里当证据，不是待办。
  */
 import { tokenize, expandQuery } from './tokenize.js';
+import {
+  COOC_ANCHOR_MAX_DF_RATIO,
+  anchorTermsOf,
+  presentClasses,
+  groupAnchorsByClass,
+  cooccurringClasses,
+  requiredCooccurrences,
+  checkCooccurrence,
+} from './cooccurrence.js';
 
 export const K1 = 1.2;
 export const B = 0.4;
@@ -84,6 +93,18 @@ export const MIN_DF_DOCS = 5;
  * 两个阈值的分工：`FLOOR` 管小语料（n < 1280 时它更宽松，是先"放行"的那一支），
  * `RATIO` 管大库（n ≥ 1280 时它更宽松）。真库 1321 篇的行为因此**不变**：
  * 那个规模上仍然是 `df/n ≤ 0.05` 说了算，`df ≥ 67` 的词照旧不算证据。
+ *
+ * **M6 修的残余空档**：地板是**绝对**词频，`df ≤ 64` 对任何 `df > 0` 都成立 ——
+ * 于是 `n ≤ 64` 的语料上这条闸**恒真**，一个词项都不会被删（`dropped` 永远是 false，
+ * `informativeGateEnabled` 永远是 false）。50 篇档因此等于没开闸，这正是 M5 说的
+ * 「小语料第二重失效」。修法是把地板按语料规模**封顶**：`df ≤ min(FLOOR, n)`。
+ *  - `n ≤ 64` 时地板 = n，而 `df ≤ n` 恒成立 —— **行为逐字不变**（那正是要保留的
+ *    「小语料上不误杀判别词」这一支；这条闸的职责不是在小库上咬人）；
+ *  - `n = 1321` 时地板仍是 64 —— `isInformativeTerm(66,1321) === true` 与
+ *    `(67,1321) === false` 这类既有断言**原样通过**，真库行为逐字不变。
+ * 也就是说：这个改动本身**不**让 50 篇档的闸门变严（变严的活儿交给共现核对，
+ * 见 `cooccurrence.js`）——它只是把「地板永远比语料大」这个退化写明白，
+ * 让 `min(FLOOR, n)` 成为两个规模上一致的口径。
  */
 export const INFORMATIVE_DF_RATIO = 0.05;
 export const INFORMATIVE_DF_FLOOR_DOCS = 64;
@@ -163,6 +184,9 @@ export function buildIndex(docs) {
       trust: doc.trust ?? 'user_stated',
       tags: doc.tags ?? [],
       chars: String(doc.body ?? '').length,
+      // **笔记身份**的词项（`id` / `title` / `tags` / `aliases`，只用于 `cooccurrence.js`
+      // 的核对，不进 `postings`、不参与打分）。理由见 `cooccurrence.js` 的 `identity` 参数。
+      identityTerms: identityTermsOf(doc),
     });
     for (const [term, n] of tf) {
       let plist = postings.get(term);
@@ -225,6 +249,24 @@ export function deserializeIndex(raw) {
   };
 }
 
+/**
+ * 一篇笔记**身份**的词项集：文件名（`id`）+ 标题 + 标签 + 别名，用同一把切词器切。
+ *
+ * 这份词项只给 `cooccurrence.js` 的核对用（「问题里的实体是不是写在这一篇里」），
+ * **不进 `postings`、不参与 BM25 打分** —— 身份字段进打分是另一件事（会改排序，
+ * 需要单独量），M6 不顺手做。
+ *
+ * 返回排序后的数组（不是 `Set`）：`metas` 要能过 `JSON.stringify` 往返
+ * （`serializeIndex`/`deserializeIndex`），`Set` 会被序列化成 `{}`。
+ */
+function identityTermsOf(doc) {
+  const text = [doc.id, doc.title, ...(doc.tags ?? []), ...(doc.aliases ?? [])]
+    .filter((v) => v !== null && v !== undefined && v !== '')
+    .join(' ');
+  if (!text) return [];
+  return [...tokenizeRecord({ body: text }).tf.keys()].sort();
+}
+
 function idf(df, n) {
   return Math.log(1 + (n - df + 0.5) / (df + 0.5));
 }
@@ -250,7 +292,9 @@ function idf(df, n) {
 export function isInformativeTerm(df, n) {
   if (!Number.isFinite(n) || n <= 0) return true;
   if (!Number.isFinite(df) || df <= 0) return true;
-  return df <= INFORMATIVE_DF_FLOOR_DOCS || df / n <= INFORMATIVE_DF_RATIO;
+  // 地板按语料规模封顶：`n ≤ 64` 时地板 = n，`df ≤ n` 恒成立 → 这条闸在小语料上
+  // **结构上**不会误杀（判据随规模退化的那半边被显式钉住了，见上面那段注释）。
+  return df <= Math.min(INFORMATIVE_DF_FLOOR_DOCS, n) || df / n <= INFORMATIVE_DF_RATIO;
 }
 
 /**
@@ -420,6 +464,15 @@ export function scoreDocs(index, query, options = {}) {
   const result = [...acc.values()].sort(
     (a, b) => b.score - a.score || (a.docIndex < b.docIndex ? -1 : 1),
   );
+  // **组合级共现核对**（`cooccurrence.js`）：命中之后要核「被问的那几样东西
+  // 是不是写在**同一篇**里」。只共现一边的候选被剔出去 —— 这是 M5 扫出
+  // 「召回与拒答完全反相关」时点名缺的那条机制，覆盖率闸结构上做不了这件事。
+  //
+  // 为什么放在这里（候选筛选之后、聚合之前）：核对的粒度是**桶**，而判定要的是
+  // **笔记级**共现 —— 一篇长笔记被切成多个桶，A 写在第一桶、B 写在第三桶，
+  // 它们确实是同一篇里共现的。所以这里标在桶上，`aggregateByNote()` 再把
+  // 「这篇笔记共现了几样」按 id 聚合（取最大值），判定在 `recall.js` 做。
+  const cooc = annotateCooccurrence(result, index, expansions, options);
   attachQueryInfo(result, {
     // 「查询里算得上证据的词项」。空数组 = 这条查询整体不构成证据（分母退化），
     // 调用方必须据此拒答，而不是「挑个最高分答了」。
@@ -428,8 +481,62 @@ export function scoreDocs(index, query, options = {}) {
     informativeGateEnabled: informative.enabled,
     queryTerms: massOf.size,
     queryMass: totalMass,
+    // 共现口径（锚点集 + 每篇命中了几样）。**公开出来**是为了让装置与 `explain`
+    // 读得到同一次计算的结论，而不是各自再算一遍（两套口径迟早会不一致）。
+    cooccurrence: cooc,
   });
   return result;
+}
+
+/**
+ * 给每条候选标上「它命中了哪几**类**锚点、够不够」。
+ *
+ * 返回的 `info` 挂进 `queryInfo.cooccurrence`；每条 `entry` 上挂不可枚举的
+ * `cooccurrence` 字段（形状仍然是原来的数组元素，`deepEqual` 类的断言不受影响）。
+ *
+ * `required` 在锚点集为空时是 0 —— 那种查询这条机制**不构成证据**，一律放行：
+ * 拿「没有锚点」去拒答会把「库里没有稀有词项」和「事实没写过」混成一个结论。
+ */
+function annotateCooccurrence(entries, index, expansions, options) {
+  const enabled = options.cooccurrence !== false;
+  const maxAnchorDfRatio = options.maxAnchorDfRatio ?? COOC_ANCHOR_MAX_DF_RATIO;
+  const anchors = enabled ? anchorTermsOf(expansions, index, { maxAnchorDfRatio }) : [];
+  const groups = groupAnchorsByClass(anchors);
+  // 只绑定「在这座库里真的参与复合键」的类（`cooccurrence.js`：一个类要和别的
+  // 锚点类同篇出现过才绑定）。库里没写过、或从没和别类同篇的类不绑定 ——
+  // 拿「我的词典/语料没有这一样」冒充「事实没写过」是伪造成绩。
+  const bindable = enabled ? cooccurringClasses(groups, index, { maxAnchorDfRatio }) : [];
+  // 可核的类数按 `presentClasses` 数（库里有这个词项就够），**不是** `bindable.length`：
+  // 一个词项到处都是当不了核对点，但它**存在**，所以它没出现在候选里就是真没写。
+  // 混用这两者会让「实体名太常见」被读成「这类不用核」（见 `cooccurrence.js`）。
+  const known = enabled ? presentClasses(groups, index) : [];
+  const required = enabled ? requiredCooccurrences(known.length, options.minClasses) : 0;
+  const info = {
+    enabled,
+    maxAnchorDfRatio,
+    anchorTerms: anchors,
+    anchorClasses: Object.fromEntries([...groups].map(([cls, terms]) => [cls, terms])),
+    // `required` 按**库里存在的类数**算（`known`），不按查询切出来的类数 ——
+    // 查询里那些库里根本没有的词项不构成「可核的组合」（否则每一句带新词的话
+    // 都会被拒）；而库里存在、只是太常见的类**照样算**（见上面 `known` 处注释）。
+    required,
+    knownClasses: known,
+    // `ok` 是逐桶的读数（人看审计用）；判定在调用方按笔记聚合。
+    pass: 0,
+    fail: 0,
+  };
+  for (const entry of entries) {
+    const verdict = checkCooccurrence(entry.terms, groups, required, {
+      bindableClasses: bindable,
+      knownClasses: known,
+      identityTerms: index.metas[entry.docIndex]?.identityTerms,
+    });
+    Object.defineProperty(entry, 'cooccurrence', { value: Object.freeze(verdict), enumerable: false });
+    if (required === 0) continue;
+    if (verdict.ok) info.pass += 1;
+    else info.fail += 1;
+  }
+  return Object.freeze(info);
 }
 
 /**
@@ -466,6 +573,14 @@ export function aggregateByNote(scored, index) {
         best: hit,
         sections: [meta.section ?? 0],
         buckets: [hit.docIndex],
+        // 共现是按**桶**标的（`scoreDocs` 的 `annotateCooccurrence`），这里按笔记聚合：
+        // 取各桶最大值。为什么是 max 而不是「任意桶通过」：两者在判据
+        // `missing.length === 0 && count >= required` 下等价，但 max 让
+        // 「这篇一共命中了哪几类锚点」这个读数在审计时可解释 —— 「同篇共现」的语义是
+        // **笔记级**的（分段只是打分用的实现细节）。
+        // 判定对象整个搬过去（`cooccurrence.js` 的 `checkCooccurrence` 返回值）。
+        // 只在**桶间**选「命中类最多的那个桶」，判定本身不在这一层重算。
+        coocVerdict: hit.cooccurrence ?? null,
       });
       continue;
     }
@@ -477,6 +592,10 @@ export function aggregateByNote(scored, index) {
     // 这篇就算覆盖到了。取平均会让长笔记因为大量无关段落被判成「不够格」，
     // 而长笔记恰恰是这个库里的常态。
     if ((hit.coverage ?? 0) > prev.coverage) prev.coverage = hit.coverage ?? 0;
+    // 同一篇笔记的多个桶：取「命中类更多」的那个判定（`coocVerdict` 已含全部读数）。
+    if ((hit.cooccurrence?.count ?? 0) > (prev.coocVerdict?.count ?? 0)) {
+      prev.coocVerdict = hit.cooccurrence ?? null;
+    }
     if (hit.score > prev.best.score) {
       prev.best = hit;
       prev.score = hit.score;

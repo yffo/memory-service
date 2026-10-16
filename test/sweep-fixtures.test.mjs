@@ -112,20 +112,32 @@ test('夹具契约：两类题题面同形，且不可答题的判别词不是�
   }
 });
 
-test('归因：覆盖率闸门结构上无法拒绝「近邻命中了判别词」的题（钉子用例）', () => {
-  // 这条用例把 M5 的结论钉住，防止它被「调参调好了」的假象覆盖。
+test('归因：覆盖率闸门结构上区分不出「近邻命中了判别词」，共现核对补上这一条（钉子用例）', () => {
+  // 这条用例先钉住 M5 的机理结论，再钉住 M6 的解 —— 两段缺一不可：
+  // 只留前半段会变成「生产口径一条都不拒」的现状记录（M6 已经修掉了），
+  // 只留后半段则会把「反相关」的成因从历史里抹掉，下次有人调参调出好数字时
+  // 没人知道到底哪条机制在起作用。
   //
-  // 机理：`coveredIds` 的分母是「证据词的 idf×权重之和」，每个词项**只算一次**；
-  // 分子是命中词的 `qWeight·tf(k1+1)/(tf+k1·norm)`，单词命中可以放大到 ≈2.2×。
-  // 于是只要近邻命中一个证据词，它的覆盖率就可能 ≥ 1；而「金标 + 被问事实不同」
-  // 这两件事在覆盖率里**长得一样** —— 除非近邻一个证据词都不命中。
+  // **机理（M5，仍然成立）**：`coveredIds` 的分母是「证据词的 idf×权重之和」，
+  // 每个词项**只算一次**；分子是命中词的 `qWeight·tf(k1+1)/(tf+k1·norm)`，
+  // 单词命中可以放大到 ≈2.2×。于是只要近邻命中一个证据词，它的覆盖率就可能 ≥ 1；
+  // 而「金标」与「被问事实不同」这两件事在覆盖率里**长得一样**。
   //
-  // 可直接观测的推论：生产口径在新夹具五档上一条都不拒。
+  // **解（M6）**：在覆盖率之外加一条**组合级共现核对**（`src/core/cooccurrence.js`）——
+  // 问「被问的实体 × 被问的知识点号有没有写在**同一篇**里」。覆盖率区分不了的那两篇，
+  // 在这一条上形状完全不同：金标两类齐备，近邻只共现一半。
+  //
+  // 可直接观测的推论：五档都要同时满足 recall ≥ 0.80 与拒答 ≥ 0.75，
+  // **而且**关掉共现核对之后拒答率掉回 0（说明这个数不是覆盖率挣来的）。
   for (const n of TIERS) {
     const point = runPoint(buildCorpus(n), PROD_PARAMS);
     assert.ok(point.recall_at_k >= 0.80, `n=${n} 召回掉到 ${point.recall_at_k}`);
-    assert.equal(point.correct_refusal_rate, 0,
-      `n=${n} 拒答率变成 ${point.correct_refusal_rate}：机理假设被推翻，请重新归因`);
+    assert.ok(point.correct_refusal_rate >= 0.75,
+      `n=${n} 拒答率只有 ${point.correct_refusal_rate}：共现核对没接上或判据被放宽了`);
+    const off = runPoint(buildCorpus(n), { ...PROD_PARAMS, coocRatio: null });
+    assert.equal(off.correct_refusal_rate, 0,
+      `n=${n} 关掉共现核对还有 ${off.correct_refusal_rate} 的拒答率：那这个数不是这条机制挣的，归因要重写`);
+    assert.ok(off.recall_at_k >= 0.80, `n=${n} 关掉共现核对召回也掉了：${off.recall_at_k}`);
   }
 });
 
@@ -160,14 +172,23 @@ test('归因：闸门的两条口径都在按设计工作，废不掉的是覆�
   const corpus = buildCorpus(2000);
   const index = buildIndex(corpus.notes);
   const refusal = corpus.tasks.find((t) => t.kind === 'refusal');
-  const judged = judgeQuery(index, refusal.query, { ...PROD_PARAMS, minCoverage: null });
-  assert.equal(judged.refused, false, '新夹具上不可答题仍然被判成「答」——这正是要归因的现象');
-  assert.ok(judged.informativeCount >= 1, '判别词过了闸门，所以拒绝它不是证据词的问题');
-  assert.equal(judged.hits[0].coverage, 1, `top-1 覆盖率=${judged.hits[0].coverage}：饱和效应应当顶到 1`);
-  // 而且被判「答」的理由是命中了一个**同一判别词、不同服务**的近邻 —— 形状对，
-  // 就是覆盖面这一支区分不出来。
-  const topNote = corpus.notes.find((x) => x.id === judged.hits[0].id);
+  // 关掉覆盖率闸门 + 关掉共现核对：这是 M5 读到的那个「一条都不拒」的基线格子。
+  // 把它留着当**对照**，才能说清「拒答是共现核对挣来的」而不是「闸门本来就行」。
+  const baseline = judgeQuery(index, refusal.query, { ...PROD_PARAMS, minCoverage: null, coocRatio: null });
+  assert.equal(baseline.refused, false, '关掉两条闸之后不可答题仍被判成「答」——这正是要归因的现象');
+  assert.ok(baseline.informativeCount >= 1, '判别词过了闸门，所以拒绝它不是证据词的问题');
+  // 而且被判「答」的近邻命中的是**同一个判别词、不同服务** —— 形状对，
+  // 就是覆盖率这一支区分不出来。
+  const topNote = corpus.notes.find((x) => x.id === baseline.hits[0].id);
   assert.ok(topNote.title.includes(refusal.anchor), `top-1 命中的不是判别词：${topNote.title}`);
   assert.ok(!topNote.id.startsWith(refusal.missing.split('|')[0].toLowerCase() + '-'),
     `top-1 竟然就是金标服务自己的笔记：${topNote.title}`);
+
+  // 接上共现核对之后同一个格子就拒得掉了 —— 这是 M6 的 **存在性证明**：
+  // 判据不是「阈值调严了」，而是一条覆盖率**结构上做不到**的核对。
+  const fixed = judgeQuery(index, refusal.query, { ...PROD_PARAMS, minCoverage: null });
+  assert.equal(fixed.refused, true, '接上共现核对之后仍然不拒：机制没生效');
+  assert.equal(fixed.refuseReason, 'no_eligible_hit', `拒答理由=${fixed.refuseReason}`);
+  assert.ok(fixed.coocRequired >= 2, `可核的类数=${fixed.coocRequired}：判别词+实体至少两类`);
+  assert.ok(fixed.coocBlocked > 0, `一条候选都没被共现核对挡下：${fixed.coocBlocked}`);
 });

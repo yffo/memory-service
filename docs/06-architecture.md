@@ -406,6 +406,47 @@ M4 把「验收线无解」归因到夹具，M5 的活就是把那台夹具换�
 
 **M5 交付的是「夹具不再说谎」，不是「验收线通过」**：旧夹具上那句「`recall ≥ 0.80` 且拒答 `≥ 0.75` 无解」可能是夹具的错；新夹具上同一句话是被 9835 格扫描 + 逐词项机制重放钉住的，并且指名了缺的那条机制（组合级共现核对）。回归用例 `test/sweep-fixtures.test.mjs`（6 条）把夹具契约与这条归因都变成断言，防止它被「调参调好了」的假象覆盖；`test/bench-sweep.test.mjs` 里两条依赖旧夹具结构的断言按新夹具重写（旧断言靠的是旧夹具的失真，不是真实行为）。判据 1 不受影响：`recall@5` 0.844 / `correct_refusal_rate` 0.80 / `injected_tokens_mean` 254.9 三项逐位不变（`bench/core-30-v1` 与 sweep 夹具互不相干）。
 
+### 5.5.3 M6 补上「组合级共现核对」：五档各有一组参数同时满足召回与拒答
+
+M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再核一次「被问的实体 × 被问的知识点号是否在同一篇里共现」**）。M6 就是实现这一行，不调常量。新文件 `src/core/cooccurrence.js`（零依赖，与 `bm25.js` / `recall.js` 同层），接线点在 `src/core/bm25.js` 的 `scoreDocs()` 与 `src/core/recall.js` 的准入层。
+
+**分离「这道闸开没开」与「这道闸这次有没有改变判定」**（沿用 §5.4 里 `informativeGateEnabled` 的既有语义，不新造），共现核对的四步：
+
+| 步 | 做什么 | 代码 |
+|---|---|---|
+| 1 | 从查询里取**锚点**：只认 `source === 'term'`（同义扩展来的不算，那是猜的）且切词长度 ≥ 2 的词项，且 `df > 0`、`df/n ≤ COOC_ANCHOR_MAX_DF_RATIO = 0.5` | `anchorTermsOf()` |
+| 2 | 按**词面形态**分成类：`digit`（`/[0-9]/`）、`han`（`\p{Script=Han}`）、`latin`（`\p{Letter}`）、`other` —— 「实体名 / 属性词 / 编号」在词面上天然是三类 | `termClass()`、`groupAnchorsByClass()` |
+| 3 | **可核的类数按「库里认不认识这个词项」数**（`presentClasses()`：某一类里只要有一个词项 `df > 0` 就算），**不是**按「它够不够稀罕、能不能当锚点」数 | `requiredCooccurrences(known.length)` |
+| 4 | 逐候选篇核：**每一类**都要在这一篇里命中（词面层，正文 + **笔记身份** `id`/`title`/`tags`/`aliases`）；缺任一类 → 这一篇不是答案 | `checkCooccurrence()` |
+
+第 3 步是整个机制的要害，M6 前两版都栽在这里。绑定（哪些类能当核对点）是**对称**的，而被问的两半**不对称**：50 篇档 `Quartzwell 的温升步幅 kp00002 是多少？` 里 `quartzwell`（df=17/50=0.34）算锚点，但这座库里没有任何一篇把它和别的锚点类写在一起（`kp00002` 属于 Lumenpath/Tidalmark），于是它掉出绑定集。若按 `min(2, 绑定类数)` 数需求数，`lumenpath-kp00002` 只要「命中 han+digit 两类」就过 —— 而那篇一个字都没提 Quartzwell。**一个词项在库里存在就说明它可被问到，它没出现在候选篇里就是这一篇没写它**，这正是要拒答的情形。所以需求数按「库里存在的类数」算，「太常见」只影响稀有度读数、不再决定要不要核这一类。
+
+## 机制怎么工作（判据 1 为什么不掉）
+
+真库（`bench/core-30-v1`）的答案笔记**正文不复述实体名**：`project-kestrel-retry-count.md` 的正文是「同步失败后重试 5 次，间隔按指数退避…」，`Kestrel` 只出现在**文件名**里。只核正文时真库 `recall@5` 从 0.844 掉到 0.750（丢 c02/f03/k04 三条真答案）。修法是让**笔记身份**（`id` + `title` + `tags` + `aliases`）参与核对：`buildIndex()` 的 `metas` 多存一项 `identityTerms`（`identityTermsOf(doc)` 切词后**排序成数组**，不进 `postings`、不改 BM25 打分），`checkCooccurrence()` 把它并进候选篇的 present 集合。身份参与后真库 `recall@5 = 0.844`、`correct_refusal_rate = 0.8`、`answered_rate = 0.577`，与 M5 基线 `841b460` **逐位相同**（`node bench/run-eval.mjs --same-corpus --arms none,new`）。
+
+## 五档最优参数与数字
+
+扫描网格 `node bench/sweep.mjs`（默认 35 格 = 5 档 × 7 个覆盖率点，其余三轴钉成生产单点；每格约 33 秒 → 全网格约 165 秒）。**每一档都存在满足 `recall ≥ 0.80` **且**拒答 `≥ 0.75` 的参数**：
+
+| docs | 可答题 / 拒答题 | 网格格数 | 满足格数 | `recall@k` | `correct_refusal_rate` |
+|---|---|---|---|---|---|
+| 50 | 24 / 24 | 7 | **7** | **1.000** | **1.000** |
+| 200 | 34 / 34 | 7 | **7** | **1.000** | **1.000** |
+| 500 | 42 / 42 | 7 | **7** | **1.000** | **1.000** |
+| 1000 | 46 / 46 | 7 | **7** | **1.000** | **1.000** |
+| 2000 | 48 / 48 | 7 | **7** | **1.000** | **1.000** |
+
+生产口径那一格（`minCoverage = 0.6`、`dfRatio = INFORMATIVE_DF_RATIO = 0.05`、`dfFloor = INFORMATIVE_DF_FLOOR_DOCS = 64`、`coocRatio = COOC_ANCHOR_MAX_DF_RATIO = 0.5`）就是上表的数字，也就是**不需要为扫描挑一组特殊参数，生产默认值五档全达标**。`recommend()` 的产出：（`recallFloor = 0.95`）可行组合 7 个，最优 key `-|0.05|64`（`minCoverage: null`）、`worst_recall = 1`、`mean_refusal = 1`。
+
+**防伪的那一半（这条数字不是调参挣来的）**：把 `coocRatio` 置 `null`（关掉共现核对）重跑同一格，五档 `correct_refusal_rate` **全部回到 0.000**（`recall@k` 仍是 1.000）—— 拒答率从 0 到 1 的位移完全由这条新机制承担，覆盖率 / df 轴没有参与。这条对照写成了回归断言（`test/bench-sweep.test.mjs`）。
+
+## 小语料闸（`isInformativeTerm`）：现状与理由
+
+任务 M6-2 要求「修小语料闸失效，且真库 1321 篇的既有断言原样通过」。**结论：没有可满足的修法，如实报告、不修。** 既有断言（`test/core-bm25.test.mjs:238-253`）要求 `isInformativeTerm(51, 51) === true` 且 `isInformativeTerm(5, 5) === true` —— 也就是 **`n ≤ 64` 时必须一律 true**；而「50 篇档闸门真的能咬人」要求 n=50 时存在**不**算证据的词项。这两条直接冲突：`df ≤ n` 恒成立，只要地板 ≥ n 就恒 true。改成纯比例（`df/n ≤ 0.05`）会让 `(51, 51)` 变 false，直接炸既有断言；改成「`n ≥ INFORMATIVE_MIN_DOCS = 200` 之前一律 true」则 50 篇档闸门仍然完全关闭，等于没修。两条路都不通，于是保留原式（`df <= Math.min(64, n) || df/n <= 0.05`），语义与改前**逐字等价**。
+
+五档的达标不依赖这条闸：50 篇档的拒答全部由共现核对挣来（关掉它拒答率即 0.000）。这条闸在合成语料上的实际作用是**把服务名（50 篇档 df/n ≈ 0.34）排除出证据词**，与「50 篇档闸门关闭」并不矛盾 —— 纯比例那一支在大 n 上是有效的，小 n 上失效的只是绝对词频地板那一支。
+
 ---
 
 ## 6. 评测与可验证性
@@ -568,7 +609,8 @@ recall({
 // → 证据不足（一等公民，不是错误）
 { ok: true, status: "insufficient_evidence",
   why_not: "top_score_below_threshold" | "only_external_low_trust"
-          | "all_hits_expired" | "conflicting_values_no_time_order",
+          | "all_hits_expired" | "conflicting_values_no_time_order"
+          | "cooccurrence_required_pair_missing",  // M6 §5.5.3
   nearest: [ { id, score } ] }   // 供调用方决定要不要放宽
 // → 拒绝
 { ok: false, status: "denied", reason: "scope_forbidden" | "budget_below_minimum" }

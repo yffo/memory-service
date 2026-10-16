@@ -123,9 +123,11 @@ $ node bin/memory search --query "索引上限是多少行" --json
 - `tokens` 是这次结果**实际占的预算**；`refused` 是正常结果不是错误：
   `{"hits":[],"tokens":0,"refused":true,"reason":"top_score_below_threshold"}` 表示
   「库里没有能支撑回答的东西」，此时**不要**退化成「列几条最像的」。
-  另外四个 `reason`：`only_external_low_trust`（只有外部资料）/ `all_hits_expired`
+  另外五个 `reason`：`only_external_low_trust`（只有外部资料）/ `all_hits_expired`
   （都过期了，试 `--as-of`）/ `no_index` / `no_informative_term`（整条查询全是常用词，
-  见下）。
+  见下）/ `cooccurrence_required_pair_missing`（命中的近邻**只写了被问的一半** ——
+  比如问了「Kestrel 的重试次数」，库里只有「同步失败重试 5 次」而 Kestrel 是另一家的，
+  被问的那两样从没写在**同一篇**里；见 `06-architecture.md §5.5.3`）。
 - 常用开关：`--budget-tokens N`（默认 500）/ `--kinds core,semantic` / `--trusts user_stated`
   / `--min-relevance F` / `--min-score F` / `--min-coverage F` / `--as-of YYYY-MM-DD` / `--ledger`。
   阈值可调是**评测纪律**要求的：不许在计分集上调参，所以要能把参数摆到命令行上。
