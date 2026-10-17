@@ -9,6 +9,20 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 它们都属于「判据说达标了、但真实库上不成立」的那一类，不修掉的话 M2 的判据 3
 （不腐烂、不害人）是在坏地基上盖楼。
 
+### 上手：`setup` 一条命令写宿主配置；`capture` / `inbox` 让候选可批准
+
+- **修的问题**：装完 `tabellio` 之后，用户还得自己翻三个宿主的文档、手写 MCP 配置；记忆只能靠人先想起「这件事该记」，再主动 `remember`。前者是安装摩擦，后者是「产品该负责判断，却把判断推给用户」——而完全自动写又违背「不静默写」的边界。
+- **做法**：新增 `src/setup.js`（纯计划 `planSetup` + 落盘 `applySetup`）与 `tabellio setup`，给 Claude Code（`~/.claude.json`）、Cursor（`~/.cursor/mcp.json`）、Codex CLI（`~/.codex/config.toml`）写 `tabellio` 的 MCP server；新增候选 API `addCandidate` / `listCandidates` / `reviewCandidates` 与 CLI `capture` / `inbox`。候选落在 `notes/candidates/`，**不参与默认检索**；`inbox --accept` 走与 `remember` 同一条写入闸门（去重/长度/信任分级一条不少），批准后才进 `notes/` 与主索引。
+- **行为**：`setup` 默认 dry-run，`--write` 才落盘；`all` 只处理已安装的宿主，显式 `--host` 可创建；写前备份为 `<文件>.tabellio-backup-<时间戳>`，JSON 原子写，Codex 只替换 `[mcp_servers.tabellio]` 段、保留其他段与注释。已有不同的 `tabellio` 配置默认 `conflict` 整单不写，`--force` 才替换；坏 JSON/TOML 整单拒绝。默认给 MCP 加 `--allow-write`，`--read-only` 可去掉；`command` 默认当前 node，`mcpBin` 用绝对路径，不依赖 PATH。`capture` 写入 `status:draft` / `trust:system_derived` / `provenance.written_by:capture:cli`，默认不重建主索引；`inbox` 无参数只列候选，`--accept` / `--reject` 可重复或逗号分隔，批准后候选移到 `notes/candidates/decided/`、拒绝移到 `rejected/` 留审计；`status` 的候选数不再恒为 0，并提示「N 条候选待处理」。
+- **边界**：只自动写 Claude/Cursor/Codex 三家；DSH 的 `~/.dsh/cordis.patch.yml` 是 YAML loader patch，零依赖改写的风险高于收益，只给文档片段、不做自动写。**没有任何会话结束钩子或自动抽取**：`capture` 是显式原语，宿主/脚本要自己调用；「自动从对话生成候选」仍在 P1。也没有自动巩固、后台任务、定时清理；`inbox` 第一批只收候选，内容类巩固提案仍走 `consolidate --merge/--summarize/--promote`，不混进来冒充「可批准」。候选正文仍受单条 8KB 上限，批准时再受 400 字/200 token 闸门约束；候选归档是移动文件，不是签名，能写库的人仍可改。
+
+### 索引：空库重建不再把根节点当叶子
+
+- **修的问题**：空库执行 `status --rebuild-index` 会崩在 `buildIndexPlan()` —— 树里没有叶子时，根节点被当成叶子，`ids.length` 抛异常。新建库第一次建索引就会踩到。
+- **做法**：`src/store/index-tree.js` 在 `tree.total === 0` 时直接给空叶子列表，不再从根节点推。
+- **行为**：空库能正常写出路由层（「全库 0 条 / 0 组」），`status --rebuild-index` 退 0；新增一条回归测试。
+- **边界**：只修空库这一种退化；非空库的分层/分页规则不变。
+
 ### 检索：`aliases` 不再被静默丢弃（仍只做身份核对）
 
 - **修的问题**：笔记 frontmatter 里的 `aliases` 一直在 schema 之外，`validateFrontmatter()` 直接把它丢掉，`toDocs()` 也没把它传给索引。于是 `docs/06` 声称 aliases 参与共现/身份核对，实际是死字段——这也是 c04 卡在 `cooccurrence_required_pair_missing` 的原因之一。

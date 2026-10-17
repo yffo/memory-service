@@ -12,7 +12,7 @@
  *  3. **写入是原子的**：先写 `*.tmp` 再 `rename`，rename 在同一文件系统上是原子的。
  *     中途崩了最坏留下一个 tmp 文件，绝不会留下半截真相源。
  */
-import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 import { parseFrontmatter, serializeFrontmatter, NOTE_KEY_ORDER } from './frontmatter.js';
 import { isUlid } from './ids.js';
@@ -408,4 +408,63 @@ export function writeNoteAtomic(storePath, id, text, { keepBackup = true } = {})
     return { ok: false, path, error: { code: 'E_STORE_WRITE_FAILED', message: String(e.message ?? e) } };
   }
   return { ok: true, path, bytes: Buffer.byteLength(text), backup, unchanged: false };
+}
+
+/** 候选的落盘路径：`notes/candidates/<id>.md`。候选不是正式笔记，默认不进检索面。 */
+export function candidatePath(storePath, id) {
+  return join(storePath, NOTES_DIR, 'candidates', `${id}.md`);
+}
+
+/**
+ * 原子写一条候选。与 `writeNoteAtomic` 的区别是**不留 .bak**：
+ * 候选是「还没决定要不要」的输入，唯一真相源是主笔记，候选覆盖没有可回滚的语义。
+ */
+export function writeCandidateAtomic(storePath, id, text) {
+  const safe = safeNoteId(id);
+  if (!safe.ok) {
+    return { ok: false, path: null, error: { code: 'E_INVALID_ID', message: `候选 id 不合法：${JSON.stringify(String(id))}` } };
+  }
+  const path = candidatePath(storePath, safe.id);
+  const tmp = `${path}.tmp`;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(tmp, text, 'utf8');
+    renameSync(tmp, path);
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* tmp 可能没建起来 */
+    }
+    return { ok: false, path, error: { code: 'E_STORE_WRITE_FAILED', message: String(e.message ?? e) } };
+  }
+  return { ok: true, path, bytes: Buffer.byteLength(text) };
+}
+
+/**
+ * 把候选移进终态目录（`decided` / `rejected`）。**不覆盖**既有文件：
+ * 覆盖会让一次重试静默吞掉上一次的审计记录。
+ */
+export function moveCandidate(storePath, id, bucket) {
+  if (bucket !== 'decided' && bucket !== 'rejected') {
+    return { ok: false, path: null, error: { code: 'E_INVALID_BUCKET', message: `未知候选终态：${JSON.stringify(bucket)}` } };
+  }
+  const safe = safeNoteId(id);
+  if (!safe.ok) {
+    return { ok: false, path: null, error: { code: 'E_INVALID_ID', message: `候选 id 不合法：${JSON.stringify(String(id))}` } };
+  }
+  const from = candidatePath(storePath, safe.id);
+  const dir = join(storePath, NOTES_DIR, 'candidates', bucket);
+  const to = join(dir, `${safe.id}.md`);
+  if (existsSync(to)) {
+    return { ok: false, path: to, error: { code: 'E_CANDIDATE_EXISTS', message: `目标已存在：${to}` } };
+  }
+  try {
+    mkdirSync(dir, { recursive: true });
+    renameSync(from, to);
+  } catch (e) {
+    const code = e.code === 'ENOENT' ? 'E_CANDIDATE_NOT_FOUND' : 'E_CANDIDATE_MOVE_FAILED';
+    return { ok: false, path: to, error: { code, message: String(e.message ?? e) } };
+  }
+  return { ok: true, path: to };
 }

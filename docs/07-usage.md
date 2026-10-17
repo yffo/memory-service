@@ -1,6 +1,6 @@
 # 07 · 用法
 
-`tabellio` 当前（M1 + M2：读取回执 / 巩固 / 撤销）是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
+`tabellio` 当前（M1 + M2：读取回执 / 巩固 / 撤销 / 候选闭环）是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
 零运行时依赖：`node bin/memory` 直接就能跑，不需要 `npm install`。
 
 - 要求：Node ≥ 20.11（实测 Node 25.8）。
@@ -10,7 +10,7 @@
 ```bash
 git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
-node --test 'test/**/*.test.mjs'       # 全绿才继续（420 条）
+node --test 'test/**/*.test.mjs'       # 全绿才继续（447 条）
 ```
 
 ## 一条事实一个文件
@@ -32,11 +32,11 @@ aliases: [acme-editor, 编辑器]  # 可选：作者给的同义说法，只参�
 正文上限 **400 字 / 200 token** —— 超了闸门会拒，并且告诉你超了多少。
 超过一条事实该有的量，说明该拆成多条（`tabellio import` 会自动切）。
 
-## 十个命令
+## 十三个命令
 
-`status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `import`（另有 `paths` 查路径）。
+`setup` / `status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `capture` / `inbox` / `import`（另有 `paths` 查路径）。
 
-`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**唯一的「改」入口**：默认只出计划，`--apply` 才动元数据，`--undo` 可撤销；`--merge` / `--summarize` / `--promote` 目前只出**内容类提案**，不写库。
+`setup` 只写宿主的 MCP 配置，不碰记忆库；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改元数据的入口**：默认只出计划，`--apply` 才动元数据，`--undo` 可撤销；`--merge` / `--summarize` / `--promote` 目前只出**内容类提案**，不写库。
 
 `search` 与 `recall` 的分工：前者给**指针**（pull，读哪条由调用方决定），后者一步给出
 **可直接进上下文**的正文（按 token 预算裁剪、带拒答）；两者都零模型调用。
@@ -443,6 +443,69 @@ node bin/memory consolidate --merge <id>,<id> --json   # 提案 JSON，默认就
 replay、forget、写入回执、后台自动巩固、`diff.jsonl`。已实现的写操作只碰元数据；
 内容类只出提案，不新增/压缩事实。
 
+### 11. `setup` —— 一条命令给宿主写 MCP 配置
+
+```bash
+$ node bin/memory setup                          # 默认 dry-run：只打印会改哪些文件
+$ node bin/memory setup --write                  # 真写；写前备份
+$ node bin/memory setup --host cursor --read-only --write
+```
+
+支持三家，路径固定：
+
+| host | 文件 | 写法 |
+| --- | --- | --- |
+| `claude` | `~/.claude.json` | 顶层 `mcpServers.tabellio` |
+| `cursor` | `~/.cursor/mcp.json` | 顶层 `mcpServers.tabellio` |
+| `codex` | `~/.codex/config.toml` | `[mcp_servers.tabellio]` 段 |
+
+- `--host` 可重复/逗号分隔，默认 `all`。`all` 只处理**已安装**的宿主（配置文件或父目录存在）；显式点名可以创建不存在的文件。一个都没检测到返回 `no_host_detected`，退 1。
+- 生成的 server 是 `{command: <当前 node>, args: [<bin/memory-mcp 绝对路径>, "--store", <库路径>, "--allow-write"]}`；不依赖 PATH，宿主从任意目录都能起。`--read-only` 去掉 `--allow-write`。
+- **默认 dry-run**；`--write` 才落盘。JSON 原子写，TOML 只替换 `[mcp_servers.tabellio]` 及其子表，其他段和注释保留。
+- 写入前备份成 `<文件>.tabellio-backup-<紧凑 ISO 时间戳>`；已经是同一份配置则 `unchanged`，不重复备份。
+- 已有**不同**的 `tabellio` 配置：默认整单 `conflict`、一份都不写；`--force` 才覆盖。JSON/TOML 解析失败也是整单 `invalid_config`，不写半份。
+- 退出码：成功/已存在 0；冲突、无宿主、解析失败、写失败 1；参数缺值 2。
+
+`--json` 的计划里有 `{ok, reason, dry_run:true, hosts:[{host,label,path,kind,action,ok,exists,current,desired,read_only,would_write,backup,preview}], server, store, mcp_bin, command}`；`action` 是 `create|append|update|unchanged|conflict|invalid`。`--write` 后额外有 `{dry_run:false, applied:[{host,path,action,written,backup}], failed:[]}`。
+
+> DSH 的 `~/.dsh/cordis.patch.yml` 是 YAML loader patch，零依赖改写的风险高于收益，`setup` 不碰它；要接 DSH 请按 `docs/03` 手工加片段。
+
+### 12. `capture` —— 把线索收成候选（不静默入库）
+
+```bash
+$ printf '%s\n' '# 发布流程' '' '发版前跑 npm test 和 node bench/run-eval.mjs。' \
+  | node bin/memory capture --file - --source "session:2026-10-18" --json
+{"ok":true,"id":"01M...","title":"发布流程","created":"2026-10-18T...","source":"session:2026-10-18",
+ "chars":38,"kind":"semantic","trust":"system_derived","scope":"user",
+ "path":"<库>/notes/candidates/01M....md","written":true}
+```
+
+- `--file <path|->` 必填，`-` 从 stdin 读。`--source` 记进 `provenance.source_ref`，`--kind` / `--tags` / `--id` 可覆盖默认值；`--dry` 走同一套检查但不落盘；`--force` 跳过重复检查。
+- 候选强制 `status:draft`、`trust:system_derived`、`provenance.written_by:capture:cli`——输入里写 `active` / `user_stated` 也不会改变这个身份。**不重建主索引**，默认检索面看不到它。
+- 正文上限 **8KB**；空文本、非法 id、主库或候选里已有同 id、内容指纹重复都会拒（重复可用 `--force` 绕过；`id_exists` 不行）。拒绝是正常结果，`ok:false` + 退 1；参数缺值退 2。
+- `reason` 固定为 `empty|too_large|invalid_id|id_exists|duplicate|store_write_failed`；重复时附 `duplicate_of:{id,kind}`。
+- **它不是自动抽取**：没有会话钩子、没有后台监听，宿主或脚本要显式调用。自动从对话生成候选仍在 P1。
+
+### 13. `inbox` —— 人批准后才进主库
+
+```bash
+$ node bin/memory inbox                          # 只读列表
+候选 2 条（notes/candidates，默认不进检索面）：
+  [01M...] 发布流程 — session:2026-10-18 / 38 字 / 2026-10-18T...
+批准：tabellio inbox --accept <id>   拒绝：--reject <id>
+
+$ node bin/memory inbox --accept 01M... --json   # 走 remember 同一条闸门
+$ node bin/memory inbox --reject 01N... --dry    # 只预览
+```
+
+- 不带 `--accept` / `--reject` 时只读列候选，按创建时间倒序；JSON 是 `{ok:true,count,candidates:[{id,title,created,source,chars,kind,trust,scope,path}]}`。
+- `--accept` / `--reject` 可重复或逗号分隔；同一 id 同时出现在两边时整单拒绝（`accept_reject_overlap`）。
+- 批准时把候选改成 `active`，走与 `remember` **同一条写入闸门**（去重/400 字/200 token/信任分级），通过后写 `notes/<id>.md`、候选移到 `notes/candidates/decided/`；拒绝只移到 `notes/candidates/rejected/`。两边都保留审计，不删文件。
+- 批量里的失败**不中断**其余项；只要有失败就 `ok:false`、退 1，并在 `failed` 里给 `{id,action,reason,details?,note_stored?}`。`note_stored:true` 表示「笔记已入库，但候选归档失败」，重试会走出覆盖更新，不会产生第二份。
+- `--dry` 用同一套闸门返回 `planned`，不写 note、不移动候选。
+- JSON 是 `{ok,dry_run,accepted,rejected,failed,accepted_count,rejected_count,failed_count}`；`accepted[]` 的 `status` 是 `stored|planned`，`rejected[]` 是 `rejected|planned`。
+- 索引只在真有批准写入时重建一次；只拒绝不重建。`status` 的「候选」计数与「N 条候选待处理」警告读的就是这个目录。
+
 ## 评测（开发用，可零模型）
 
 ```bash
@@ -521,8 +584,8 @@ id 前缀是人写文件时形成的天然主题，组数与组内条数都在�
 
 | 码 | 含义 |
 | --- | --- |
-| 0 | 成功（拒绝也是成功的回答 —— `search` 的 `refused` 和 `remember` 的 `deny` 都算） |
-| 1 | 判定拒绝 / 库不健康 / 回执或巩固失败（`read` 找不到、`remember` deny、`index` 有笔记走不到或 `stale`、`verify` 不是 `verified`、`recall --save-receipt` 落盘失败、`consolidate` 中止或 `undo` 冲突/被篡改） |
+| 0 | 成功（拒绝也是成功的回答 —— `search` 的 `refused`、`remember` 的 `deny`、`inbox --reject` 的成功拒绝都算；`setup` 的 dry-run / `unchanged` 也算） |
+| 1 | 判定拒绝 / 库不健康 / 回执或巩固失败（`read` 找不到、`remember` deny、`capture` 拒收、`inbox` 有失败项、`index` 有笔记走不到或 `stale`、`verify` 不是 `verified`、`recall --save-receipt` 落盘失败、`consolidate` 中止或 `undo` 冲突/被篡改、`setup` 冲突/无宿主/解析失败） |
 | 2 | 用法错误（缺参数、命令不认识） |
 
 `remember --json` 的 `ok` 与退出码一致：脚本里既可以读 JSON，也可以直接 `if`。

@@ -36,7 +36,20 @@ import {
   resolveStore,
 } from './store/vault.js';
 import { buildIndexPlan, fitRoute, readIndexTree, verifyRoutes, pointerLine, groupKeyOf } from './store/index-tree.js';
-import { readNote, writeNoteAtomic, parseNoteLoose, safeNoteId, renderNote, MAX_NOTE_CHARS, MAX_NOTE_TOKENS, MAX_NOTE_BYTES } from './store/note.js';
+import {
+  readNote,
+  writeNoteAtomic,
+  parseNoteLoose,
+  firstHeading,
+  safeNoteId,
+  renderNote,
+  candidatePath,
+  writeCandidateAtomic,
+  moveCandidate,
+  MAX_NOTE_CHARS,
+  MAX_NOTE_TOKENS,
+  MAX_NOTE_BYTES,
+} from './store/note.js';
 import { ulid } from './util/ulid.js';
 import { recall, searchHits, DEFAULT_THRESHOLDS, DEFAULT_TOKENS } from './core/recall.js';
 import { buildRecallReceipt, explainReceipt, verifyReceipt, canonicalJson } from './core/receipt.js';
@@ -53,7 +66,7 @@ import { planContentConsolidation } from './core/propose.js';
 import { writeReceipt, readReceipt } from './store/receipt.js';
 import { estimateTokens } from './core/tokenize.js';
 import { finiteOr, sha256 } from './util/text.js';
-import { remember as runRemember, candidateFromMarkdown, buildCandidate } from './gate/remember.js';
+import { remember as runRemember, candidateFromMarkdown, buildCandidate, contentFingerprint } from './gate/remember.js';
 import { planImport, applyImport } from './import/engramory.js';
 import { evaluateIndexWrite } from './gate/gate.js';
 import { isoLocal, nowMs as clockNow } from './util/clock.js';
@@ -88,7 +101,7 @@ export function openStore(storePath) {
   let cache = null;
 
   const scan = ({ fresh = false } = {}) => {
-    if (fresh || cache === null) cache = scanStore(store);
+    if (fresh || cache === null) cache = scanStore(store, { includeCandidates: true });
     return cache;
   };
   const invalidate = () => {
@@ -271,6 +284,7 @@ function buildWarnings({ scan, index, total, oversizeChars, oversizeTokens, inde
   if (scan.failures.length) w.push(`${scan.failures.length} 个文件解析失败（fail-closed，已退出检索面）`);
   if (oversizeChars) w.push(`${oversizeChars} 条笔记超过 ${MAX_NOTE_CHARS} 字（检索按 400 字切桶）`);
   if (oversizeTokens) w.push(`${oversizeTokens} 条笔记超过 ${MAX_NOTE_TOKENS} token`);
+  if (scan.candidates.length) w.push(`${scan.candidates.length} 条候选待处理（\`tabellio inbox\`）`);
   if (index.exists && indexListed < total) {
     // 分层索引之后这句警告的含义变了：不再是「索引装不下」，而是「有笔记没有路可走」。
     // 路由树把容量从 ~190 条提到 ~76000 条，正常库里**不该**再看到这句；
@@ -694,6 +708,251 @@ export function remember(ctx, input = {}, options = {}) {
   // dry-run 不落盘，也就没什么可失效的（但代价极低，顺手做掉更不容易忘）。
   if (result.ok && !dry) invalidateStore(store);
   return result;
+}
+
+
+/** 一条候选的稳定视图（CLI/JSON 共用，不泄露内部结构）。 */
+function candidateView(entry) {
+  const note = entry.note ?? {};
+  const created = note.valid_from ?? (entry.mtime ? new Date(entry.mtime).toISOString() : null);
+  return {
+    id: String(entry.id),
+    title: entry.title || note.id || String(entry.id),
+    created,
+    source: note.provenance?.source_ref ?? null,
+    chars: [...String(entry.body ?? '').trimEnd()].length,
+    kind: note.kind ?? 'semantic',
+    trust: note.trust ?? 'system_derived',
+    scope: note.scope_detail ? `project:${note.scope_detail}` : note.scope ?? 'user',
+    path: entry.path,
+  };
+}
+
+function entryFingerprint(entry) {
+  return contentFingerprint({
+    scope: entry.note?.scope,
+    kind: entry.note?.kind,
+    body: String(entry.body ?? '').trimEnd(),
+    subject: entry.note?.subject,
+    predicate: entry.note?.predicate,
+  });
+}
+
+function normalizeIds(value) {
+  const raw = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+  const out = [];
+  for (const item of raw) {
+    for (const part of String(item).split(',')) {
+      const id = part.trim();
+      if (id && !out.includes(id)) out.push(id);
+    }
+  }
+  return out;
+}
+
+/**
+ * `tabellio capture`：把一段文本显式收成**候选**，默认不写正式笔记、不重建主索引。
+ *
+ * 为什么先有候选：记忆产品最大的口碑风险不是「记不住」，是「记错还改不掉」。
+ * 候选把「机器/宿主觉得值得记」与「用户确认要记」分成两步——捕获永远可做，
+ * 入库必须过同一道闸门（`remember`），且候选文件留在 `notes/candidates/` 可审计。
+ */
+export function addCandidate(ctx, input = {}, options = {}) {
+  const store = ctx?.scan ? ctx : openStore(ctx.store);
+  const now = options.nowMs ?? clockNow();
+  const raw = String(input.text ?? input.content ?? '');
+  if (raw.trim() === '') return { ok: false, reason: 'empty', chars: 0 };
+  if (Buffer.byteLength(raw) > MAX_NOTE_BYTES) {
+    return { ok: false, reason: 'too_large', bytes: Buffer.byteLength(raw), limit: MAX_NOTE_BYTES };
+  }
+
+  const parsed = parseNoteLoose(raw);
+  const defaults = {
+    id: options.id,
+    scope: options.scope ?? 'user',
+    kind: options.kind ?? input.kind ?? 'semantic',
+    trust: 'system_derived',
+    status: 'draft',
+    tags: options.tags ?? input.tags ?? [],
+    writtenBy: 'capture:cli',
+    sourceRef: options.source ?? input.source ?? null,
+    validFrom: options.validFrom ?? isoLocal(now),
+  };
+  const built = buildCandidate({
+    frontmatter: parsed.frontmatter,
+    body: parsed.body,
+    defaults,
+    nowMs: now,
+    nextId: () => ulid(now),
+  });
+  const note = built.note;
+  const body = String(built.body ?? '').trimEnd();
+  if (body.trim() === '') return { ok: false, reason: 'empty', chars: 0 };
+
+  // 候选永远是「待确认、系统派生」：输入里写了 active/user_stated 也不改变这个身份。
+  note.status = 'draft';
+  note.trust = 'system_derived';
+  note.provenance = {
+    written_by: 'capture:cli',
+    source_ref: options.source ?? input.source ?? note.provenance?.source_ref ?? null,
+    derived_from: Array.isArray(note.provenance?.derived_from) ? note.provenance.derived_from : [],
+  };
+
+  const safe = safeNoteId(note.id);
+  if (!safe.ok) return { ok: false, reason: 'invalid_id', id: note.id };
+  note.id = safe.id;
+
+  const scan = store.scan();
+  if (scan.notes.some((n) => n.id === note.id)) return { ok: false, reason: 'id_exists', id: note.id, existing: 'note' };
+  if (scan.candidates.some((c) => c.id === note.id)) return { ok: false, reason: 'id_exists', id: note.id, existing: 'candidate' };
+
+  const fingerprint = contentFingerprint({ ...note, body });
+  if (!options.force) {
+    const dupNote = scan.notes.find((n) => entryFingerprint(n) === fingerprint);
+    if (dupNote) return { ok: false, reason: 'duplicate', id: note.id, duplicate_of: { id: dupNote.id, kind: 'note' } };
+    const dupCand = scan.candidates.find((c) => entryFingerprint(c) === fingerprint);
+    if (dupCand) return { ok: false, reason: 'duplicate', id: note.id, duplicate_of: { id: dupCand.id, kind: 'candidate' } };
+  }
+
+  const path = candidatePath(store.store, note.id);
+  const view = {
+    ...candidateView({ id: note.id, title: firstHeading(body) ?? note.id, body, note, path }),
+    source: note.provenance.source_ref,
+  };
+  if (options.dry) return { ok: true, ...view, would_write: path, dry_run: true };
+
+  store.ensure();
+  const written = writeCandidateAtomic(store.store, note.id, renderNote(note, body));
+  if (!written.ok) return { ok: false, reason: 'store_write_failed', id: note.id, error: written.error };
+  store.ledger({ kind: 'candidate_added', id: note.id, source: note.provenance.source_ref, chars: view.chars });
+  invalidateStore(store);
+  return { ok: true, ...view, path: written.path, written: true };
+}
+
+/** `tabellio inbox` 的只读列表。按创建时间倒序（新的候选先看）。 */
+export function listCandidates(ctx) {
+  const store = ctx?.scan ? ctx : openStore(ctx.store);
+  const scan = store.scan();
+  const candidates = scan.candidates.map(candidateView).sort((a, b) => {
+    const ta = a.created ?? '';
+    const tb = b.created ?? '';
+    if (ta !== tb) return ta < tb ? 1 : -1;
+    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+  });
+  return { ok: true, count: candidates.length, candidates };
+}
+
+/**
+ * 候选的批准/拒绝。批准走 `remember` 的同一条闸门，拒绝只移动文件。
+ *
+ * 批量里的失败**不中断**其余项：用户一次勾了十条，不能因为第三条超长就一条都不处理。
+ * 但只要有失败，整体 `ok:false`，CLI 退 1——「部分成功」必须叫出来。
+ */
+export function reviewCandidates(ctx, input = {}) {
+  const store = ctx?.scan ? ctx : openStore(ctx.store);
+  const dry = Boolean(input.dry);
+  const accept = normalizeIds(input.accept);
+  const reject = normalizeIds(input.reject);
+  const overlap = accept.filter((id) => reject.includes(id));
+  if (overlap.length) {
+    return { ok: false, reason: 'accept_reject_overlap', ids: overlap, dry_run: dry, accepted: [], rejected: [], failed: [] };
+  }
+
+  const scan = store.scan();
+  const byId = new Map(scan.candidates.map((c) => [String(c.id), c]));
+  const accepted = [];
+  const rejected = [];
+  const failed = [];
+  let wrote = false;
+  let indexDirty = false;
+
+  // 直接用 runRemember + 自己维护的 notes 数组：每批准一条都重扫全库是 O(n²)，
+  // 而这里已经有扫描快照，新批准的笔记只要 push 进去就能参与后续去重判定。
+  const notes = [...scan.notes];
+  const gateCtx = {
+    scan: () => ({ notes }),
+    writeNote: (id, text) => store.writeNote(id, text),
+    rebuildIndex: () => store.rebuildIndex(),
+    ledger: (event) => store.ledger(event),
+    relPath: (id) => `notes/${id}.md`,
+  };
+
+  for (const id of accept) {
+    const candidate = byId.get(id);
+    if (!candidate) {
+      failed.push({ id, action: 'accept', reason: 'candidate_not_found' });
+      continue;
+    }
+    const note = {
+      ...candidate.note,
+      status: 'active',
+      // 闸门量的是 candidate.body；候选的 note 对象本身不保存正文，这里必须补上。
+      body: String(candidate.body ?? '').trimEnd(),
+      provenance: { ...(candidate.note?.provenance ?? {}), written_by: 'inbox:accept' },
+    };
+    const result = runRemember(gateCtx, {
+      candidate: note,
+      body: candidate.body,
+      options: { dry, force: Boolean(input.force), skipIndex: true },
+    });
+    if (dry) {
+      if (result.ok && result.status === 'planned') {
+        accepted.push({ id, action: 'accept', status: 'planned', would_write: result.would_write });
+      } else {
+        failed.push({ id, action: 'accept', status: result.status, reason: result.reason, details: result.details });
+      }
+      continue;
+    }
+    if (!result.ok) {
+      failed.push({ id, action: 'accept', status: result.status, reason: result.reason, details: result.details });
+      continue;
+    }
+    const moved = moveCandidate(store.store, id, 'decided');
+    if (!moved.ok) {
+      // 笔记已经写进去了：报告「已写、归档失败」，重试时会走覆盖更新，不会产生第二份。
+      failed.push({ id, action: 'accept', reason: 'candidate_move_failed', note_stored: true, error: moved.error });
+      continue;
+    }
+    store.ledger({ kind: 'candidate_accepted', id, source: candidate.note?.provenance?.source_ref ?? null });
+    notes.push({ id, body: candidate.body, note });
+    wrote = true;
+    indexDirty = true;
+    accepted.push({ id, action: 'accept', status: 'stored', path: `notes/${id}.md` });
+  }
+
+  for (const id of reject) {
+    const candidate = byId.get(id);
+    if (!candidate) {
+      failed.push({ id, action: 'reject', reason: 'candidate_not_found' });
+      continue;
+    }
+    if (dry) {
+      rejected.push({ id, action: 'reject', status: 'planned' });
+      continue;
+    }
+    const moved = moveCandidate(store.store, id, 'rejected');
+    if (!moved.ok) {
+      failed.push({ id, action: 'reject', reason: 'candidate_move_failed', error: moved.error });
+      continue;
+    }
+    store.ledger({ kind: 'candidate_rejected', id, source: candidate.note?.provenance?.source_ref ?? null });
+    wrote = true;
+    rejected.push({ id, action: 'reject', status: 'rejected', path: moved.path });
+  }
+
+  if (indexDirty) store.rebuildIndex();
+  if (wrote) invalidateStore(store);
+  return {
+    ok: failed.length === 0,
+    reason: failed.length ? 'partial_failure' : null,
+    dry_run: dry,
+    accepted,
+    rejected,
+    failed,
+    accepted_count: accepted.length,
+    rejected_count: rejected.length,
+    failed_count: failed.length,
+  };
 }
 
 function metaOf(note) {

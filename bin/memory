@@ -15,7 +15,7 @@
  */
 import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   openStore,
   status,
@@ -29,6 +29,9 @@ import {
   consolidate,
   proposeConsolidation,
   undoConsolidation,
+  addCandidate,
+  listCandidates,
+  reviewCandidates,
   indexReport,
   defaultStorePath,
   INDEX_CAPS,
@@ -37,6 +40,7 @@ import {
   MAX_NOTE_TOKENS,
 } from '../src/api.js';
 import { readSourceIndex } from '../src/import/engramory.js';
+import { planSetup, applySetup } from '../src/setup.js';
 import { finiteOr } from '../src/util/text.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -52,6 +56,9 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio read   --id <ulid|notes/ulid.md> [--ledger] [--json]
   tabellio remember --file <path.md> [--dry] [--json]
                    [--kind k] [--trust t] [--scope s] [--tags a,b] [--id ULID]
+  tabellio capture  --file <path.md|-> [--source REF] [--kind k] [--tags a,b] [--dry] [--json]
+  tabellio inbox    [--accept <id[,id]>]... [--reject <id[,id]>]... [--dry] [--json]
+  tabellio setup    [--host claude,cursor,codex|all] [--write] [--force] [--read-only] [--json]
   tabellio import --from <旧 Engramory 库目录> [--dry] [--json]
   tabellio recall --query "<词>" [--receipt|--save-receipt] [--budget-tokens N] [--json]
   tabellio explain (--query "<词>" | --receipt <id|path>) [--json]
@@ -378,7 +385,7 @@ export async function main(argv, io = {}) {
     out.write(`${VERSION}\n`);
     return 0;
   }
-  if (!['status', 'index', 'search', 'read', 'remember', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths'].includes(command)) {
+  if (!['status', 'index', 'search', 'read', 'remember', 'capture', 'inbox', 'setup', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths'].includes(command)) {
     err.write(`未知命令：${command}\n\n${USAGE}\n`);
     return 2;
   }
@@ -603,6 +610,78 @@ export async function main(argv, io = {}) {
         });
         return r.ok ? 0 : 1;
       }
+
+      case 'capture': {
+        const file = args.file ?? args._[1];
+        if (!file) {
+          err.write('capture 需要 --file <path.md|->\n');
+          return 2;
+        }
+        let text;
+        if (file === '-') {
+          text = await readAll(io.stdin ?? process.stdin);
+        } else {
+          if (!existsSync(file)) {
+            err.write('文件不存在：' + file + '\n');
+            return 2;
+          }
+          const { readFileSync } = await import('node:fs');
+          text = readFileSync(file, 'utf8');
+        }
+        const result = addCandidate(ctx, { text, source: args.source }, {
+          dry: Boolean(args.dry),
+          force: Boolean(args.force),
+          id: args.id,
+          kind: args.kind,
+          tags: listArg(args.tags) ?? [],
+        });
+        emit(result, { json, human: renderCapture(result) });
+        return result.ok ? 0 : 1;
+      }
+      case 'inbox': {
+        const accept = flagArgValues(argv, args, 'accept');
+        const reject = flagArgValues(argv, args, 'reject');
+        if (accept.invalid || reject.invalid) {
+          err.write('inbox --accept/--reject 需要候选 id（可重复或逗号分隔）\n');
+          return 2;
+        }
+        if (!accept.provided && !reject.provided) {
+          const result = listCandidates(ctx);
+          emit(result, { json, human: renderInbox(result) });
+          return 0;
+        }
+        const result = reviewCandidates(ctx, {
+          accept: accept.values,
+          reject: reject.values,
+          dry: Boolean(args.dry),
+          force: Boolean(args.force),
+        });
+        emit(result, { json, human: renderReview(result) });
+        return result.ok ? 0 : 1;
+      }
+      case 'setup': {
+        if (args.host === true || args.command === true || args['mcp-bin'] === true) {
+          err.write('setup 的参数缺值：--host / --command / --mcp-bin\n');
+          return 2;
+        }
+        const plan = planSetup({
+          hosts: args.host ?? 'all',
+          home: args.home ? resolve(String(args.home)) : undefined,
+          command: args.command ? String(args.command) : undefined,
+          mcpBin: args['mcp-bin'] ? resolve(String(args['mcp-bin'])) : resolve(join(HERE, 'memory-mcp')),
+          store: storePath,
+          readOnly: Boolean(args['read-only']),
+          force: Boolean(args.force),
+        });
+        if (!args.write) {
+          emit(plan, { json, human: renderSetup(plan) });
+          return plan.ok ? 0 : 1;
+        }
+        const applied = applySetup(plan);
+        const result = { ...plan, dry_run: false, ...applied };
+        emit(result, { json, human: renderSetupApplied(plan, applied) });
+        return applied.ok ? 0 : 1;
+      }
       case 'import': {
         const from = args.from ?? args._[1];
         if (!from) {
@@ -628,6 +707,95 @@ export async function main(argv, io = {}) {
     err.write(`tabellio ${command} 失败：${e?.stack ?? e}\n`);
     return 2;
   }
+}
+
+
+/** 读完整 stdin（capture --file -）。 */
+async function readAll(stream) {
+  let text = '';
+  stream.setEncoding?.('utf8');
+  for await (const chunk of stream) text += chunk;
+  return text;
+}
+
+function renderCapture(r) {
+  if (r.ok) {
+    const head = (r.dry_run ? '[dry-run] ' : '') + (r.dry_run ? '会收成候选：' : '已收成候选：') + r.id;
+    return [
+      head,
+      '标题：' + r.title,
+      '来源：' + (r.source ?? '（未标注）'),
+      '字数：' + r.chars,
+      r.dry_run ? '会写：' + r.would_write : '路径：' + r.path,
+      '下一步：tabellio inbox --accept ' + r.id,
+    ].join('\n');
+  }
+  const reasons = {
+    empty: '正文为空',
+    too_large: '正文超过单条 8KB 上限',
+    invalid_id: 'id 不合法',
+    id_exists: 'id 已存在',
+    duplicate: '和已有内容重复',
+    store_write_failed: '落盘失败',
+  };
+  let line = '候选未写入：' + (reasons[r.reason] ?? r.reason);
+  if (r.duplicate_of) line += '（已存在：' + r.duplicate_of.kind + ' ' + r.duplicate_of.id + '）';
+  return line;
+}
+
+function renderInbox(r) {
+  if (r.count === 0) return '候选箱是空的。用 tabellio capture --file - 把候选丢进来，批准后才进主库。';
+  const lines = ['候选 ' + r.count + ' 条（notes/candidates，默认不进检索面）：'];
+  for (const c of r.candidates) {
+    lines.push('  [' + c.id + '] ' + c.title + ' — ' + (c.source ?? '（无来源）') + ' / ' + c.chars + ' 字' + (c.created ? ' / ' + c.created : ''));
+  }
+  lines.push('批准：tabellio inbox --accept <id>   拒绝：--reject <id>');
+  return lines.join('\n');
+}
+
+function renderReview(r) {
+  const lines = [r.dry_run ? '[dry-run] 只预览，不落盘' : '处理完成'];
+  for (const a of r.accepted) lines.push('  ✓ 批准 ' + a.id + (a.status === 'planned' ? '（会入库）' : '（已入库）'));
+  for (const x of r.rejected) lines.push('  ✗ 拒绝 ' + x.id);
+  for (const f of r.failed) lines.push('  ! ' + f.id + '：' + (f.reason ?? '失败') + (f.note_stored ? '（笔记已入库，但候选归档失败）' : ''));
+  lines.push('批准 ' + r.accepted_count + ' / 拒绝 ' + r.rejected_count + ' / 失败 ' + r.failed_count);
+  return lines.join('\n');
+}
+
+function renderSetup(plan) {
+  if (!plan.ok) {
+    const reasons = {
+      no_host_detected: '没检测到已安装的 Claude Code / Cursor / Codex CLI（可用 --host 显式指定）',
+      conflict: '已有不同的 tabellio 配置；确认要替换请加 --force',
+      invalid_config: '有配置文件解析失败；整单未写入（先手工修好 JSON）',
+      unknown_host: '不认识的宿主：' + (plan.unknown ?? ''),
+      missing_target: '缺少 mcpBin / store',
+    };
+    const lines = ['setup 未执行：' + (reasons[plan.reason] ?? plan.reason)];
+    for (const h of plan.hosts ?? []) {
+      lines.push('- ' + h.label + ' ' + h.path + '：' + h.action + (h.error ? '（' + h.error.message + '）' : ''));
+    }
+    return lines.join('\n');
+  }
+  const lines = ['[dry-run] 将处理 ' + plan.hosts.length + ' 个宿主（加 --write 才落盘）'];
+  for (const h of plan.hosts) {
+    lines.push('- ' + h.label + ' ' + h.path + '：' + h.action + (h.backup ? '（备份 ' + h.backup + '）' : ''));
+  }
+  lines.push('MCP server：' + plan.server.command + ' ' + plan.server.args.join(' '));
+  return lines.join('\n');
+}
+
+function renderSetupApplied(plan, applied) {
+  if (!applied.ok) {
+    const lines = ['setup 未完全成功：'];
+    for (const f of applied.failed) lines.push('  ! ' + f.host + '：' + f.error);
+    return lines.join('\n');
+  }
+  const lines = ['setup 完成'];
+  for (const a of applied.applied) {
+    lines.push('  ' + (a.written ? '✓ 写入 ' : '= 未变 ') + a.host + '：' + a.path + (a.backup ? '（备份 ' + a.backup + '）' : ''));
+  }
+  return lines.join('\n');
 }
 
 function renderRemember(r) {

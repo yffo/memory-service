@@ -9,12 +9,22 @@
 
 ```bash
 npm i -g tabellio
+tabellio setup --write                   # 给已装的 Claude Code / Cursor / Codex 写 MCP 配置（默认 dry-run）
 tabellio status                          # 建库 + 看一眼
 tabellio recall --query "编辑器偏好"      # 按预算取回记忆
-tabellio-mcp                             # 给宿主用的 MCP stdio 服务器（默认只读）
+printf '%s\n' '# 发布流程' '' '发版前跑 npm test 和 node bench/run-eval.mjs。' \
+  | tabellio capture --file -             # 先收成候选，不静默入库
+tabellio inbox --accept <候选 id>         # 人看过、批准后才进主库
+tabellio-mcp                             # 给宿主用的 MCP stdio 服务器
 ```
 
 零运行时依赖，Node ≥ 20.11，不需要 `npm install`。
+
+`setup` 只认 Claude Code / Cursor / Codex 三家，写前备份、默认只预览，已有的不同配置要显式 `--force`；
+DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自动记忆」的诚实版本：
+**当前不会从对话里自动抽取**，宿主或脚本调用 `capture` 把候选丢进来，人在 `inbox` 里批准，
+批准时才走与 `remember` 同一条写入闸门。自动生成候选、自动巩固和后台进程仍在路线图里，
+现在没有——所以它不会偷偷写你的库，但目前仍要宿主或脚本主动把线索丢进候选箱。
 
 ## 它到底是什么
 
@@ -55,7 +65,7 @@ tabellio-mcp                             # 给宿主用的 MCP stdio 服务器�
 | [docs/04-cost-model.md](docs/04-cost-model.md) | 模型选型与月成本模型（三档方案） | 已完成 |
 | [docs/05-agi-direction.md](docs/05-agi-direction.md) | 记忆在 AGI 方向的前沿与可下注之处 | 已完成 |
 | [docs/06-architecture.md](docs/06-architecture.md) | 架构设计（分层、闸门、账本、检索） | 草案（M1 + M2 读取回执/巩固已实现） |
-| [docs/07-usage.md](docs/07-usage.md) | 用法：十个命令、MCP、回执、巩固、库布局、退出码 | 已定稿 |
+| [docs/07-usage.md](docs/07-usage.md) | 用法：十三个命令、MCP、候选闭环、回执、巩固、库布局、退出码 | 已定稿 |
 | [docs/08-eval-runbook.md](docs/08-eval-runbook.md) | 评测跑法与判据 | 已完成 |
 | [docs/09-naming.md](docs/09-naming.md) | 命名调研（为什么叫 tabellio） | 已完成 |
 

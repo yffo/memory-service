@@ -93,6 +93,9 @@ export function paths(storePath) {
   return {
     store,
     notes: join(store, NOTES_DIRNAME),
+    candidates: join(store, NOTES_DIRNAME, 'candidates'),
+    candidateDecided: join(store, NOTES_DIRNAME, 'candidates', 'decided'),
+    candidateRejected: join(store, NOTES_DIRNAME, 'candidates', 'rejected'),
     index: join(store, INDEX_DIRNAME),
     runs: join(store, RUNS_DIRNAME),
     memory: join(store, INDEX_DIRNAME, MEMORY_FILE),
@@ -105,7 +108,7 @@ export function paths(storePath) {
 
 export function ensureStore(storePath) {
   const p = paths(storePath);
-  for (const dir of [p.store, p.notes, p.index, p.runs, p.backups]) mkdirSync(dir, { recursive: true });
+  for (const dir of [p.store, p.notes, p.candidates, p.index, p.runs, p.backups]) mkdirSync(dir, { recursive: true });
   return p;
 }
 
@@ -165,7 +168,7 @@ export function scanStore(storePath, { includeCandidates = false } = {}) {
   files.sort();
 
   for (const file of files) {
-    const isCandidate = file.includes('/candidates/');
+    const isCandidate = dirname(file) === p.candidates;
     const id = idFromFilename(file);
     let text;
     let stat;

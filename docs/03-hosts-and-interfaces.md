@@ -13,6 +13,7 @@
 6. **作用域 = 一个库 + scope 字段**：项目级默认隔离、用户级显式声明，不按宿主分库（对照 dsh-engram 的 user + per-git-origin 双作用域，§5.4）。
 7. **密钥只走引用不走明文**：宿主侧只写 `${VAR}` / env 插值 / `!!js process.env`；Codex 连内联 `bearer_token` 都直接拒载（§3.9）。
 8. **分发主线 = npm 包（stdio MCP）+ MCP registry 元数据**；插件市场（Claude Code / DSH）与 IDE 市场是增量渠道；registry 只存元数据，不托管代码、不审核行为（§4）。
+9. **安装摩擦由 `tabellio setup` 兜住**：只自动写 Claude Code / Cursor / Codex 三家（默认 dry-run、写前备份、冲突需 `--force`）；其余宿主仍给配置片段。DSH 的 YAML loader patch 不做自动改写（§3.0）。
 
 ## 1. MCP 能力/限制速查
 
@@ -126,6 +127,23 @@
 | Codex CLI | 是 `[CX]` | stdio / Streamable HTTP；第三方可加 **UDS** 适配器 `[CX2]` | 只认 `bearer_token_env_var`（**内联 `bearer_token` 直接报错拒载**） `[CX]` | `$CODEX_HOME/config.toml` 的 `[mcp_servers.<name>]`；也可 `codex --config mcp_servers.x={command="...",args=[...]}` `[CX][CX2]` | 沙箱里 HTTP 可能不通 → 官方给了 `codex-stdio-to-uds`（UDS 还能用文件权限做访问控制） |
 | ChatGPT 桌面 / 连接器 | 有（二手）| 未核实 | 未核实 | 未核实 | 官方文档全部不可直连（§2.5）→ **未找到公开资料** |
 | DSH | 是（原生 MCP 客户端插件）`[DSH]` | `stdio` / `streamable-http` `[DSH]` | `headers`（可用 `!!js` 引用 env）、stdio env 合并（环境已清洗） `[DSH]` | 以「配置型插件 bundle」注册：`cordis.patch.yml` 里插 `@deepseek-ai/dsh-mcp-client`，字段 `serverName`/`transport`/`url`/`command`/`args`/`env`/`cwd`/`toolCallTimeoutMs`/`failOnStartupError` `[DSH]` | 工具名固定 `mcp__<serverName>__<rawName>`；`serverName` 限 `[A-Za-z0-9_-]{1,32}`；stdio 子进程环境会丢掉匹配 `/KEY\|PASSWORD\|SECRET\|TOKEN/i` 与 `DSH_*` 的变量 |
+
+### 3.0 `tabellio setup` 自动写到哪、不写到哪
+
+`tabellio setup` 只做「把同一个 stdio MCP server 条目合并进宿主的配置文件」，不碰记忆库、不装依赖、不改宿主其他设置。默认 dry-run，`--write` 才落盘，写前备份成 `<文件>.tabellio-backup-<时间戳>`。
+
+| host | 文件 | 写法 | 备注 |
+| --- | --- | --- | --- |
+| `claude` | `~/.claude.json` | 顶层 `mcpServers.tabellio` | 写的是 user 作用域；项目级 `.mcp.json` 不碰 |
+| `cursor` | `~/.cursor/mcp.json` | 顶层 `mcpServers.tabellio` | 全局；项目级 `.cursor/mcp.json` 不碰 |
+| `codex` | `~/.codex/config.toml` | `[mcp_servers.tabellio]` + `command`/`args` | 只替换这一段及子表，其他段与注释原样保留 |
+
+生成的 server 用当前 node 的绝对路径与 `bin/memory-mcp` 的绝对路径，带 `--store <库路径>`，默认再加 `--allow-write`（`--read-only` 可去掉）。这样宿主从任意工作目录都能起，不依赖 PATH。
+
+- `all` 只处理已安装的宿主（配置文件或父目录存在）；`--host` 显式点名可以创建新文件。一个都没检测到返回 `no_host_detected`。
+- 已有不同的 `tabellio` 配置：整单 `conflict`，不写任何一份；`--force` 才替换。JSON/TOML 解析失败：整单 `invalid_config`，不写半份。
+- **不做**：Cline / Zed / VS Code / Windsurf / Continue / Gemini 的自动写（格式分散、且当前无实机验证）；DSH 的 `~/.dsh/cordis.patch.yml` 是 YAML loader patch，零依赖做保真改写风险高，只给片段（§3.11）；Claude Code 项目级作用域、Cursor 项目级配置、Codex `--config` 覆盖也不写。
+- 边界：`setup` 只证明「配置写对了」，不证明宿主真的连上。三家宿主的实机 E2E 仍未做，见 `docs/00` 的 M3。
 
 ### 3.1 Claude Code（最完整，也最会在细节上咬人）
 

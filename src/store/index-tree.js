@@ -283,7 +283,11 @@ export function buildIndexPlan(scan, { caps, listMaxLines = LIST_FILE_MAX_LINES,
   // 叶子顺序里加一道**显式**的稳定排序：同条数的两个组必须每次排在同一个位置，
   // 否则文件名里的序号会在两次重建之间对调 —— 那会让「重建索引幂等」（§6.3 的 CI 判据）
   // 变成随机通过。Map 的插入序本身稳定，但这里不依赖它：判据要的是不变量，不是巧合。
-  const leaves = leafGroupsOf({ children: tree.groups }).sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : 1));
+  // 空库没有任何叶子：`leafGroupsOf()` 对「没有 children 的节点」按叶子返回，
+  // 但根节点本身没有 ids，直接当叶子会在 renderList 里读到 undefined.length。
+  const leaves = tree.total === 0
+    ? []
+    : leafGroupsOf({ children: tree.groups }).sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : 1));
   const listFiles = leaves.map((node, i) => ({
     name: node.name,
     rel: listRelPath(node, i + 1),

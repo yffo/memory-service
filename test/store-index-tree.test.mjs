@@ -294,3 +294,14 @@ test('分层索引：小组的清单就是一行一条指针（人读索引的�
     assert.match(line, /^\d+\.|^- \[/, '保持 markdown 列表形状');
   }
 });
+
+
+// ── 空库：根节点没有 ids，不能当叶子 ──────────────────────────────────────
+
+test('分层索引：空库也能生成路由层，不把根节点当叶子', () => {
+  const plan = buildIndexPlan({ notes: [] }, { caps: CAPS, generatedAt: '2026-01-01T00:00:00Z' });
+  assert.equal(plan.listFiles.length, 0);
+  assert.equal(plan.listed, 0);
+  assert.match(plan.routeText, /全库 0 条 \/ 0 组/);
+  assert.equal(countPointerLines(plan.routeText), 0);
+});

@@ -61,7 +61,8 @@ test('API proposeConsolidation：merge 只返回提案，库目录逐字节不�
     assert.equal(plan.store, ctx.store);
     assert.deepEqual(snapshot(dir), before, '提案调用不得改动库目录');
     assert.deepEqual(readdirSync(join(dir, 'runs')), []);
-    assert.equal(existsSync(join(dir, 'notes', 'candidates')), false);
+    // ensure() 现在会建候选目录；提案层要保证的是「不往里面写东西」。
+    assert.deepEqual(readdirSync(join(dir, 'notes', 'candidates')), []);
   } finally {
     rm(dir);
   }
