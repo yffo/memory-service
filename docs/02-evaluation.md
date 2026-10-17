@@ -362,4 +362,4 @@ run_eval.py --suite <suite.json> --system <adapter> [--budget 500] [--runs 3] [-
 
 ---
 
-文件路径：`/Users/yangfu/yffto/memory-service/docs/02-evaluation.md` · 行数：**365** · **推荐的第一个评测**：`core-30-v1` 上的**判据 1 召回压力测试**（`ledger_replay` 基线 vs 新系统，纯集合运算判分，零模型成本，当天可完成）——先跑 `--system none` 与 `--system ledger_replay` 两条命令验证评测脚手架本身没坏。
+文件路径：`~/yffto/memory-service/docs/02-evaluation.md` · 行数：**365** · **推荐的第一个评测**：`core-30-v1` 上的**判据 1 召回压力测试**（`ledger_replay` 基线 vs 新系统，纯集合运算判分，零模型成本，当天可完成）——先跑 `--system none` 与 `--system ledger_replay` 两条命令验证评测脚手架本身没坏。

@@ -243,4 +243,4 @@
 
 ---
 
-`/Users/yangfu/yffto/memory-service/docs/03-hosts-and-interfaces.md` ｜ 行数：246 ｜ 推荐接口形态一句话：**一个 Dual-era 的 MCP 服务器（stdio 薄壳接所有宿主）+ 一个常驻本地核心（唯一写者，走 127.0.0.1 + bearer），工具面 5±2 个、默认只读、写入带 scope。**
+`~/yffto/memory-service/docs/03-hosts-and-interfaces.md` ｜ 行数：246 ｜ 推荐接口形态一句话：**一个 Dual-era 的 MCP 服务器（stdio 薄壳接所有宿主）+ 一个常驻本地核心（唯一写者，走 127.0.0.1 + bearer），工具面 5±2 个、默认只读、写入带 scope。**

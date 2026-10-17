@@ -5,7 +5,7 @@
  * 三臂：
  *   none    空上下文（退化基线：什么都不给）
  *   new     node bin/memory search --query "<q>" --json   ← 被测系统
- *   legacy  /Users/yangfu/yffto/dsh-engramory-recall 的 BM25（子进程 import 它的 store.js + bm25.js，只读）
+ *   legacy  ~/yffto/dsh-engramory-recall 的 BM25（子进程 import 它的 store.js + bm25.js，只读）
  *
  * 回答器是 `none`（不是模型）：echo（默认，回显全部注入上下文）或 first-hit（只回显 rank-1 那篇）。
  * 所以这个跑分器**零模型成本**，它量的是「检索有没有把正确笔记拿进上下文」，不是「模型会不会用」。
@@ -50,7 +50,7 @@ const ROOT = path.resolve(HERE, '..');
 const DEFAULT_TASKS = path.join(HERE, 'core-30-v1', 'tasks.json');
 const DEFAULT_LIBRARY = path.join(HERE, 'core-30-v1', 'library');
 const DEFAULT_CLI = path.join(ROOT, 'bin', 'memory');
-const DEFAULT_LEGACY_REPO = '/Users/yangfu/yffto/dsh-engramory-recall';
+const DEFAULT_LEGACY_REPO = '~/yffto/dsh-engramory-recall';
 const DEFAULT_LEGACY_STORE = path.join(os.homedir(), 'memory', 'engramory');
 
 export const ARM_META = Object.freeze({

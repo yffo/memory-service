@@ -28,7 +28,7 @@ node bench/run-eval.mjs --dry                       # 不调 CLI：只验证评�
 | --- | --- |
 | `bin/memory` | 被测 CLI（接口冻结：`status/search/read/remember --json`）。不在场就退到 `--dry` |
 | `bench/core-30-v1/library` | 虚构语料。跑分时默认**复制**到 `/tmp` 的临时库，仓库里的语料一个字都不会被改写 |
-| `~/memory/engramory` + `/Users/yangfu/yffto/dsh-engramory-recall` | legacy 臂的默认来源（只读）。同语料对照见 `--same-corpus` |
+| `~/memory/engramory` + `~/yffto/dsh-engramory-recall` | legacy 臂的默认来源（只读）。同语料对照见 `--same-corpus` |
 | 官方 MCP SDK | 仅 `test/mcp-conformance.test.mjs` 需要；找不到时该文件自报原因（本机在 `@modelcontextprotocol/client` v2 路径上，不是裸的 `sdk`） |
 
 不需要装任何依赖：`bench/*.mjs` 零依赖，只用 node 内置模块。

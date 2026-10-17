@@ -2,7 +2,7 @@
 
 - 状态：M0 出口物之一（草案，待评审）
 - 上游文档：`00-brief.md`（立项书）· `01-landscape-systems.md`（竞品与接口层）· `02-evaluation.md`（评测方法）· `03-hosts-and-interfaces.md`（宿主与接口）· `04-cost-model.md`（成本）· `05-agi-direction.md`（长期方向）
-- 基线：`/Users/yangfu/yffto/dsh-engramory-recall`（第一条线，必须赢过它，而不是取代它）
+- 基线：`~/yffto/dsh-engramory-recall`（第一条线，必须赢过它，而不是取代它）
 - 读者：出资方（看 §1 §8 §10 就够）与实现者（§2–§7 §9）
 
 **规矩**：本文所有数字都从上面六份文档原样搬运，并标出来源。没有来源的数字不写。每条关键决策都带「代价」与「什么情况下该换」。
@@ -544,7 +544,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 
 - **旧库是数据源**：`~/memory/engramory` 的 72 篇 / 646 KB 直接作为导入样本与真实语料（`00-brief.md §8`）。导入器 `packages/import-engramory/` 负责把旧 frontmatter 映射到 `memory.note/1`，冲突字段进人工队列，不猜。
 - **旧库是基线**：`--system ledger_replay` 把旧账本回放成检索侧基线；判据 1 的对照三档是 `none`（无记忆）/ `engramory`（旧插件）/ `new`（本服务）（`02-evaluation.md §4.7`）。
-- **赢了才算数**：判据 A 要求新服务显著优于旧插件与无记忆（`00-brief.md §5`）。**赢的是长板，不是把旧插件判死**（`00-brief.md §10`）。**第一条线不冻结**（杨总 2026-10-16 定调）。
+- **赢了才算数**：判据 A 要求新服务显著优于旧插件与无记忆（`00-brief.md §5`）。**赢的是长板，不是把旧插件判死**（`00-brief.md §10`）。**第一条线不冻结**（作者 2026-10-16 定调）。
 - **共享内核**：`00-brief.md §10` 定了「存储、检索、账本、评测口径抽成 `memory-core`，两个壳都依赖它」。本文的 `packages/core` 就是这个包；旧插件接入方式为「依赖发布版 `@yffto/memory-core`」，共享内核的破坏性变更要同时跑两边测试，发布互不阻塞。
 - **不共享运行时数据**：旧插件继续用 `~/memory/engramory/`；新服务用自己的 `data/`（默认 `~/memory/<product>/`）。
 
