@@ -14,6 +14,14 @@ test('parseArgs：--inject-k 独立于 --k，默认 null', () => {
   assert.throws(() => parseArgs(['--inject-k', 'x']), /--inject-k/);
 });
 
+test('parseArgs：--cli-args 的值以 -- 开头时不被当成顶层参数', () => {
+  const opts = parseArgs(['--cli-args', '--min-coverage 0.55']);
+  assert.equal(opts.cliArgs, '--min-coverage 0.55');
+  const eq = parseArgs(['--cli-args=--min-coverage=0.55']);
+  assert.equal(eq.cliArgs, '--min-coverage=0.55');
+  assert.throws(() => parseArgs(['--min-coverage', '0.55']), /未知参数/);
+});
+
 test('buildContext：只注入 top-k，且逐条 cost 原样透传', () => {
   const hits = [
     { id: 'a', title: 'A', cost: 7 },

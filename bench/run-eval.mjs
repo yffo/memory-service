@@ -116,16 +116,24 @@ export function parseArgs(argv) {
     keepScratch: false,
     help: false,
   };
+  const valueFlags = new Set(['--tasks', '--library', '--cli', '--store', '--store-mode', '--cli-args', '--legacy-repo', '--legacy-store', '--arms', '--answerer', '--runs', '--concurrency', '--k', '--inject-k', '--timeout', '--out']);
   const value = (name) => {
+    const prefix = name + '=';
+    const inline = argv.find((arg) => arg.startsWith(prefix));
+    if (inline !== undefined) return inline.slice(prefix.length);
     const i = argv.indexOf(name);
     return i === -1 || argv[i + 1] === undefined ? null : String(argv[i + 1]);
   };
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
     if (!arg.startsWith('--')) continue;
-    const key = arg.split('=')[0];
-    if (!flags.has(key) && !['--tasks', '--library', '--cli', '--store', '--store-mode', '--cli-args', '--legacy-repo', '--legacy-store', '--arms', '--answerer', '--runs', '--concurrency', '--k', '--inject-k', '--timeout', '--out'].includes(key)) {
+    const eq = arg.indexOf('=');
+    const key = eq === -1 ? arg : arg.slice(0, eq);
+    if (!flags.has(key) && !valueFlags.has(key)) {
       throw new Error(`未知参数 ${arg}（--help 看用法）`);
     }
+    // --cli-args 等的值本身可能以 -- 开头，别把值当顶层参数校验。
+    if (valueFlags.has(key) && eq === -1) i += 1;
   }
   const pick = (name, current) => (value(name) === null ? current : value(name));
   opts.tasks = pick('--tasks', opts.tasks);
