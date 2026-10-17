@@ -27,7 +27,7 @@ tabellio-mcp                             # 给宿主用的 MCP stdio 服务器�
 - **预算感知**：调用方给 token 预算，服务端裁剪并说明裁掉了什么。
 - **有 receipt**：每次召回/写入都能回答「为什么给了它 / 为什么没给」。
 
-用法、六个命令、`--json` 的冻结形状、库布局：[docs/07-usage.md](docs/07-usage.md)。
+用法、命令清单、`--json` 的冻结形状、库布局：[docs/07-usage.md](docs/07-usage.md)。
 
 ## 为什么要新起一个项目
 
