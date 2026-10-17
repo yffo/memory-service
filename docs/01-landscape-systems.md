@@ -131,7 +131,7 @@
 - **计分目标不变量失效**（[arXiv 2605.24060](https://arxiv.org/abs/2605.24060)，2026-05/08）：只改变「给 raw / source-linked / canonical 哪一个记分」，**在 83.4–94.0% 的共享 query 上改变 nDCG**，并在 Mem0 与 MemoryOS 的迁移实验里**翻转名次**；1,902 例语义审计显示「放宽的 source-linked 记分」只有 29.2% 站得住。结论：任何记忆论文/厂商页都应显式声明计分目标，否则数字不可比。
 - **相关性 ≠ 充分性**（[arXiv 2610.09348](https://arxiv.org/abs/2610.09348)，2026-10）：top-k 每条都相关，合起来仍可能缺一个关键事实；应把检索目标改为「构造充分集合」，作者用 Gold Hit / Turn Hit 做证据覆盖代理指标（Budgeted Flat Reconstruction）。
 - **协议不同就不可比**（[arXiv 2608.12365](https://arxiv.org/abs/2608.12365) 作者自己声明）：该文明确写「different protocols from vendor leaderboard figures we cite for context only」——厂商 leaderboard 数字只能当背景，不能当基线。
-- **自测 vs 第三方**：本报告覆盖的全部系统，**没有任何一个数字来自独立的第三方复现**。
+- **自测 vs 第三方**：本报告引用的厂商/论文数字，**没有一项由我们独立复现**；文中出现的第三方复现（如 `02-evaluation.md` 引用的 EverMemOS 38.38%、mem0 平台版 J≈0.20）都是别人跑的，也不是我们跑的。其余数字仍只能当背景。
 
 ### 未找到公开资料（不编）
 - ChatGPT 记忆机制的官方细节（写入规则、注入时机、是否用于训练）——三个官方入口均 403。

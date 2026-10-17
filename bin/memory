@@ -35,7 +35,7 @@ import { readSourceIndex } from '../src/import/engramory.js';
 import { finiteOr } from '../src/util/text.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.1';
 
 export const USAGE = `tabellio — 显式记忆服务（M1）
 

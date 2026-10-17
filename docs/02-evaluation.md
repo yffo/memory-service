@@ -179,6 +179,8 @@
 
 ### 4.6 评测集 JSON schema 草案
 
+> **实现现状（2026-10-17）**：下面这份 schema 是**目标设计**，尚未落地。当前 `bench/core-30-v1/tasks.json` 只有顶层 `version` 和 `tasks`；每题字段为 `id / kind / prompt / expect[] / forbid[] / source[]`。逐字段差异与迁移顺序见 §4.6.1。
+
 ```jsonc
 {
   "schema": "yffto.eval.suite/1",
@@ -235,15 +237,41 @@
 }
 ```
 
+#### 4.6.1 目标 schema 与当前题集的差异（2026-10-17）
+
+| 目标字段 | 当前实际 | 后果 |
+|---|---|---|
+| `capability` | `kind`（`fact_recall` / `preference` / `procedure` / `correction` / `refusal`） | 只能按这 5 类分层；`single_hop` / `multi_hop` / `temporal` / `knowledge_update` / `negative_transfer` 分不出来。多跳、时间推理、知识更新、陷阱题的结论目前是**未测**，不是「通过」。 |
+| `gold_notes[]` | `source[]`（笔记 id） | 有等价物；oracle 臂读它。 |
+| `expected.answer` | `expect[]`（逐字子串） | 判分硬编码 substring；同义改写被误判，0.744 / 1.408 是下界。 |
+| `expected.answer_aliases` | 无 | 无法接纳「400 行」对「不超过 400 行」这类正确改述；修它是下一刀判分器工作的第一项。 |
+| `expected.must_not_contain` | `forbid[]` | 已用于反向约束。 |
+| `expected.judge` / `judge_args` | 无（只有硬编码 substring + 拒答规则） | 没有 `set_match` / `cheap_judge` / 人工抽检；拒答用「空答案 / `refused` 标志 / 固定措辞正则」判（`bench/scorer.mjs` 的 `looksRefused`），不是独立的 `refusal_match` 字段。 |
+| `negative_transfer_probe` | 无 | 没有陷阱题，`trap_fall_rate` 算不出来；`negative_transfer` 只能算「加记忆的净收益」，不能算「被错记忆带偏」。**不能据此写「判据 3 成立」**。 |
+| `setup.ops` | 无 | 不能在题级构造失效/更新场景；目前靠 `bench/replay.mjs` 的时间回放单独测。 |
+| `difficulty` / `leak_check` / `tags` | 无 | 不能按难度分层报告，也没有自动 8-gram 防泄漏自检。 |
+| 顶层 `budgets` / `baselines` / `scoring` | 无 | 预算曲线、基线与权重在 CLI/脚本层表达，不在题集 schema 里。 |
+
+**迁移顺序**：① 先把 `kind` 映射到 `capability`，并给现有 32 道可答题补 `answer_aliases`（下一刀，判分器口径）；② 再加 `setup.ops` 与 `negative_transfer_probe`（陷阱/更新题）；③ `difficulty` / `leak_check` 随新题一起补。在 ①② 完成前，分层、陷阱、别名相关的结论一律写「未测」。
+
 **同目录放最小语料快照**：只放被 gold_notes 引用到的笔记 + 陷阱笔记（约 20~30 条），其余从真实库里按快照 ID 引用，避免评测集里囤一份会腐烂的副本。
 
-### 4.7 跑分脚本接口设计
+### 4.7 跑分脚本接口（设计 vs 现状）
 
-```
-run_eval.py --suite <suite.json> --system <adapter> [--budget 500] [--runs 3] [--out results/]
+> **实现现状（2026-10-17）**：脚本不是 `run_eval.py`，而是零依赖的 `node bench/run-eval.mjs`。下面是早期设计稿；实际参数与输出字段以 `node bench/run-eval.mjs --help` / `--json` 为准。
+
+```bash
+# 零成本（CI 默认）：检索臂 + echo 回答器
+node bench/run-eval.mjs --same-corpus --arms none,new,legacy --json
+
+# 回答层三档（真实模型；需要 EVAL_LLM_API_KEY 或 DEEPSEEK_API_KEY）
+node bench/run-eval.mjs --same-corpus --arms none,new,oracle \
+  --answerer llm --runs 3 --concurrency 4 --json --out bench/core-30-v1/runs/answer.md
 ```
 
-**输入**
+常用参数：`--arms`（`none` / `new` / `legacy` / `oracle`）、`--answerer`（`echo` / `first-hit` / `llm`）、`--runs`、`--concurrency`、`--json`、`--dry`、`--same-corpus`、`--out`，以及 `--tasks` / `--library` / `--cli` / `--store` / `--timeout` / `--keep-scratch`；题集默认 `bench/core-30-v1`。完整列表见脚本头注释。`--budget` / `--seed` 尚未实现。
+
+**输入（早期设计稿，未全部实现）**
 | 参数 | 含义 |
 |---|---|
 | `--suite` | §4.6 的评测集 JSON |
@@ -252,7 +280,7 @@ run_eval.py --suite <suite.json> --system <adapter> [--budget 500] [--runs 3] [-
 | `--runs` | 重复次数，用于报 mean ± σ（对齐 mem0/Zep 的做法，≥3） |
 | `--seed` | 随机种子，写入结果以便复现 |
 
-**输出**（`results/<suite>__<system>__<budget>__<hash>.json`）
+**输出（早期设计稿；实际字段以 `--json` 为准）**（`results/<suite>__<system>__<budget>__<hash>.json`）
 ```jsonc
 {
   "run": { "suite_id": "core-30-v1", "system": "new", "budget": 500,
@@ -283,7 +311,7 @@ run_eval.py --suite <suite.json> --system <adapter> [--budget 500] [--runs 3] [-
 **指标定义（脚本内唯一权威）**
 | 指标 | 公式 |
 |---|---|
-| `accuracy` | 判对条数 / N（拒答题按 `refusal_match` 判） |
+| `accuracy` | 判对条数 / N（拒答题按拒答规则判） |
 | `recall@k` | `mean_i( |G_i ∩ top-k(I_i)| / |G_i| )` |
 | `hit_but_unused_rate` | `mean_i( |(G_i∩I_i) \ U_i| / |G_i∩I_i| )`，分母为 0 的题目排除并单列计数 |
 | `injected_tokens_mean` | `mean_i(injected_tokens_i)` |

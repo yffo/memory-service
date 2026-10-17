@@ -31,7 +31,7 @@ export const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(['2026-07-28', '2025-11
 export const LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0];
 /** 产品名（`serverInfo.name`）。宿主面板里显示的就是它，所以是产品名而不是仓库名。 */
 export const SERVER_NAME = 'tabellio';
-export const SERVER_VERSION = '0.1.0';
+export const SERVER_VERSION = '0.1.1';
 
 /** JSON-RPC 错误码（协议层；工具执行错误走 `result.isError`，见 §1.6）。 */
 export const RPC = Object.freeze({

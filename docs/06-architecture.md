@@ -1,6 +1,6 @@
 # 架构设计：tabellio
 
-- 状态：M0 出口物之一（草案，待评审）
+- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）；M2 巩固与生命周期尚未实现。本文的目录、五原语 JSON、receipt / consolidate 是**目标架构**，不是现状；已实现模块见 §2.2。
 - 上游文档：`00-brief.md`（立项书）· `01-landscape-systems.md`（竞品与接口层）· `02-evaluation.md`（评测方法）· `03-hosts-and-interfaces.md`（宿主与接口）· `04-cost-model.md`（成本）· `05-agi-direction.md`（长期方向）
 - 基线：`~/yffto/dsh-engramory-recall`（第一条线，必须赢过它，而不是取代它）
 - 读者：出资方（看 §1 §8 §10 就够）与实现者（§2–§7 §9）
@@ -11,7 +11,7 @@
 
 ## 1. 一句话定位与边界
 
-**tabellio 是一个跨宿主的本地长期记忆服务**：一份纯文本事实库 + 一个 MCP 服务 + 一个空闲期巩固进程；任何 CLI / IDE / 自研 agent 通过 MCP 工具按需读写它，拿到的是带来源、带有效期、带信任等级的记忆内容。
+**tabellio 是一个跨宿主的本地长期记忆服务**（目标形态）：一份纯文本事实库 + 一个 MCP 服务 + 一个空闲期巩固进程（巩固进程尚未实现）；任何 CLI / IDE / 自研 agent 通过 MCP 工具按需读写它，拿到的是带来源、带有效期、带信任等级的记忆内容。
 
 三个词各自落到实处。**跨宿主**：唯一一等接口是 MCP，DSH 插件与 CLI 都只是壳；靠「读同一批文件 + 同一套工具语义」保持一致，不靠同步。**服务而不是插件**：插件可以只服务一个宿主、可以深挖那个宿主的私有能力；服务要在 11 个宿主里至少 3 个上跑通同一套语义（宿主清单见 `03-hosts-and-interfaces.md`）。**本地长期**：默认零 API 成本、纯文本落盘、`cat` 得出、git 管得住、随时带走。
 
@@ -48,6 +48,8 @@ adapters/   宿主接口壳                data/     真相源与派生索引
 - 任何一门语言实现都要能通过同一套 `core` 行为测试（一致性测试向量随包发布）。
 
 ### 2.2 目录草案
+
+> 下面是**目标目录**，不是当前仓库布局。当前是单包 `src/`：`src/core`、`src/store`、`src/gate`、`src/mcp`、`src/import`、`bin/memory`；`packages/core`、`adapters/`、`consolidate/`、`serve` 等尚未拆分/实现。`core` / `adapters` 是逻辑分层，不是物理包。
 
 ```
 memory-service/
@@ -195,7 +197,7 @@ index/groups/<nnn>-<组名>.md 清单层：一组一行指针（每文件 ≤ 40
 
 热路径**不做**：不改旧记录、不做冲突消解、不合并、不摘要、不调模型。三条独立证据指向同一结论（mem0 2026-04 起单次 LLM 调用只 ADD；Letta 把整理放 sleep-time；dsh-mneme 冲突冻结进人工队列），见 `01-landscape-systems.md`。
 
-### 4.2 空闲期巩固（唯一的「改」入口）
+### 4.2 空闲期巩固（唯一的「改」入口；M2 计划，尚未实现）
 
 触发：显式 `consolidate`、空闲期后台、或每晚一次（可关）。巩固分两步，**决策与执行分离**：
 
@@ -492,16 +494,18 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 
 **仍然答错（该拒没拒）的 4 题**：`r03`（Orchid 连接池上限）、`r07`（Orchid 每日配额）、`r11`（文案字数上限）、`r12`（构建流水线阶段数）。四题都是**假命中**：跨词或话题相关的笔记把 coverage 顶到 0.6 以上（实测 top 命中 coverage 0.613 / 0.659 / 0.677 / 1.000）。这一现象的机制在 §5.4 已经写过，M3 没有改算法（§5.5 的扫描给不出可信的替代阈值），所以把它们**如实留在题集里当负例** —— 一个只由「已经能拒的题」组成的题集会自己给自己记功。
 
-**判据 3 实测（M3 新增装置，`node bench/replay.mjs`）**：
+**判据 3 的窄口径实测（M3 新增装置，`node bench/replay.mjs`；不是完整判据 3）**：
 
 模拟 4 周：28 个使用日 × 每天 6 次召回 = **168 次召回**，32 条事实、写入 44 条笔记（含 12 条被取代的旧值）。刻度与阈值的定义写在 `src` 之外的装置里（`bench/replay.mjs` 的 `CRITERION3`），量本身按 `02-evaluation.md §5`：`staleness_rate` = 召回结果里**第一条是被取代的旧值**的次数 ÷ 召回次数；`negative_transfer` 用三档对照 `closed_book` / `oracle_gold` / `real`。
 
 | 量 | 实测 | 阈值 | 状态 |
 |---|---|---|---|
-| `staleness_rate` | **0**（0/168） | ≤ 0.05 | ✅ |
-| `negative_transfer` | **0**（0/168；宽口径「上下文里混进旧值，不管排第几」也是 0） | ≤ 0.02（正值=有害） | ✅ |
+| `staleness_rate` | **0**（0/168） | ≤ 0.05 | ✅ 窄口径 |
+| `negative_transfer` | **0**（0/168；宽口径「上下文里混进旧值，不管排第几」也是 0） | ≤ 0.02（正值=有害） | ✅ 窄口径（非陷阱题） |
 | 回放结束后重问 32 件事 | 答不出 **0**；第一条注入就是旧值 **13**（40.6%） | — | 记数 |
 | 4 周里直接拒答 | **1/168**（0.6%） | — | 记数 |
+
+**这只是窄口径，不是完整判据 3**：`02-evaluation.md` 的完整判据还要求 `trap_fall_rate ≤ 25%`，而当前题集没有 `negative_transfer_probe` / 陷阱题；回放的 `--traps` 是灵敏度对照，不是判分题。因此可以写「时间回放的窄口径达标」，不能写「判据 3 成立」。
 
 **口径偏离：三档已补上，残留的是回放装置**。`02-evaluation.md` 要求 `negative_transfer` 用 `closed_book` / `oracle_gold` / `real` **三档对照**算「加记忆反而更差几个点」。M3 的回放装置只有窄口径（= 第一条注入是被取代的旧值、而当前真值没排到它前面，与 `staleness_rate` 同分母）；**M4 起在 `core-30-v1` 上跑通了三档**：`node bench/run-eval.mjs --arms none,new,oracle --answerer llm --runs 3`（2026-10-17，52 题，deepseek-flash），acc 为 none **0.385** / new **0.744** / oracle **0.846**，`negative_transfer = −0.359`（≤ 0.02，记忆净收益 35.9 个百分点），`oracle_gap = 0.103`，回答层 `token_efficiency = 1.408`（< 2.0，**判据 2 不成立**）。判分是逐字子串，oracle 的 8 道错题里 7 道是同义改写被误判、1 道（k06）是题面与 `expect` 不一致，所以 0.744 是**下界**、`oracle_gap` 高估了检索损失；修判分口径（`answer_aliases` / 判分器对抗集）是下一刀。**残留**：`bench/replay.mjs` 的 168 次时间回放仍是窄口径（没有模型回答），不能把 `core-30-v1` 的三档数字搬过去；`staleness_rate` 仍只由回放认定，回答层只负责 `negative_transfer` / `token_efficiency`。
 
@@ -517,7 +521,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 
 ### 6.2 每题可追溯来源
 
-一题一条记录，字段见 `02-evaluation.md §4.6` 的 `yffto.eval.suite/1`：`id / capability / gold_notes[] / expected{answer, judge} / negative_transfer_probe`。关键纪律：① **反向构题**——先选定一条记忆，再写一道只有它能回答的题，`gold_notes` 构造时即确定，不需要事后标注；② **防泄漏**——任务文本与 gold_notes 正文的字符 8-gram 重叠 >30% 退回重写，期望答案限长 ≤60 字，同答案命中多条 gold 只算一次；③ **判分器优先级**——`substring/regex/归一化` > `set_match` > `refusal_match` > `cheap_judge`（配额 ≤20%）> 人工抽检（20%），拒答**必须用 refusal_match 判，不许让 LLM 裁判判「拒绝」**；④ **判分器本身要被评测**——用「含糊但切题」的对抗答案打自己的裁判（接受率目标 <20%），人工抽检记录 Cohen's κ，κ<0.6 则该裁判分数不采信。
+一题一条记录。**当前题集的实际字段是 `id / kind / prompt / expect[] / forbid[] / source[]`**（`bench/core-30-v1/tasks.json`）；`02-evaluation.md §4.6` 的 `capability / gold_notes / expected{answer, judge} / negative_transfer_probe` 是目标 schema，尚未落地（差异见 `02-evaluation.md §4.6.1`）。关键纪律：① **反向构题**——先选定一条记忆，再写一道只有它能回答的题，`source` 构造时即确定，不需要事后标注；② **防泄漏**——任务文本与 `source` 正文的字符 8-gram 重叠 >30% 退回重写，期望答案限长 ≤60 字，同答案命中多条 `source` 只算一次；③ **判分器优先级**——`substring/regex/归一化` > `set_match` > `refusal_match` > `cheap_judge`（配额 ≤20%）> 人工抽检（20%），拒答**必须用 refusal_match 判，不许让 LLM 裁判判「拒绝」**；④ **判分器本身要被评测**——用「含糊但切题」的对抗答案打自己的裁判（接受率目标 <20%），人工抽检记录 Cohen's κ，κ<0.6 则该裁判分数不采信。
 
 ### 6.3 CI 怎么跑
 
@@ -558,9 +562,11 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 |---|---|---|---|
 | **M0**（已完成调研） | 6 份文档 + `suite/core-30-v1` 题集 + `run_eval.py` 骨架 + `ledger_replay` 适配器 | 判据 1 的对照基线跑出数字（`--system none` 与 `--system ledger_replay` 两条命令能出结果） | 若 `ledger_replay` 都跑不出可用数字，说明评测脚手架或帐本口径有问题 → 先修评测，不许开写检索代码 |
 | **M1 垂直切片** | `core` 词法检索 + `adapters/mcp`（Dual-era + 薄壳）+ 写入闸门 + 旧库导入 | **判据 1**：`recall@5 ≥ 0.80` 且 `correct_refusal_rate ≥ 0.75`（`02-evaluation.md §5`） | 若纯词法档达不到 0.80 且开本地向量也达不到 → 停下，问题在数据模型而不在检索（回到 §3 重切 `(subject,predicate)`） |
-| **M2 巩固与生命周期** | 巩固进程（决策/执行分离 + receipt + 撤销）、provenance、冲突时效化、衰减与归档、核心档 push（≤400 字）；**另加两件 M1 遗留的洞**：分层索引（§3.1.1，修掉「读索引九成瞎」）与切词层跨词碎片（§5.4，把 `correct_refusal_rate` 从 0.125 修到 0.75） | **判据 2 + 判据 3**：`injected_tokens_mean ≤ 545`、`token_efficiency ≥ 2.0`、4 周模拟回放 `staleness_rate ≤ 0.05`、`negative_transfer ≤ 0.02`；**判据 1 复测**：M2 开工时 `correct_refusal_rate` 只有 0.125（不达标），应当在同一期修到达标 | 若 `negative_transfer > 0` 且已关 push 仍为正 → 停掉巩固进程的自动 apply，退回「只产候选 + 人工确认」模式；若 4 周回放只能在时间压缩下通过、真实 30 天过不了，说明膨胀问题未解，先做删减不做分发 |
+| **M2 巩固与生命周期** | 巩固进程（决策/执行分离 + receipt + 撤销）、provenance、冲突时效化、衰减与归档、核心档 push（≤400 字）；**另加两件 M1 遗留的洞**：分层索引（§3.1.1，修掉「读索引九成瞎」）与切词层跨词碎片（§5.4，把 `correct_refusal_rate` 从 0.125 修到 0.75） | **判据 2 + 判据 3**：`injected_tokens_mean ≤ 545`、`token_efficiency ≥ 2.0`、4 周模拟回放 `staleness_rate ≤ 0.05`、`negative_transfer ≤ 0.02`、陷阱题落入率 ≤25%；**判据 1 复测**：M2 开工时 `correct_refusal_rate` 只有 0.125（不达标），应当在同一期修到达标 | 若 `negative_transfer > 0` 且已关 push 仍为正 → 停掉巩固进程的自动 apply，退回「只产候选 + 人工确认」模式；若 4 周回放只能在时间压缩下通过、真实 30 天过不了，说明膨胀问题未解，先做删减不做分发 |
 | M3 | 三宿主实机验证 + npm/MCP registry 分发 | 三宿主各有端到端录屏/日志（`00-brief.md §7`） | — |
 | M4 | 黄页/市场/文档站，第一个外部用户 | 外部用户装上并留下反馈（`00-brief.md §7`） | — |
+
+**现状（2026-10-17）**：M0 / M1 完成；M2 未开始；M3 只完成分发侧（npm + MCP registry），三宿主实机验证未做；M4 未开始。
 
 每期结束必须留下数字，没有数字的里程碑不算完成（`00-brief.md §7` 与 §8 风险表第一条）。
 
@@ -569,6 +575,8 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 ## 9. 关键接口草案
 
 五个操作，收敛到 5±2 个（`03-hosts-and-interfaces.md` 的结论）。默认只读；写操作带行为提示（`read-only` / `idempotent` / `destructive`，照抄 Basic Memory 的渐进式工具发现做法）。下面保留关键字段与全部返回形态（成功 / 幂等 / 拒绝 / 跳过 / 错误），实现者按此签名建类型。
+
+> **现状**：只实现了 `remember` / `recall`（CLI 与 MCP）；`consolidate` / `forget` / `explain` 尚未实现，下面的 JSON 是目标接口。
 
 ```js
 // ── remember：写入。热路径，零 LLM 调用。幂等（同 scope 同内容返回已有 id）

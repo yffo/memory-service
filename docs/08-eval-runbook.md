@@ -49,7 +49,7 @@ EVAL_LLM_API_KEY=... node bench/run-eval.mjs --arms none,new,oracle \
 | `none` | 空上下文（closed_book） | 退化基线。它答对任何一题都说明题集泄题了 |
 | `new` | `node bin/memory search --query "<q>" --json` | 被测系统（real）。库是语料库的临时副本 |
 | `legacy` | 子进程 import 旧仓库的 `store.js` + `bm25.js`（**只读**） | 旧插件基线。默认读 `~/memory/engramory` |
-| `oracle` | 小题的 `gold_notes` 正文直接读进上下文 | oracle_gold 上限。只配 `--answerer llm`，否则回显 gold 会得出假准确率 |
+| `oracle` | 题集 `source` 声明的 gold 笔记正文直接读进上下文 | oracle_gold 上限。只配 `--answerer llm`，否则回显 gold 会得出假准确率 |
 
 `--same-corpus` 让 legacy 臂也读同一份虚构语料（临时 flat 库）。**判据 1 的主口径用同语料**：
 不同库的 recall 不可比（旧库是 74 篇私人笔记，本来就不该命中虚构题集）。
@@ -98,7 +98,7 @@ EVAL_LLM_API_KEY=... node bench/run-eval.mjs --arms none,new,oracle \
 | `answered_rate` | 没拒答的比例（拒答可能是好事也可能是坏事，配合上面两行看） | 参照 |
 | 调用失败数 / 缺题数 | CLI 非零退出、输出不是 JSON、某题没记录 | 必须 0 |
 
-判分优先级：确定性的字符串/集合判定 > `refusal_match`。**「拒绝」绝不用 LLM 裁判判**。
+判分默认用确定性的字符串/集合规则；拒答用 `looksRefused`（空答案 / `refused` 标志 / 固定措辞正则），两者都不调 LLM。**「拒绝」绝不用 LLM 裁判判**。
 
 ### 4.2 逐题表
 
@@ -134,7 +134,7 @@ EVAL_LLM_API_KEY=... node bench/run-eval.mjs --arms none,new,oracle \
 
 1. `answer_token_efficiency = (acc(new) − acc(none)) ÷ (new.injected_tokens_mean/1000) ≥ 2.0` —— 判据 2 的准确率/成本口径。
 2. `injected_tokens_mean ≤ 545` —— 判据 2 的旧账本预算上限（判据 1 更严，是 500）。
-3. `negative_transfer = acc(none) − acc(new) ≤ 0.02` —— 判据 3；正值=记忆让回答变差。
+3. `negative_transfer = acc(none) − acc(new) ≤ 0.02` —— 判据 3 的**窄口径**（记忆净收益/净伤害）；正值=记忆让回答变差。完整判据 3 还要求陷阱题 `trap_fall_rate ≤ 25%`，当前题集没有 `negative_transfer_probe`，所以这一项只能写「窄口径达标」。
 
 判据 1 用零模型默认口径单独判；回答层成立不自动等于判据 1 成立，反之亦然。报告里两段结论分开印。
 
@@ -188,14 +188,14 @@ M2 的 32 题是 310.0，M3 的 52 题是 254.9，变的不是系统而是题目
 只输出曲线与一个「在召回 ≥ 0.95 约束下有没有可行解」的建议。
 当前结论见 `06-architecture.md §5.5`：证据性闸门在刚过 200 篇的语料上是坏的，建议把启用阈值抬到 1000 篇、df 比收到 0.02 —— M3 **没有动生产常量**。
 
-## 6.3 回答层三档怎么跑（M4 新增，判据 2/3 的主口径）
+## 6.3 回答层三档怎么跑（M4 新增；判据 2 主口径 + 判据 3 窄口径）
 
-判据 2 的 `token_efficiency` 与判据 3 的 `negative_transfer` 定义里都有 `accuracy`，没有模型回答器就算不出来。
+判据 2 的 `token_efficiency` 与判据 3 的 `negative_transfer` 定义里都有 `accuracy`，所以回答层必须显式开模型；默认零模型口径只能报检索层代理值。
 三档就是 `02-evaluation.md §4.5` 的 `closed_book` / `oracle_gold` / `real`，对应本装置的 `none` / `oracle` / `new`：
 
 - `none`：空上下文（closed_book）。
 - `new`：CLI 检索出的 top-5 注入（real）。
-- `oracle`：题集声明的 `gold_notes` 正文直接读进来（oracle_gold，检索上限）；**只允许配 `--answerer llm`**，
+- `oracle`：题集 `source` 声明的 gold 笔记正文直接读进来（oracle_gold，检索上限，`source` 是旧 schema `gold_notes` 的现名）；**只允许配 `--answerer llm`**，
   否则回显 gold 正文会得出假准确率。
 
 ```bash
@@ -214,8 +214,9 @@ EVAL_LLM_API_KEY=... node bench/run-eval.mjs --arms none,new,oracle \
 
 由此算出的判据 2/3 回答层：
 
-- `negative_transfer = acc(none) − acc(new) = 0.385 − 0.744 = −0.359`，**达标**（阈值 ≤ 0.02，正值=记忆有害）。
-  记忆不但没害人，还把答对率抬了 35.9 个百分点。
+- `negative_transfer = acc(none) − acc(new) = 0.385 − 0.744 = −0.359`，**窄口径达标**（阈值 ≤ 0.02，正值=记忆有害）。
+  记忆不但没害人，还把答对率抬了 35.9 个百分点。**但这只是窄口径**：它测的是「加记忆的净收益」，不是「被错记忆带偏的损失」；
+  完整判据 3 的 `trap_fall_rate` 需要陷阱题，当前题集没有，不能写「判据 3 成立」。
 - `answer_token_efficiency = (0.744 − 0.385) ÷ (254.9/1000) = 1.408`，**不达标**（阈值 ≥ 2.0），
   即每 1K 注入 token 只换回 1.4 个百分点准确率，离 2.0 还差 30%。**判据 2 不成立。**
 - `oracle_gap = 0.846 − 0.744 = 0.103`，参照值；差额一半以上不是检索的锅，见下。
@@ -232,6 +233,7 @@ oracle 的 8 道错题里 7 道是这类同义改写（p01/p02/p05/p07/p08/c01/k
 
 逐轮稳定性：`new` 三轮 0.750 / 0.750 / 0.731，单题一致率 0.962；`oracle` 三轮完全一致；`none` 三轮一致。
 温度 0 下波动来自推理链与上下文长度，重跑 3 轮取均值是这条口径的最低要求（单轮会差 1~2 题）。
+注意：deepseek-flash 的 thinking 默认开启，thinking 模式下温度参数不生效，所以「温度 0」不等于确定性；波动主要来自推理链长度。
 
 
 ## 7. 已知局限（读数字时要扣掉的部分）

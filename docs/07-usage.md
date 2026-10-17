@@ -1,6 +1,6 @@
 # 07 · 用法
 
-`tabellio` 的 M1 是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
+`tabellio` 当前（M1）是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
 零运行时依赖：`node bin/memory` 直接就能跑，不需要 `npm install`。
 
 - 要求：Node ≥ 20.11（实测 Node 25.8）。
@@ -120,7 +120,7 @@ $ node bin/memory search --query "索引上限是多少行" --json
  "tokens":448,"refused":false,"reason":null}
 ```
 
-- `hits[].id` 就是**笔记文件名**（`read --id` 直接吃；评测的 `gold_notes` 也是这个名字）。
+- `hits[].id` 就是**笔记文件名**（`read --id` 直接吃；评测的 `source`（旧 schema 叫 `gold_notes`）也是这个名字）。
 - `hits` 只有指针（id / title / score），正文要用 `read` 取 —— 这是「pull 优先」：
   召回不替你决定要看什么。
 - `tokens` 是这次结果**实际占的预算**；`refused` 是正常结果不是错误：
