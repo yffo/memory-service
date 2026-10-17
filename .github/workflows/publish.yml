@@ -1,0 +1,36 @@
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write          # npm Trusted Publisher（OIDC）
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing 需要 npm >= 11.5.1
+      - run: npm install -g npm@11
+
+      - name: 版本与 token 自检
+        run: |
+          node --version && npm --version
+          node -e "const p=require('./package.json');console.log(p.name, p.version, p.mcpName||'')"
+          test -z "${NODE_AUTH_TOKEN:-}" || { echo "NODE_AUTH_TOKEN 不该存在（应走 OIDC）"; exit 1; }
+
+      - name: 测试
+        run: npm test
+
+      - name: 发布
+        run: npm publish --access public --provenance
