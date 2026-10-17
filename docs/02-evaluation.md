@@ -249,7 +249,7 @@
 | `expected.answer_aliases` | 顶层 `answer_aliases[]`（不是 `expected` 内） | **已实现（2026-10-17）**：32 道可答题各补 1–4 条，判分改判 `expect[] || answer_aliases[]`；`forbid[]` 优先级不变，别名不能绕过反向约束。仍是人工白名单，不是语义判分；白名单没覆盖的改述仍会误判。 |
 | `expected.must_not_contain` | `forbid[]` | 已用于反向约束。 |
 | `expected.judge` / `judge_args` | 无（只有硬编码 substring + 拒答规则） | 没有 `set_match` / `cheap_judge` / 人工抽检；拒答用「空答案 / `refused` 标志 / 固定措辞正则」判（`bench/scorer.mjs` 的 `looksRefused`），不是独立的 `refusal_match` 字段。 |
-| `negative_transfer_probe` | 顶层 `negative_transfer_probe`（4 道 `negative_transfer` 题） | **已实现（2026-10-17）**：`distractor_note` + `why_wrong` + `fall_patterns`，探针值必须能在 distractor 正文追到且不进 `source`。当前 `trap_tasks=4`、`trap_falls=1`、`trap_fall_rate=0.25`（压线，1 题是 f01 答出预发端口 9443）。n 太小，不能据此写「判据 3 成立」。 |
+| `negative_transfer_probe` | 顶层 `negative_transfer_probe`（4 道 `negative_transfer` 题） | **已实现（2026-10-17）**：`distractor_note` + `why_wrong` + `fall_patterns`，探针值必须能在 distractor 正文追到且不进 `source`。当前 `trap_tasks=4`；零模型 `echo` 口径 `trap_falls=1`、`trap_fall_rate=0.25`（f01 回显预发端口 9443），真模型回答层是 0/4。n 太小，不能据此写「判据 3 成立」。 |
 | `setup.ops` | 无 | 不能在题级构造失效/更新场景；目前靠 `bench/replay.mjs` 的时间回放单独测。 |
 | `difficulty` / `leak_check` / `tags` | 无 | 不能按难度分层报告，也没有自动 8-gram 防泄漏自检。 |
 | 顶层 `budgets` / `baselines` / `scoring` | 无 | 预算曲线、基线与权重在 CLI/脚本层表达，不在题集 schema 里。 |
@@ -268,7 +268,7 @@
 - **跑法**：`node bench/judge-adversarial.mjs`（`--json` 出机器可读，`--verbose` 列全部用例，`--tasks` / `--suite` 换题集）。零依赖、零模型调用，失败退 1，参数/文件错误退 2。
 - **判据**：误收率 = 实际接受的应拒绝用例 / 应拒绝用例总数，必须 **< 0.20**；正确接受率必须 **≥ 0.95**（正确改述被拒也是判分器 bug）。两条同时满足才 `pass`。
 - **2026-10-17 实测**：106 条全部符合预期；应拒绝 54 条**一条没被收**（误收率 0.0000），应接受 52 条**全部接住**（正确接受率 1.0000）。按 label：`correct` 32/32、`correct_refusal` 20/20、`ambiguous_wrong` 32 全拒、`hallucinated` 20 全拒、`hedged_hallucination` 2 全拒。
-- **边界**：这打的是**规则判分器**（substring + 别名 + 拒答正则），不是 LLM 裁判；20% 人工抽检与 Cohen's κ **仍未做**。别名是人工白名单，可能对题集过拟合；它只说明「这批改述能接住」，不说明「任意语义等价都能接住」。`negative_transfer_probe` 已落地 4 道题，但对抗集没有覆盖新加的多跳/时间题；`trap_fall_rate` 现有 4 题分母（1/4 = 0.25），只能当方向。
+- **边界**：这打的是**规则判分器**（substring + 别名 + 拒答正则），不是 LLM 裁判；20% 人工抽检与 Cohen's κ **仍未做**。别名是人工白名单，可能对题集过拟合；它只说明「这批改述能接住」，不说明「任意语义等价都能接住」。`negative_transfer_probe` 已落地 4 道题，但对抗集没有覆盖新加的多跳/时间题；`trap_fall_rate` 现有 4 题分母（零模型 1/4，真模型 0/4），只能当方向。
 
 ### 4.7 跑分脚本接口（设计 vs 现状）
 
@@ -376,12 +376,13 @@ node bench/run-eval.mjs --same-corpus --arms none,new,oracle \
 **判据 2 · 成本不劣化**
 > 在同等准确率下，`injected_tokens_mean ≤ 545`（旧账本基线）**且** `token_efficiency ≥ 2.0`（每 1K 注入 token 至少换 2 个百分点的准确率增益）。
 - 证伪条件：注入 token 比旧方案多但准确率没涨；或成本曲线上不存在「拐点之前」的预算档位。
+- **当前实测（2026-10-17，56 题，deepseek-flash，3 轮）**：`injected_tokens_mean = 266` 过 ≤545，但 `token_efficiency = 1.611` **不达标**（Δaccuracy = 0.4286）。按这个注入量，要到 2.0 需要准确率 ≥0.889；即使 `new` 追平 oracle 的 0.887，也只有 (0.887−0.357)÷0.266 = 1.99，仍差一点。**单靠补判分别名过不了判据 2，必须减注入或显著提检索。**
 - 为什么：这是唯一能反驳「直接用全量上下文算了」的判据。参考 §3：如果我们的注入成本逼近 full-context，那检索层就没有存在理由。
 
 **判据 3 · 不腐烂、不害人**
 > 4 周回放后 `staleness_rate ≤ 0.05`，且 `negative_transfer ≤ 0.02`（正值=有害，即记忆不得让准确率下降超过 2 个百分点）。
 - 证伪条件：同一个问题跨周答案自相矛盾；或加入记忆后比 closed-book 更差；或陷阱题落入率 > 25%。
-- **当前实测（2026-10-17）**：`core-30-v1` 已有 4 道 `negative_transfer` 陷阱题，`trap_fall_rate = 1/4 = 0.25`，正好压在阈值线上（f01 答出了预发端口 9443）；n 只有 4，不能据此写「判据 3 成立」。`staleness_rate` 仍由 `bench/replay.mjs` 的 4 周回放单独测。
+- **当前实测（2026-10-17，56 题）**：真模型回答层 `trap_fall_rate = 0/4`（none/new/oracle 均为 0），`negative_transfer = −0.429`；回放 `staleness_rate = 0/168`。三项数值都过线，但陷阱分母只有 4；零模型 `echo` 口径仍是 1/4 = 0.25（f01 回显 9443）。因此写「窄口径数值过线」，不写「判据 3 成立」。
 - 为什么：记忆系统的失败模式不是「没想起来」而是「想起了错的」，而这一条恰恰是所有公开基准（LoCoMo 完全没测、LongMemEval 有 abstention 但无时间回放）覆盖最弱的。
 
 ---

@@ -456,8 +456,8 @@ node bench/judge-adversarial.mjs                 # 判分器对抗集 106 条，
   通过门槛是误收率 < 20%、正确接受率 ≥ 95%。详细口径见 `docs/02-evaluation.md §4.6.2` 与
   `docs/08-eval-runbook.md §6.4`。
 - 题集 56 题已标 `capability`（六类），其中 4 道 `negative_transfer` 陷阱题带 `negative_transfer_probe`；
-  `run-eval` 会按能力分表并报 `trap_fall_rate`。当前 4 题里 1 题落入（0.25，压线），分母太小，只当方向。
-- 当前回答层没有可用 API key，所以判据 2 的新口径数字**未重测**；旧的 1.408 是补别名前的下界，不能当结论。
+  `run-eval` 会按能力分表并报 `trap_fall_rate`。零模型 `echo` 口径当前 4 题里 1 题落入（0.25，压线），真模型回答层是 0/4；分母太小，只当方向。
+- 2026-10-17 补别名后用真实模型重测（56 题 / deepseek-flash / 3 轮）：acc closed_book **0.357** / real **0.786** / oracle **0.887**；`negative_transfer = −0.429`；回答层 `token_efficiency = 1.611 < 2.0`，**判据 2 仍不成立**。报告在 `bench/core-30-v1/runs/2026-10-17-answer-56.md`；旧 1.408 是补别名前的 52 题下界，不能当结论。
 
 ## MCP（给 Agent 用）
 
