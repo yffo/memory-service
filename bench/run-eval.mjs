@@ -36,6 +36,7 @@
  *   --runs <n>            每臂重复几轮（默认 1；02 要求 ≥3 才报均值/极差，成本按 n 倍算）
  *   --concurrency <n>     llm 回答器并发数（默认 1；4 左右安全）
  *   --k <n>               recall@k（默认 5）
+ *   --inject-k <n>        实际注入 top-n 条笔记的正文（默认 = --k；与 recall 口径解耦）
  *   --timeout <ms>        单次 CLI 调用超时（默认 20000）
  *   --keep-scratch        保留临时库（默认跑完删掉）
  *
@@ -105,6 +106,7 @@ export function parseArgs(argv) {
     runs: 1,
     concurrency: 1,
     k: 5,
+    injectK: null,
     timeout: 20000,
     out: null,
     json: false,
@@ -121,7 +123,7 @@ export function parseArgs(argv) {
   for (const arg of argv) {
     if (!arg.startsWith('--')) continue;
     const key = arg.split('=')[0];
-    if (!flags.has(key) && !['--tasks', '--library', '--cli', '--store', '--store-mode', '--cli-args', '--legacy-repo', '--legacy-store', '--arms', '--answerer', '--runs', '--concurrency', '--k', '--timeout', '--out'].includes(key)) {
+    if (!flags.has(key) && !['--tasks', '--library', '--cli', '--store', '--store-mode', '--cli-args', '--legacy-repo', '--legacy-store', '--arms', '--answerer', '--runs', '--concurrency', '--k', '--inject-k', '--timeout', '--out'].includes(key)) {
       throw new Error(`未知参数 ${arg}（--help 看用法）`);
     }
   }
@@ -138,6 +140,7 @@ export function parseArgs(argv) {
   opts.runs = Number(pick('--runs', opts.runs));
   opts.concurrency = Number(pick('--concurrency', opts.concurrency));
   opts.k = Number(pick('--k', opts.k));
+  opts.injectK = pick('--inject-k', null) === null ? null : Number(pick('--inject-k', null));
   opts.timeout = Number(pick('--timeout', opts.timeout));
   opts.out = pick('--out', opts.out);
   opts.json = argv.includes('--json');
@@ -162,6 +165,7 @@ export function parseArgs(argv) {
   }
   if (opts.answerer === 'llm' && opts.runs < 3) log('提示：--runs < 3，单次/两次结果只能当冒烟，不能当结论（02 §4.7 要求 ≥3 次）。');
   if (!Number.isInteger(opts.k) || opts.k < 1) throw new Error('--k 必须是正整数');
+  if (opts.injectK !== null && (!Number.isInteger(opts.injectK) || opts.injectK < 1)) throw new Error('--inject-k 必须是正整数');
   if (!['auto', 'flag', 'env', 'plain'].includes(opts.storeMode)) throw new Error('--store-mode 只能是 auto/flag/env/plain');
   return opts;
 }
@@ -273,7 +277,7 @@ function childEnv() {
 /** new 臂：子进程调 CLI，拿 {hits, tokens, refused, reason}。任何失败都记成 error，绝不静默当空上下文。 */
 export function callNewArm(task, opts) {
   const store = opts.store ?? opts.library;
-  const args = [opts.cli, 'search', '--query', task.prompt, '--json'];
+  const args = [opts.cli, 'search', '--query', task.prompt, '--json', '--costs'];
   if (opts.storeMode === 'auto' || opts.storeMode === 'flag') args.push('--store', store);
   if (opts.cliArgs) args.push(...String(opts.cliArgs).split(/\s+/).filter(Boolean));
   const env = childEnv();
@@ -287,7 +291,14 @@ export function callNewArm(task, opts) {
   } catch {
     return { error: `输出不是 JSON：${String(res.stdout).trim().slice(0, 120)}`, hits: [] };
   }
-  const hits = Array.isArray(payload.hits) ? payload.hits : [];
+  const rawHits = Array.isArray(payload.hits) ? payload.hits : [];
+  // 成本只认「实际注入的笔记」：CLI 的总 tokens 是 top-8 候选预算，不是注入成本。
+  const costById = new Map(
+    (Array.isArray(payload.costs) ? payload.costs : [])
+      .filter((x) => x && Number.isFinite(x.cost))
+      .map((x) => [String(x.id), x.cost]),
+  );
+  const hits = rawHits.map((h) => (costById.has(String(h.id)) ? { ...h, cost: costById.get(String(h.id)) } : h));
   return {
     hits,
     tokens: Number.isFinite(payload.tokens) ? payload.tokens : null,
@@ -376,7 +387,8 @@ export function buildContext({ hits, store, maskIds, readNote, k = 5 }) {
     const text = body ?? hit.snippet ?? hit.title ?? '';
     if (!text) continue;
     const label = maskIds ? `note#${chunks.length + 1}` : String(file);
-    chunks.push({ file: maskIds ? `note#${chunks.length + 1}` : file, text: `[${label}] ${text}` });
+    const cost = Number.isFinite(hit.cost) ? hit.cost : null;
+    chunks.push({ file: maskIds ? `note#${chunks.length + 1}` : file, text: `[${label}] ${text}`, cost });
   }
   void store;
   return chunks;
@@ -419,7 +431,8 @@ export function goldChunks(task, ctx, k = 5) {
       continue;
     }
     const label = ctx.maskIds ? `note#${chunks.length + 1}` : String(file);
-    chunks.push({ file: label, text: `[${label}] ${body}` });
+    const text = `[${label}] ${body}`;
+    chunks.push({ file: label, text, cost: estimateTokens(text) });
   }
   return { chunks, sources, missing };
 }
@@ -440,6 +453,16 @@ async function answerViaLlm(task, injected, opts, stats) {
 }
 
 /* ────────────────────────── 一轮跑分 ────────────────────────── */
+
+/** 实际注入成本：有逐条 cost 就求和；否则退回旧估算，但绝不拿 top-8 候选预算冒充 top-k 注入。 */
+export function countInjectedTokens({ arm, refused, chunks, cliTokens, injected }) {
+  if (refused) return 0;
+  const allCosted = chunks.length > 0 && chunks.every((c) => Number.isFinite(c.cost));
+  if (allCosted) return chunks.reduce((s, c) => s + c.cost, 0);
+  if (arm === 'new') return estimateTokens(injected);
+  const cliTokensValid = Number.isFinite(cliTokens) && cliTokens !== null;
+  return cliTokensValid ? cliTokens : estimateTokens(injected);
+}
 
 export async function runArm(arm, tasks, opts, ctx) {
   const llmStats =
@@ -464,7 +487,7 @@ export async function runArm(arm, tasks, opts, ctx) {
       if (raw.error) return { task_id: task.id, error: raw.error };
       hits = raw.hits ?? [];
     } else if (arm === 'oracle') {
-      oracle = goldChunks(task, ctx, opts.k);
+      oracle = goldChunks(task, ctx, opts.injectK ?? opts.k);
       if (oracle.sources.length > 0 && oracle.chunks.length === 0) {
         return { task_id: task.id, error: `gold 笔记读不到：${oracle.missing.join('、')}` };
       }
@@ -475,7 +498,7 @@ export async function runArm(arm, tasks, opts, ctx) {
       store: ctx.store,
       maskIds: ctx.maskIds,
       readNote: ctx.readNote,
-      k: opts.k,
+      k: opts.injectK ?? opts.k,
     });
     const injected = refused ? `REFUSED: ${reason ?? 'no relevant note'}` : chunks.map((c) => c.text).join('\n\n');
     let answer = '';
@@ -496,7 +519,8 @@ export async function runArm(arm, tasks, opts, ctx) {
       answer = a.answer;
       refusedNow = a.refused;
     }
-    const tokens = Number.isFinite(cliTokens) && cliTokens !== null ? cliTokens : estimateTokens(injected);
+    // 只记**实际注入**的成本。CLI 的 tokens 是候选预算（top-8），把它当注入成本会虚报。
+    const tokens = countInjectedTokens({ arm, refused, chunks, cliTokens, injected });
     let libraryHitCount = 0;
     if (arm === 'new') for (const hit of hits) if (ctx.libraryFiles.has(String(hit.id))) libraryHitCount += 1;
     if (arm === 'oracle') libraryHitCount = oracle.chunks.length;
@@ -774,7 +798,7 @@ export function renderMarkdown(report) {
     );
   }
   out.push(`- legacy：${opts.legacyRepo}（库 ${opts.legacyStore}${meta.legacyStoreExists === false ? '，**不存在**' : ''}${meta.legacySameCorpus ? '，同一份虚构语料' : ''}）`);
-  out.push(`- 回答器：${answererLabel(opts)}；recall@${opts.k}（命中判定：gold 笔记进没进 top-${opts.k}）`);
+  out.push(`- 回答器：${answererLabel(opts)}；recall@${opts.k}（命中判定：gold 笔记进没进 top-${opts.k}）；实际注入 top-${opts.injectK ?? opts.k}`);
   if (opts.llm) out.push(`- 模型端点：${hostOf(opts.llm.baseUrl)}；温度 ${opts.llm.temperature}；max_tokens ${opts.llm.maxTokens}；轮次 ${opts.runs}（并发 ${opts.concurrency}）`);
   else if (opts.runs > 1) out.push(`- 轮次：${opts.runs}（指标取均值）`);
   out.push(`- 臂：${arms.map((a) => `${a}（${ARM_META[a].label}）`).join(' / ')}`);

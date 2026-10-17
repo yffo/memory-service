@@ -432,7 +432,10 @@ export async function main(argv, io = {}) {
           ledger: Boolean(args.ledger),
         });
         const { diagnostics, ...frozen } = r;
-        emit(json ? frozen : r, { json, human: humanSearch(r) });
+        // `--costs` 是评测专用口：默认契约仍是 {hits,tokens,refused,reason}，
+        // 只有显式要成本时才附上「每条命中各自的预算成本」。
+        const payload = json && args.costs ? { ...frozen, costs: diagnostics?.hitCosts ?? [] } : json ? frozen : r;
+        emit(payload, { json, human: humanSearch(r) });
         return 0;
       }
       case 'recall': {

@@ -475,6 +475,7 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
       ? { written_by: item.note.provenance.written_by, source_ref: item.note.provenance.source_ref }
       : null,
     via: item.source, // pull | push
+    cost: item.cost,
     // 分数**不重算**：直接用打分阶段的拆解，保证 `search` 报的数字与 `recall` 一致。
     score: item.score_breakdown ?? scoreNote({ note: item.note, bm25: 0, nowMs: nowMsValue }),
     relevance: item.relevance ?? 0,

@@ -589,6 +589,8 @@ export function search(ctx, query, options = {}) {
       // 拒答时最该看的就是这个 —— `reason: 'no_informative_term'` 的含义全在这一行里。
       queryInfo: result.diagnostics?.queryInfo ?? null,
       why: result.items.map((i) => ({ id: i.id, why: i.why, via: i.via, score: i.score?.total ?? null })),
+      // 评测器要算「实际注入 top-k」的成本：hits 契约只给 id/title/score，成本放诊断里。
+      hitCosts: result.items.map((i) => ({ id: i.id, cost: i.cost })),
     },
   };
 }

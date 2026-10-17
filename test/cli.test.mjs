@@ -207,6 +207,30 @@ test('CLI search --json：契约字段齐全（hits/tokens/refused/reason）', (
   }
 });
 
+test('CLI search --costs：成本与 hits 对齐，默认契约不变', () => {
+  const { dir, id } = seeded('memory-cli-costs-');
+  try {
+    const plain = cli(['search', '--query', '构建命令', '--json'], { store: dir });
+    assert.equal(plain.code, 0, plain.stderr);
+    assert.deepEqual(Object.keys(plain.json).sort(), ['hits', 'reason', 'refused', 'tokens'], '默认输出不许平白多字段');
+
+    const r = cli(['search', '--query', '构建命令', '--json', '--costs'], { store: dir });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(Array.isArray(r.json.costs), true);
+    assert.equal(r.json.costs.length, r.json.hits.length, '每条命中都要有成本，否则评测器会错位');
+    assert.ok(r.json.costs.some((c) => c.id === id));
+    for (const c of r.json.costs) assert.ok(Number.isFinite(c.cost) && c.cost > 0, '成本要报正数');
+    // 这里的 tokens 是这批候选的预算总和，逐条 cost 相加必须对得上。
+    assert.equal(
+      r.json.costs.reduce((s, c) => s + c.cost, 0),
+      r.json.tokens,
+      'tokens 与逐条成本各说各话，预算就不可审计',
+    );
+  } finally {
+    rm(dir);
+  }
+});
+
 test('CLI read --id --json：契约字段齐全（id/title/body）', () => {
   const { dir, id } = seeded('memory-cli-read-');
   try {

@@ -130,6 +130,7 @@ export function selectBudget({ pulled = [], core = [], budget = {} } = {}) {
       note: cand.note ?? null,
       source,
       score: cand.score ?? 0,
+      cost,
       relevance: cand.relevance ?? 0,
       score_breakdown: cand.breakdown ?? null,
       why: cand.why ?? '',
