@@ -10,7 +10,7 @@
 ```bash
 git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
-node --test 'test/**/*.test.mjs'       # 全绿才继续（388 条）
+node --test 'test/**/*.test.mjs'       # 全绿才继续（397 条）
 ```
 
 ## 一条事实一个文件
@@ -348,10 +348,16 @@ node bin/memory verify --receipt runs/rcp_....json --json
 
 ### 10. `consolidate` —— 巩固：默认只出计划，改了账，能撤销
 
-巩固是**唯一的「改」入口**，但热路径永远不调用它。当前只实现一种操作 `invalidate`：
-B 的 frontmatter 里有 `supersedes: [A]`，A 还 `active`、没有 `valid_to`、没有 `superseded_by`、
-且在 now 之前已生效 → 把 A 的 `valid_to` 写成当前时间、`superseded_by` 写成 B 的 id。**正文一个字不改**；
-历史 `as_of` 查询仍能查到 A，所以既可追溯也可撤销。
+巩固是**唯一的「改」入口**，但热路径永远不调用它。当前实现两种操作，**都只动元数据**：
+
+- `invalidate`：B 的 frontmatter 里有 `supersedes: [A]`，A 还 `active`、没有 `valid_to`、没有 `superseded_by`、
+  且在 now 之前已生效 → 把 A 的 `valid_to` 写成当前时间、`superseded_by` 写成 B 的 id。**正文一个字不改**；
+  历史 `as_of` 查询仍能查到 A，所以既可追溯也可撤销。
+- `archive`：显式点名 `--archive <id>`（可重复，也可用逗号分隔，自动去重），把一条仍然 `active`、
+  没有 `valid_to`、没有 `superseded_by`、且在 now 有效的笔记的 `status` 改成 `archived`。
+  **不写 `valid_to` / `superseded_by`**，正文也一个字不改。它不依赖 `supersedes`，不是自动衰减；
+  默认检索面会排除 `archived`，`as_of` 也不会把它翻回来（这一点与 invalidate 不同），
+  只能用 `--undo` 恢复，或按 id 读回。
 
 ```bash
 node bin/memory consolidate                       # 默认 dry-run：只打计划，不写文件、不改库
@@ -359,16 +365,23 @@ node bin/memory consolidate --json                # 计划 JSON
 node bin/memory consolidate --apply               # 真改：先写计划，再改元数据，最后写回执
 node bin/memory consolidate --apply --max-change-ratio 0.1
 node bin/memory consolidate --scope project:... --kinds semantic,procedural
+node bin/memory consolidate --archive <id>        # 只归档指定笔记，默认仍是 dry-run
+node bin/memory consolidate --archive a,b --apply # 可逗号分隔；重复 --archive 会去重
 node bin/memory consolidate --undo run_...        # 撤销某个 run
 ```
 
 **5% 保险丝**：`allowed = max(1, floor(扫描条数 × max_change_ratio))`，默认 0.05。
-超过就整单中止，一条都不动（小库至少允许 1 条，否则 10 条库上永远改不动）。
-`--dry-run` 与 `--apply` 互斥；`--undo` 也不能和它们同用。
+invalidate 与 archive 共用这个上限，一起算；超过就整单中止，一条都不动
+（小库至少允许 1 条，否则 10 条库上永远改不动）。
+`--dry-run` 与 `--apply` 互斥；`--undo` 也不能和它们或 `--archive` 同用。
+
+同一条笔记同时被 `supersedes` 和 `--archive` 点名时，invalidate 优先，archive 报 `already_planned`。
+目标不存在、解析失败、非 `active`、已有 `valid_to` / `superseded_by`、在 now 尚无效，
+或已被 `--scope` / `--kinds` 过滤掉（`target_out_of_scope`），都会跳过并在 `skipped[]` 里报原因。
 
 `--json` 的主要字段：
 
-- dry-run / aborted：`{ok,status,run_id,dry_run,operations[],skipped[],stats:{scanned,planned,allowed,change_ratio,est_tokens},options}`；
+- dry-run / aborted：`{ok,status,run_id,dry_run,operations[],skipped[],stats:{scanned,planned,invalidate,archive,allowed,change_ratio,est_tokens},options}`；
 - apply 成功：`{ok,status:"applied",run_id,plan_path,receipt_path,applied,skipped,reversible:true,operations[],receipt,stats}`；
 - 保险丝中止：`{ok:false,status:"aborted",reason:"change_ratio_exceeded"|"plan_write_failed"|"receipt_write_failed",...}`；
   `receipt_write_failed` 会把已经改掉的元数据回滚，并报 `rolled_back`。
@@ -389,8 +402,11 @@ node bin/memory consolidate --undo run_...        # 撤销某个 run
 | `partial` / `undo_record_write_failed` | 恢复中途写失败，如实报已恢复的条目 | 1 |
 | `unreadable` | run 找不到 / JSON 坏 / schema 不认识 | 1 |
 
-**还没做**：`merge` / `summarize` / `promote` / `archive`、replay、forget、写入回执、
-后台自动巩固、`diff.jsonl`。现在这一刀只碰元数据，不新增/压缩事实。
+archive 的 undo 只把 `status` 恢复成 `active`；它本来就没写过 `valid_to` / `superseded_by`，
+所以不需要（也不应该）动这两个字段。
+
+**还没做**：`merge` / `summarize` / `promote`、replay、forget、写入回执、
+后台自动巩固、`diff.jsonl`。当前实现只碰元数据，不新增/压缩事实。
 
 ## 评测（开发用，可零模型）
 

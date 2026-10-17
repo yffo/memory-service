@@ -50,6 +50,15 @@ function seedPair(prefix = 'memory-cli-consolidate-') {
   return { dir, a: a.json.id, b: b.json.id };
 }
 
+function seedSingle(prefix = 'memory-cli-archive-') {
+  const dir = tempDir(prefix);
+  const file = join(dir, 'only.md');
+  writeFileSync(file, '---\nkind: semantic\ntrust: user_stated\n---\n\n# 旧笔记\n\n这条笔记要被归档。\n', 'utf8');
+  const r = cli(['remember', '--file', file, '--json'], { store: dir });
+  assert.equal(r.code, 0, r.stderr);
+  return { dir, a: r.json.id };
+}
+
 function getNote(dir, id) {
   const r = cli(['read', '--id', id, '--json'], { store: dir });
   assert.equal(r.code, 0, r.stderr);
@@ -148,6 +157,63 @@ test('CLI consolidate --undo：回执被篡改时退 1，并报 tampered', () =>
     assert.equal(undo.code, 1, undo.stdout + undo.stderr);
     assert.equal(undo.json.status, 'tampered');
     assert.equal(getNote(dir, a).note.valid_to !== null, true);
+  } finally {
+    rm(dir);
+  }
+});
+
+
+test('CLI consolidate --archive 默认 dry-run：只出计划，不改 status', () => {
+  const { dir, a } = seedSingle('memory-cli-archive-dry-');
+  try {
+    const before = getNote(dir, a);
+    const r = cli(['consolidate', '--archive', a, '--json'], { store: dir });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.json.status, 'planned');
+    assert.equal(r.json.dry_run, true);
+    assert.equal(r.json.operations.length, 1);
+    assert.equal(r.json.operations[0].op, 'archive');
+    assert.equal(getNote(dir, a).note.status, 'active');
+    assert.equal(getNote(dir, a).body, before.body);
+    assert.deepEqual(runsFiles(dir), []);
+  } finally {
+    rm(dir);
+  }
+});
+
+test('CLI consolidate --archive --apply 与重复 --archive：去重、改 status、正文不变、undo 恢复', () => {
+  const { dir, a } = seedSingle('memory-cli-archive-apply-');
+  try {
+    const before = getNote(dir, a);
+    // 同一个 id 重复给两次：解析层要去重，不能因此生成两条操作。
+    const r = cli(['consolidate', '--archive', a, '--archive', a, '--apply', '--json'], { store: dir });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.json.status, 'applied');
+    assert.equal(r.json.operations.length, 1);
+    assert.equal(r.json.receipt.stats.archive, 1);
+    const after = getNote(dir, a);
+    assert.equal(after.note.status, 'archived');
+    assert.equal(after.body, before.body);
+
+    const undo = cli(['consolidate', '--undo', r.json.run_id, '--json'], { store: dir });
+    assert.equal(undo.code, 0, undo.stderr);
+    assert.equal(undo.json.status, 'undone');
+    assert.equal(getNote(dir, a).note.status, 'active');
+    assert.equal(getNote(dir, a).body, before.body);
+  } finally {
+    rm(dir);
+  }
+});
+
+test('CLI consolidate --archive 的参数错误退 2', () => {
+  const dir = tempDir('memory-cli-archive-usage-');
+  try {
+    const missing = cli(['consolidate', '--archive'], { store: dir });
+    assert.equal(missing.code, 2);
+    const withUndo = cli(['consolidate', '--archive', 'n1', '--undo', 'run_x'], { store: dir });
+    assert.equal(withUndo.code, 2);
+    const empty = cli(['consolidate', '--archive=', '--json'], { store: dir });
+    assert.equal(empty.code, 2);
   } finally {
     rm(dir);
   }

@@ -55,7 +55,8 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio recall --query "<词>" [--receipt|--save-receipt] [--budget-tokens N] [--json]
   tabellio explain (--query "<词>" | --receipt <id|path>) [--json]
   tabellio verify --receipt <id|path> [--json]
-  tabellio consolidate [--dry-run|--apply] [--max-change-ratio F] [--scope S] [--kinds a,b] [--json]
+  tabellio consolidate [--dry-run|--apply] [--max-change-ratio F] [--scope S] [--kinds a,b]
+                    [--archive <id[,id]>]... [--json]
   tabellio consolidate --undo <run|path> [--json]
   tabellio help | --help | -h | --version
 
@@ -116,6 +117,42 @@ function recallOptionsFromArgs(args) {
     includeCore: args['no-core'] ? false : true,
     ledger: Boolean(args.ledger),
   };
+}
+
+/** 收集可重复的 `--archive`；逗号分隔与重复出现都接受。 */
+function archiveArgValues(argv, args) {
+  const raw = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (token === '--') break;
+    if (token === '--archive') {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith('--')) {
+        raw.push(next);
+        i += 1;
+      } else {
+        raw.push(true);
+      }
+    } else if (token.startsWith('--archive=')) {
+      raw.push(token.slice('--archive='.length));
+    }
+  }
+  if (raw.length === 0) {
+    if (args.archive === undefined) return { provided: false, invalid: false, values: [] };
+    raw.push(args.archive);
+  }
+  if (raw.some((item) => item === true || String(item).trim() === '')) return { provided: true, invalid: true, values: [] };
+  const values = [];
+  const seen = new Set();
+  for (const item of raw) {
+    for (const part of String(item).split(',')) {
+      const id = part.trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      values.push(id);
+    }
+  }
+  return { provided: true, invalid: false, values };
 }
 
 function numArg(value, dflt) {
@@ -226,7 +263,10 @@ function humanConsolidate(r) {
     ? `[dry-run] 计划 ${r.operations.length} 条（扫描 ${r.stats.scanned} 条，允许改动 ${r.stats.allowed} 条，改动率 ${(r.stats.change_ratio * 100).toFixed(1)}%）`
     : `已应用 ${r.applied} 条，跳过 ${r.skipped} 条（扫描 ${r.stats.scanned} 条，改动率 ${(r.stats.change_ratio * 100).toFixed(1)}%）`;
   const lines = [head, `run：${r.run_id}`];
-  for (const op of r.operations) lines.push(`  - invalidate ${op.id} → ${op.superseded_by}（valid_to=${(op.valid_to ?? '').slice(0, 19)}）`);
+  for (const op of r.operations) {
+    if (op.op === 'archive') lines.push(`  - archive ${op.id}（status=archived）`);
+    else lines.push(`  - invalidate ${op.id} → ${op.superseded_by}（valid_to=${(op.valid_to ?? '').slice(0, 19)}）`);
+  }
   for (const s of (r.skipped_detail ?? []).slice(0, 20)) {
     if (typeof s === 'object') lines.push(`  · 跳过 ${s.id}：${s.reason}`);
   }
@@ -403,14 +443,19 @@ export async function main(argv, io = {}) {
         return r.ok ? 0 : 1;
       }
       case 'consolidate': {
+        const archive = archiveArgValues(argv, args);
+        if (archive.invalid) {
+          err.write('consolidate --archive 需要 <id>（可逗号分隔，也可重复 --archive）\n');
+          return 2;
+        }
         const undoRef = typeof args.undo === 'string' ? args.undo : null;
         if (args.undo !== undefined) {
           if (!undoRef) {
             err.write('consolidate --undo 需要 <run_id|path>\n');
             return 2;
           }
-          if (args.apply || args['dry-run']) {
-            err.write('consolidate --undo 不能和 --apply/--dry-run 同时用\n');
+          if (args.apply || args['dry-run'] || archive.provided) {
+            err.write('consolidate --undo 不能和 --apply/--dry-run/--archive 同时用\n');
             return 2;
           }
           const r = undoConsolidation(ctx, undoRef);
@@ -436,6 +481,7 @@ export async function main(argv, io = {}) {
           maxChangeRatio,
           scope: args.scope,
           kinds: listArg(args.kinds),
+          archive: archive.values,
         });
         emit(r, { json, human: humanConsolidate(r) });
         return r.ok ? 0 : 1;

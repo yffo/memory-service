@@ -174,6 +174,83 @@ test('巩固回执：可核验 hash、不含正文、篡改能被发现', () => 
   assert.equal(receiptIntegrity(tampered).ok, false);
 });
 
+
+test('planConsolidation：显式 archive 只把 status 改成 archived，正文 hash 不变', () => {
+  const a = entry('A');
+  const plan = planConsolidation({ entries: [a], nowMs: NOW, runId: RUN, archiveIds: ['A', 'A', 'A,B'] });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.operations.length, 1);
+  const op = plan.operations[0];
+  assert.equal(op.op, 'archive');
+  assert.equal(op.id, 'A');
+  assert.equal(op.superseded_by, null);
+  assert.equal(op.valid_to, null);
+  assert.deepEqual(op.before, { status: 'active', valid_to: null, superseded_by: null, body_sha256: op.before.body_sha256 });
+  assert.equal(op.after.status, 'archived');
+  assert.equal(op.after.valid_to, null);
+  assert.equal(op.after.superseded_by, null);
+  assert.equal(op.before.body_sha256, op.after.body_sha256);
+  assert.equal(plan.stats.archive, 1);
+  assert.equal(plan.stats.invalidate, 0);
+  assert.deepEqual(plan.options.archive, ['A', 'B'], 'archive 目标去重且保持输入顺序');
+});
+
+test('planConsolidation：archive 的拒绝边界一条都不动', () => {
+  const future = isoLocal(NOW + 86400000);
+  const plan = planConsolidation({
+    entries: [
+      entry('draft', { status: 'draft' }),
+      entry('sup', { superseded_by: 'X' }),
+      entry('closed', { valid_to: future }),
+      entry('future', { valid_from: future }),
+      { id: 'bad', note: null, body: '' },
+      entry('proj', { scope: 'project' }),
+      entry('A'),
+      entry('B', { supersedes: ['A'] }),
+    ],
+    nowMs: NOW,
+    scope: 'user',
+    runId: RUN,
+    archiveIds: ['draft', 'sup', 'closed', 'future', 'bad', 'proj', 'ghost', 'A'],
+  });
+  const reasons = new Map(plan.skipped.map((s) => [s.id, s.reason]));
+  assert.equal(reasons.get('draft'), 'target_not_active');
+  assert.equal(reasons.get('sup'), 'target_already_superseded');
+  assert.equal(reasons.get('closed'), 'target_has_valid_to');
+  assert.equal(reasons.get('future'), 'target_not_valid_at_now');
+  assert.equal(reasons.get('bad'), 'target_unparsed');
+  assert.equal(reasons.get('proj'), 'target_out_of_scope');
+  assert.equal(reasons.get('ghost'), 'missing_target');
+  assert.equal(reasons.get('A'), 'already_planned', 'invalidate 与 archive 撞车时 invalidate 优先');
+  assert.equal(plan.operations.length, 1);
+  assert.equal(plan.operations[0].op, 'invalidate');
+});
+
+test('planConsolidation：archive 也受 5% 保险丝约束', () => {
+  const entries = [];
+  for (let i = 0; i < 30; i += 1) entries.push(entry('F' + i));
+  const plan = planConsolidation({ entries, nowMs: NOW, runId: RUN, archiveIds: ['F0', 'F1'] });
+  assert.equal(plan.ok, false);
+  assert.equal(plan.reason, 'change_ratio_exceeded');
+  assert.equal(plan.operations.length, 2);
+  assert.equal(plan.stats.allowed, 1);
+  assert.equal(plan.stats.archive, 2);
+});
+
+test('巩固回执：archive operation 通过 schema，hash 仍可核验', () => {
+  const plan = planConsolidation({ entries: [entry('A')], nowMs: NOW, runId: RUN, archiveIds: ['A'] });
+  const applied = plan.operations.map((op) => ({ ...op, before_text_sha256: 'aaa', after_text_sha256: 'bbb' }));
+  const receipt = buildConsolidateReceipt({ plan, store: '/tmp/example-store', applied, nowMs: NOW });
+  assert.deepEqual(consolidateReceiptProblems(receipt), []);
+  assert.deepEqual(receiptIntegrity(receipt), { ok: true, problems: [] });
+  assert.equal(receipt.operations[0].op, 'archive');
+  assert.equal(receipt.operations[0].after.status, 'archived');
+  assert.equal(receipt.stats.archive, 1);
+  assert.equal(receipt.stats.invalidate, 0);
+  const unknown = { ...receipt, operations: [{ ...receipt.operations[0], op: 'delete' }] };
+  assert.ok(consolidateReceiptProblems(unknown).some((p) => p.includes('不认识的 operation')));
+});
+
 test('sameFields：null 与空字符串等价，只比较三个字段', () => {
   assert.equal(sameFields({ status: 'active', valid_to: null, superseded_by: null }, { status: 'active', valid_to: '', superseded_by: '' }), true);
   assert.equal(sameFields({ status: 'active', valid_to: null, superseded_by: null }, { status: 'active', valid_to: '2026-10-17T12:00:00+08:00', superseded_by: null }), false);

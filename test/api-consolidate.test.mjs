@@ -8,7 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { tempDir, rm } from './helpers.mjs';
@@ -34,10 +34,31 @@ function seedPair(prefix = 'memory-api-consolidate-') {
   return { dir, ctx, a: a.id, b: b.id };
 }
 
+
+function seedOne(prefix = 'memory-api-archive-') {
+  const dir = tempDir(prefix);
+  const ctx = openStore(dir);
+  ctx.ensure();
+  const a = remember(ctx, {
+    text: '---\nkind: semantic\ntrust: user_stated\n---\n\n# 旧笔记\n\n这条笔记要被归档。\n',
+    writtenBy: 'test:archive',
+  });
+  assert.equal(a.ok, true, a.reason);
+  return { dir, ctx, a: a.id };
+}
+
 function bodyOf(ctx, id) {
   const got = read(ctx, id, { withText: true });
   assert.equal(got.ok, true);
   return got.body;
+}
+
+function runsFilesOf(dir) {
+  try {
+    return readdirSync(join(dir, 'runs')).sort();
+  } catch {
+    return [];
+  }
 }
 
 test('API consolidate：默认 dry-run，只出计划，不改笔记也不写 run 文件', () => {
@@ -188,6 +209,53 @@ test('API apply：超过 5% 保险丝时 aborted，且不改任何笔记', () =>
     assert.equal(plan.reason, 'change_ratio_exceeded');
     assert.equal(read(ctx, ids[0]).note.valid_to, null);
     assert.equal(read(ctx, ids[1]).note.valid_to, null);
+  } finally {
+    rm(dir);
+  }
+});
+
+
+test('API consolidate --archive 默认 dry-run：只出 archive 计划，不改 status', () => {
+  const { dir, ctx, a } = seedOne('memory-api-archive-dry-');
+  try {
+    const before = bodyOf(ctx, a);
+    const plan = consolidate(ctx, { archive: [a], nowMs: Date.now() });
+    assert.equal(plan.ok, true, JSON.stringify(plan));
+    assert.equal(plan.status, 'planned');
+    assert.equal(plan.dry_run, true);
+    assert.equal(plan.operations.length, 1);
+    assert.equal(plan.operations[0].op, 'archive');
+    assert.equal(plan.stats.archive, 1);
+    assert.equal(read(ctx, a).note.status, 'active');
+    assert.equal(bodyOf(ctx, a), before);
+    assert.deepEqual(runsFilesOf(dir), []);
+  } finally {
+    rm(dir);
+  }
+});
+
+test('API consolidate --archive --apply：status 改成 archived、正文不变；undo 恢复 active', () => {
+  const { dir, ctx, a } = seedOne('memory-api-archive-apply-');
+  try {
+    const before = bodyOf(ctx, a);
+    const r = consolidate(ctx, { apply: true, archive: [a], nowMs: Date.now() });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.status, 'applied');
+    assert.equal(r.operations[0].op, 'archive');
+    assert.equal(r.receipt.stats.archive, 1);
+    assert.equal(r.receipt.operations[0].after.status, 'archived');
+
+    const after = read(ctx, a);
+    assert.equal(after.note.status, 'archived');
+    assert.equal(after.note.valid_to, null);
+    assert.equal(after.note.superseded_by, null);
+    assert.equal(bodyOf(ctx, a), before, '正文必须逐字节不变');
+
+    const undo = undoConsolidation(ctx, r.run_id, { nowMs: Date.now() });
+    assert.equal(undo.ok, true, JSON.stringify(undo));
+    assert.equal(undo.restored, 1);
+    assert.equal(read(ctx, a).note.status, 'active');
+    assert.equal(bodyOf(ctx, a), before);
   } finally {
     rm(dir);
   }

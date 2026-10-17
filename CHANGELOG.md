@@ -19,9 +19,16 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 ### 巩固：第一刀只动元数据，且可撤销
 
 - **修的问题**：架构里的 `consolidate` + receipt + undo 一直是目标接口；库里 `superseded_by` 有值，但旧记录的 `valid_to` 没人写，检索仍把两条都当有效，历史 `as_of` 也没有关闭点。
-- **做法**：新增 `src/core/consolidate.js`（纯决策 `planConsolidation`、回执 build/hash/integrity、5% 熔断）、`src/store/consolidate.js`（`runs/<run>.plan.json` / `.json` / `.undo.json` 原子写、拒绝覆盖）、`src/api.js` 的 `consolidate` / `undoConsolidation`、`bin/memory consolidate`。当前只实现 `invalidate`：B 显式 `supersedes` A，且 A 仍 `active`、无 `valid_to` / `superseded_by` 时，写 A 的 `valid_to` + `superseded_by`；正文逐字节不动。`merge` / `summarize` / `promote` / `archive` 未实现。
+- **做法**：新增 `src/core/consolidate.js`（纯决策 `planConsolidation`、回执 build/hash/integrity、5% 熔断）、`src/store/consolidate.js`（`runs/<run>.plan.json` / `.json` / `.undo.json` 原子写、拒绝覆盖）、`src/api.js` 的 `consolidate` / `undoConsolidation`、`bin/memory consolidate`。当时只实现 `invalidate`：B 显式 `supersedes` A，且 A 仍 `active`、无 `valid_to` / `superseded_by` 时，写 A 的 `valid_to` + `superseded_by`；正文逐字节不动。`merge` / `summarize` / `promote` / `archive` 当时未实现（archive 见下一节）。
 - **行为**：默认 dry-run，不落盘、不改库；`--apply` 先写计划再改，**回执写不进去就回滚**；`--undo` 先全量预检，任何一条冲突就整单拒绝，二次撤销是 `already_undone`。保险丝 `allowed = max(1, floor(扫描 × 0.05))`，超限整单中止、一条不动。CLI 退出码：成功 0，`aborted` / `conflict` / `tampered` / `partial` 1，用法错 2。
 - **边界**：巩固回执不含正文，只存前后元数据、正文 sha256 与整份文件 hash；hash 仍是**防误改**不是签名。undo 只恢复元数据；apply 之后正文被人改过会整单 `conflict`。replay、`diff.jsonl`、写入回执、后台自动巩固未做。
+
+### 巩固：`archive` 只改状态，不伪造有效期
+
+- **修的问题**：此前只有 `invalidate` 能关闭一条记录，但它要求先有一个「胜出方」；想表达「这条不再进默认检索面，但不是被谁取代」没有操作。若让 archive 顺手写 `valid_to`，等于伪造一个不存在的关闭原因，`as_of` 也会把「归档」误读成「失效」。
+- **做法**：`src/core/consolidate.js` 增加 `CONSOLIDATE_OPERATIONS`（`invalidate` / `archive`）与 archive 分支；`planConsolidation` 接受 `archiveIds`（数组或逗号分隔字符串，去重）。只归档仍 `active`、无 `valid_to`、无 `superseded_by`、在 now 有效的记录，`after.status = 'archived'`，`valid_to` / `superseded_by` 保持为空，正文 hash 前后一致。API 透传 `archive` / `archiveIds`；CLI 新增可重复的 `--archive <id[,id]>`，默认仍是 dry-run，且不能和 `--undo` 同用。计划 / 回执 / undo 三类文件与 5% 保险丝全部复用；同一条同时被 invalidate 点名时 invalidate 优先，archive 报 `already_planned`。
+- **行为**：`--apply` 只把 `status` 改成 `archived`，默认检索面与当前 `as_of` 路径都会排除它（这一点与 invalidate「`as_of` 仍可查」不同）；`--undo` 只把 `status` 恢复成 `active`。回执 stats 增加 `invalidate` / `archive` 条数；core / API / CLI 各自补了规划、落地与参数边界的测试。
+- **边界**：archive 必须由人显式点名，不是自动衰减，也没有「到期自动归档」；因为不写 `valid_to`，它不提供历史关闭点，只能 `--undo` 或按 id 读回。`merge` / `summarize` / `promote`、replay、`diff.jsonl`、写入回执与后台自动巩固仍未做。
 
 ### 评测：判分器先接住正确改述，再被 106 条对抗答案打一遍
 

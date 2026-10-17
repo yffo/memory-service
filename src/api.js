@@ -740,11 +740,11 @@ function undoRecordHash(record) {
 }
 
 /**
- * `tabellio consolidate`：M2 第一刀的巩固。
+ * `tabellio consolidate`：M2 的显式巩固。
  *
  * 默认 dry-run，只产出计划，不改任何笔记。`--apply` 才落盘：
  *   1. 先写 `runs/<run>.plan.json`（决策留痕）；
- *   2. 逐条执行 `invalidate`（只改 valid_to / superseded_by，正文不动）；
+ *   2. 逐条执行 `invalidate` / `archive`（只改元数据，正文不动）；
  *   3. 写巩固回执；回执写失败则回滚已改的笔记，绝不留下「改了但没账」的状态。
  *
  * 5% 改动上限是保险丝，不是配额：超限时连 apply 也不做，返回 aborted 计划。
@@ -760,6 +760,7 @@ export function consolidate(ctx, options = {}) {
     scope: options.scope,
     kinds: options.kinds,
     runId: options.runId,
+    archiveIds: options.archive ?? options.archiveIds,
   });
   const { runId, ...planRest } = plan;
   if (!plan.ok) return { ...planRest, run_id: runId, dry_run: !apply, applied: 0 };
