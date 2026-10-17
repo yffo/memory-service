@@ -59,11 +59,13 @@ import { fileURLToPath } from 'node:url';
 import {
   answerAccuracy,
   answerTokenEfficiency,
+  CAPABILITIES,
   estimateTokens,
   negativeTransfer,
   oracleGap,
   round,
   scoreRun,
+  taskCapability,
   THRESHOLDS,
 } from './scorer.mjs';
 import { answerQuestion, estimateCostUsd, resolveConfig as resolveLlmConfig } from './llm-answerer.mjs';
@@ -603,6 +605,7 @@ const ROUND_METRICS = [
   'hit_but_unused_rate',
   'injected_tokens_mean',
   'token_efficiency',
+  'trap_fall_rate',
 ];
 
 const meanOf = (values) => {
@@ -610,6 +613,35 @@ const meanOf = (values) => {
   return nums.length ? round(nums.reduce((a, v) => a + v, 0) / nums.length, 4) : null;
 };
 const ratio = (numerator, denominator) => (denominator === 0 ? null : round(numerator / denominator, 4));
+
+/** 一个题组的汇总；by_kind 与 by_capability 共用，顺便把陷阱率算进去。 */
+function summarizeRows(rows) {
+  const answerable = rows.filter((row) => !row.refusal_task);
+  const refusals = rows.filter((row) => row.refusal_task);
+  const trapRows = rows.filter((row) => row.trap_fall === true || row.trap_fall === false);
+  const trapFalls = trapRows.filter((row) => row.trap_fall === true).length;
+  return {
+    tasks: rows.length,
+    answerable_tasks: answerable.length,
+    refusal_tasks: refusals.length,
+    recall_at_5: ratio(answerable.filter((row) => row.recall_at_k).length, answerable.length),
+    correct_refusal_rate: ratio(refusals.filter((row) => row.correct_refusal).length, refusals.length),
+    match_rate: ratio(rows.filter((row) => row.match).length, rows.length),
+    hit_but_unused_rate: ratio(rows.filter((row) => row.expect_hit && !row.expect_used).length, rows.length),
+    trap_tasks: trapRows.length,
+    trap_falls: trapFalls,
+    trap_fall_rate: ratio(trapFalls, trapRows.length),
+  };
+}
+
+function groupRowsBy(rows, keyOf) {
+  const groups = {};
+  for (const row of rows) {
+    const key = keyOf(row) || 'unknown';
+    (groups[key] ??= []).push(row);
+  }
+  return Object.fromEntries(Object.entries(groups).map(([key, groupRows]) => [key, summarizeRows(groupRows)]));
+}
 
 /**
  * 多轮重复的合并口径（02 §4.7）：率取轮均值，逐题取多数票，token 取单题均值。
@@ -634,11 +666,14 @@ export function mergeRounds(roundResults, arm) {
   const taskIds = roundResults[0].rows.map((row) => row.task_id);
   merged.rows = taskIds.map((id) => {
     const rows = roundResults.map((r) => r.rows.find((x) => x.task_id === id)).filter(Boolean);
-    if (!rows.length) return { task_id: id, kind: 'unknown', refusal_task: false, match: false, recall_at_k: false, tokens: 0 };
+    if (!rows.length) return { task_id: id, kind: 'unknown', capability: 'unknown', refusal_task: false, match: false, recall_at_k: false, tokens: 0, trap_fall: null };
     const first = rows[0];
     const majority = (fn) => rows.filter(fn).length * 2 > rows.length;
     return {
       ...first,
+      capability: first.capability ?? 'unknown',
+      trap_fall:
+        first.trap_fall === null || first.trap_fall === undefined ? null : majority((r) => r.trap_fall === true),
       match: majority((r) => r.match),
       recall_at_k: majority((r) => r.recall_at_k === true),
       correct_refusal: first.refusal_task ? majority((r) => r.correct_refusal) : null,
@@ -661,22 +696,12 @@ export function mergeRounds(roundResults, arm) {
       )
     : null;
 
-  const kinds = [...new Set(merged.rows.map((row) => row.kind))];
-  merged.by_kind = {};
-  for (const kind of kinds) {
-    const rows = merged.rows.filter((row) => row.kind === kind);
-    const kindAnswerable = rows.filter((row) => !row.refusal_task);
-    const kindRefusals = rows.filter((row) => row.refusal_task);
-    merged.by_kind[kind] = {
-      tasks: rows.length,
-      answerable_tasks: kindAnswerable.length,
-      refusal_tasks: kindRefusals.length,
-      recall_at_5: ratio(kindAnswerable.filter((r) => r.recall_at_k).length, kindAnswerable.length),
-      correct_refusal_rate: ratio(kindRefusals.filter((r) => r.correct_refusal).length, kindRefusals.length),
-      match_rate: ratio(rows.filter((r) => r.match).length, rows.length),
-      hit_but_unused_rate: ratio(rows.filter((r) => r.expect_hit && !r.expect_used).length, rows.length),
-    };
-  }
+  const summary = summarizeRows(merged.rows);
+  merged.trap_tasks = summary.trap_tasks;
+  merged.trap_falls = summary.trap_falls;
+  merged.trap_fall_rate = summary.trap_fall_rate;
+  merged.by_kind = groupRowsBy(merged.rows, (row) => row.kind);
+  merged.by_capability = groupRowsBy(merged.rows, (row) => row.capability);
 
   merged.arm_diagnostics = {
     errors: roundResults.reduce((a, r) => a + (r.arm_diagnostics?.errors ?? 0), 0),
@@ -737,6 +762,7 @@ export function renderMarkdown(report) {
   out.push('');
   out.push(`- 时间：${meta.startedAt}`);
   out.push(`- 题集：${meta.tasksPath}（${meta.taskCount} 题：${meta.kindCount}）`);
+  out.push(`- 能力分布：${meta.capabilityCount ?? '—'}（按题集 capability；陷阱题才有陷阱率）`);
   out.push(`- 语料库：${meta.library}（${meta.noteCount} 篇，虚构）`);
   out.push(`- new 臂 CLI：${opts.cli}${fs.existsSync(opts.cli) ? '' : '（**不存在**）'}`);
   out.push(`- new 臂库：${meta.storeKind ?? '—'} → ${meta.store}`);
@@ -771,6 +797,7 @@ export function renderMarkdown(report) {
     ['token_efficiency（命中/千 token）', (r) => fmt(r.token_efficiency), '越大越好'],
     ['hit_but_unused_rate（漏用率）', (r) => fmt(r.hit_but_unused_rate), '越小越好'],
     ['answered_rate（没拒答的比例）', (r) => fmt(r.answered_rate), '参照'],
+    ['trap_fall_rate（陷阱题落入率）', (r) => fmt(r.trap_fall_rate), '规则口径，越小越好'],
     ['调用失败数 / 缺题数', (r) => `${r.arm_diagnostics.errors} / ${r.verdict.missing_tasks}`, '0'],
   ];
   for (const [name, read, gate] of rows) out.push(`| ${name} | ${results.map(read).join(' | ')} | ${gate} |`);
@@ -849,6 +876,24 @@ export function renderMarkdown(report) {
   }
   out.push('');
 
+  out.push('## 按能力');
+  out.push('');
+  const capabilities = [...CAPABILITIES, 'unknown'].filter((capability) =>
+    results.some((r) => r.by_capability?.[capability]),
+  );
+  out.push(`| 能力 | 臂 | 题数 | recall@5 | correct_refusal | match_rate | 漏用率 | 陷阱落入率 |`);
+  out.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
+  for (const capability of capabilities) {
+    for (const r of results) {
+      const c = r.by_capability?.[capability];
+      if (!c) continue;
+      out.push(
+        `| ${capability} | ${r.arm} | ${c.tasks} | ${fmt(c.recall_at_5)} | ${fmt(c.correct_refusal_rate)} | ${fmt(c.match_rate)} | ${fmt(c.hit_but_unused_rate)} | ${fmt(c.trap_fall_rate)} |`,
+      );
+    }
+  }
+  out.push('');
+
   out.push('## 逐题（R=来源进 top-k，✓=判对，✗=判错）');
   out.push('');
   out.push(`| 题 | 题型 | 题面 | ${arms.join(' | ')} |`);
@@ -873,6 +918,10 @@ export function renderMarkdown(report) {
   }
   if (meta.legacyFallback) notes.push('legacy 臂走的是索引关键词兜底（旧仓库的桥没跑通），数字只作参照。');
   if (results.some((r) => r.arm === 'new' && r.arm_diagnostics.tokens_estimated > 0)) notes.push('new 臂有一部分 token 是估算的（CLI 没报 tokens），token_efficiency 只作参照。');
+  if (results.some((r) => (r.trap_tasks ?? 0) > 0)) {
+    notes.push('trap_fall_rate 是规则判分口径：只统计答案里出现 negative_transfer_probe.fall_patterns 的比例，分母只有带探针的题；它不是 LLM 裁判给的陷阱率。');
+    notes.push('temporal 题测的是同一份当前库里的时间点/时长对齐；as-of 版本回放由 bench/replay.mjs 单独负责。');
+  }
   if (!meta.cliPresent) notes.push('**bin/memory 还没落地**：new 臂现在跑不出数字，等 A 交付后必须重跑本报告。');
   if (opts.storeMode === 'plain') notes.push('--store-mode plain：CLI 读到哪个库不由本跑分器决定，recall 数字可能整体失真。');
   if (notes.length) {
@@ -960,6 +1009,15 @@ export function buildReport(opts, results, { tasks, library, noteCount, startedA
   )
     .map(([k, v]) => `${k} ${v}`)
     .join('、');
+  const capabilityTotals = tasks.reduce((acc, t) => {
+    const capability = taskCapability(t);
+    acc[capability] = (acc[capability] ?? 0) + 1;
+    return acc;
+  }, {});
+  const capabilityCount = [...CAPABILITIES, 'unknown']
+    .filter((capability) => capabilityTotals[capability])
+    .map((capability) => `${capability} ${capabilityTotals[capability]}`)
+    .join('、');
   const newResult = results.find((r) => r.arm === 'new');
   const noneResult = results.find((r) => r.arm === 'none');
   const meta = {
@@ -968,6 +1026,7 @@ export function buildReport(opts, results, { tasks, library, noteCount, startedA
     tasksPath: opts.tasks,
     taskCount: tasks.length,
     kindCount,
+    capabilityCount,
     library,
     noteCount,
     store: opts.store ?? opts.library,
@@ -1171,8 +1230,12 @@ function serialize(report) {
         token_efficiency: round(r.token_efficiency),
         answer_accuracy: round(answerAccuracy(r)),
         task_unanimous_rate: r.task_unanimous_rate ?? null,
+        trap_tasks: r.trap_tasks ?? 0,
+        trap_falls: r.trap_falls ?? 0,
+        trap_fall_rate: round(r.trap_fall_rate),
       },
       by_kind: r.by_kind,
+      by_capability: r.by_capability ?? {},
       diagnostics: r.arm_diagnostics,
       llm: r.llm ?? null,
       rounds: r.rounds ?? null,

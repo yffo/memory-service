@@ -40,9 +40,9 @@ const syntheticCases = [
   { id: 'c4', task_id: 't2', label: 'hallucinated', answer: '9.99 美元，下周上线。', accept: false },
 ];
 
-test('loadAdversarial：真实题集与对抗集能对上（52 题 / 106 条）', () => {
+test('loadAdversarial：真实题集与对抗集能对上（56 题 / 106 条）', () => {
   const { tasks, cases } = loadAdversarial({ tasksPath: TASKS, suitePath: SUITE });
-  assert.equal(tasks.length, 52);
+  assert.equal(tasks.length, 56);
   assert.equal(cases.length, 106);
   const ids = new Set(tasks.map((task) => task.id));
   for (const testCase of cases) assert.ok(ids.has(testCase.task_id), `${testCase.id} 指向未知题`);

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isRefusalTask, normalizeText, termVariants } from '../bench/scorer.mjs';
+import { CAPABILITIES, isRefusalTask, normalizeText, termVariants } from '../bench/scorer.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SUITE = path.join(HERE, '..', 'bench', 'core-30-v1');
@@ -25,6 +25,8 @@ const TASKS_PATH = path.join(SUITE, 'tasks.json');
 /** 四类能力 + 拒答（拒答用 source:[] 表达，不新增第五种「任务」语义）。 */
 const KINDS = ['fact_recall', 'preference', 'correction', 'procedure', 'refusal'];
 const REQUIRED_QUOTA = { fact_recall: 8, preference: 6, correction: 6, procedure: 6, refusal: 6 };
+/** 六类能力各至少一条；trap 探针只挂在 negative_transfer 上。 */
+const CAPABILITY_QUOTA = { single_hop: 8, multi_hop: 1, temporal: 1, knowledge_update: 1, abstention: 1, negative_transfer: 1 };
 const MIN_TASKS = 30;
 const MAX_EXPECT_CHARS = 60;
 const MAX_PROMPT_LEAK = 0.3;
@@ -122,11 +124,17 @@ test('tasks.json：形状、版本、题量、四类配额', () => {
 
 test('tasks.json：id 唯一、字段齐、expect 不为空（拒答除外）、expect 限长 ≤60', () => {
   const ids = new Set();
-  const required = ['expect', 'forbid', 'id', 'kind', 'prompt', 'source'];
-  const allowed = [...required, 'answer_aliases'];
+  const required = ['capability', 'expect', 'forbid', 'id', 'kind', 'prompt', 'source'];
+  const allowed = [...required, 'answer_aliases', 'expect_all', 'negative_transfer_probe'];
   for (const t of tasks) {
     for (const key of Object.keys(t)) assert.ok(allowed.includes(key), `${t.id} 有未定义字段 ${key}`);
     for (const key of required) assert.ok(Object.hasOwn(t, key), `${t.id} 缺字段 ${key}`);
+    assert.ok(CAPABILITIES.includes(t.capability), `${t.id} 的 capability 越界：${t.capability}`);
+    if (t.expect_all !== undefined) assert.equal(t.expect_all, true, `${t.id} 的 expect_all 只能是 true`);
+    if (t.expect_all === true) {
+      assert.ok(t.expect.length >= 2, `${t.id} 标了 expect_all，至少要有两条 expect`);
+      assert.equal(t.answer_aliases, undefined, `${t.id} 标了 expect_all，不能再用别名（别名是 OR 语义）`);
+    }
     if (t.answer_aliases !== undefined) {
       assert.ok(Array.isArray(t.answer_aliases), `${t.id} 的 answer_aliases 必须是数组`);
       for (const alias of t.answer_aliases) {
@@ -150,6 +158,38 @@ test('tasks.json：id 唯一、字段齐、expect 不为空（拒答除外）、
     }
   }
   assert.equal(new Set(tasks.map((t) => t.prompt)).size, tasks.length, 'prompt 不该重复');
+});
+
+test('capability：六类都有、拒答/纠错映射不跑偏、陷阱探针自洽', () => {
+  const byCapability = {};
+  for (const t of tasks) byCapability[t.capability] = (byCapability[t.capability] ?? 0) + 1;
+  for (const [capability, quota] of Object.entries(CAPABILITY_QUOTA)) {
+    assert.ok((byCapability[capability] ?? 0) >= quota, `${capability} 至少 ${quota} 条，现在 ${byCapability[capability] ?? 0} 条`);
+  }
+  for (const t of tasks) {
+    if (t.kind === 'refusal') assert.equal(t.capability, 'abstention', `${t.id} 是拒答题，能力应为 abstention`);
+    if (t.kind === 'correction') assert.equal(t.capability, 'knowledge_update', `${t.id} 是纠错题，能力应为 knowledge_update`);
+    if (t.capability === 'multi_hop') {
+      assert.equal(t.expect_all, true, `${t.id} 是多跳题，expect 必须全中`);
+      assert.ok(t.source.length >= 2, `${t.id} 是多跳题，至少要有两篇 source`);
+      assert.ok(t.expect.length >= 2, `${t.id} 是多跳题，至少要考两件事`);
+    }
+    const probe = t.negative_transfer_probe;
+    if (t.capability !== 'negative_transfer') {
+      assert.equal(probe, undefined, `${t.id} 不是 negative_transfer，不该带陷阱探针`);
+      continue;
+    }
+    assert.ok(probe && typeof probe === 'object', `${t.id} 是 negative_transfer，必须带陷阱探针`);
+    assert.deepEqual(Object.keys(probe).sort(), ['distractor_note', 'fall_patterns', 'why_wrong']);
+    assert.ok(docs.has(probe.distractor_note), `${t.id} 的 distractor_note 不存在：${probe.distractor_note}`);
+    assert.ok(!t.source.includes(probe.distractor_note), `${t.id} 的 distractor_note 不能同时是 source`);
+    assert.ok(typeof probe.why_wrong === 'string' && probe.why_wrong.trim().length >= 6, `${t.id} 的 why_wrong 太短`);
+    assert.ok(Array.isArray(probe.fall_patterns) && probe.fall_patterns.length >= 1, `${t.id} 的 fall_patterns 不能为空`);
+    for (const pattern of probe.fall_patterns) {
+      assert.ok(t.forbid.includes(pattern), `${t.id} 的陷阱值「${pattern}」必须同时写进 forbid`);
+      assert.ok(traceLoose(pattern, [probe.distractor_note]).length >= 1, `${t.id} 的陷阱值「${pattern}」在 distractor 里追不到`);
+    }
+  }
 });
 
 test('题集齐：每条 source 笔记都在库里，拒答题不带 source', () => {

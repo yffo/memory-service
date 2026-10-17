@@ -140,21 +140,21 @@ test('run-eval --answerer llm：closed_book 与 oracle_gold 走本地 mock，不
   assert.equal(report.answerer, 'llm');
   assert.equal(report.llm_model, 'deepseek-flash');
   assert.deepEqual(report.arms.map((a) => a.arm), ['none', 'oracle']);
-  // 52 题 × 2 臂，全部打到本地 mock；没有 new 臂 → 不碰 CLI，但仍过预检。
-  assert.equal(state.requests, 104);
+  // 56 题 × 2 臂，全部打到本地 mock；没有 new 臂 → 不碰 CLI，但仍过预检。
+  assert.equal(state.requests, 112);
   const none = report.arms.find((a) => a.arm === 'none');
   const oracle = report.arms.find((a) => a.arm === 'oracle');
-  // closed_book：全部「没有记录」→ 20 道拒答题答对，32 道可答题答不出。
-  assert.equal(none.metrics.answer_accuracy, 0.3846);
+  // closed_book：全部「没有记录」→ 20 道拒答题答对，36 道可答题答不出。20/56 = 0.3571。
+  assert.equal(none.metrics.answer_accuracy, 0.3571);
   assert.equal(none.metrics.injected_tokens, 0);
-  // oracle_gold：gold 笔记正文就是答案 → 几乎全对；偶尔个别 gold 笔记正文里也带干扰值，扣 1 题。
-  assert.equal(oracle.metrics.answer_accuracy, 0.9808);
+  // oracle_gold：gold 笔记正文就是答案 → 55/56；个别 gold 笔记正文里也带干扰值，扣 1 题。
+  assert.equal(oracle.metrics.answer_accuracy, 0.9821);
   assert.ok(oracle.metrics.injected_tokens > 0);
-  assert.equal(report.answer_level.accuracy.oracle, 51 / 52); // answer_level 存未舍入的原值
+  assert.equal(report.answer_level.accuracy.oracle, 55 / 56); // answer_level 存未舍入的原值
   assert.equal(report.answer_level.negative_transfer, null); // 没有 real 臂，负迁移算不出来
   assert.equal(report.answer_level.oracle_gap, null); // 没跑 real 臂，算不出 gap
-  assert.equal(oracle.llm.calls, 52);
-  assert.equal(oracle.llm.prompt_tokens, 52 * 50);
+  assert.equal(oracle.llm.calls, 56);
+  assert.equal(oracle.llm.prompt_tokens, 56 * 50);
   assert.ok(oracle.llm.cost_usd > 0);
   // 缺 new 臂 → 回答层判定必须明确「算不出来」，不许冒充达标。
   assert.deepEqual(report.judgement_answer.blockers, ['缺 new 臂（closed_book / real / oracle_gold 三档要一起跑）']);

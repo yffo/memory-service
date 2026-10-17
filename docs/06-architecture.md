@@ -496,7 +496,9 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 
 硬约束「真答案一条不许丢」成立：`recall@5` 逐题不变（27/32），新增的 12 题全部是拒答题（`source: []`），按 `bench/scorer.mjs` 的口径不进 `recall@5` 的分母。**余量从 0 变成 1/20 = 0.05**：现在少对一题（`correct_refusal_rate` 0.789）仍然达标，正确答案是 1/8 = 0.125。`recall@5` 的分母仍是 32，与 M2 逐题可比。
 
-**仍然答错（该拒没拒）的 4 题**：`r03`（Orchid 连接池上限）、`r07`（Orchid 每日配额）、`r11`（文案字数上限）、`r12`（构建流水线阶段数）。四题都是**假命中**：跨词或话题相关的笔记把 coverage 顶到 0.6 以上（实测 top 命中 coverage 0.613 / 0.659 / 0.677 / 1.000）。这一现象的机制在 §5.4 已经写过，M3 没有改算法（§5.5 的扫描给不出可信的替代阈值），所以把它们**如实留在题集里当负例** —— 一个只由「已经能拒的题」组成的题集会自己给自己记功。
+**2026-10-17 能力扩展后（56 题：可答 36 + 拒答 20）的当前值**：`recall@5 = 0.8611`（31/36，新增 2 多跳 + 2 时间题全中）、`correct_refusal_rate = 0.750`（15/20，**压线**；r01 在真实 `forbid` 下暴露）、`injected_tokens_mean = 266.0`、检索层 `token_efficiency = 2.081`、`trap_fall_rate = 0.25`（1/4）。**拒答没有余量**，下一道拒答题翻车就不达标。
+
+**M3 时仍然答错（该拒没拒）的 4 题**：`r03`（Orchid 连接池上限）、`r07`（Orchid 每日配额）、`r11`（文案字数上限）、`r12`（构建流水线阶段数）。四题都是**假命中**：跨词或话题相关的笔记把 coverage 顶到 0.6 以上（实测 top 命中 coverage 0.613 / 0.659 / 0.677 / 1.000）。这一现象的机制在 §5.4 已经写过，M3 没有改算法（§5.5 的扫描给不出可信的替代阈值），所以把它们**如实留在题集里当负例** —— 一个只由「已经能拒的题」组成的题集会自己给自己记功。补真实 `forbid` 后的 56 题口径下，`r01`（真实陷阱值 `toml` 进了 echo 上下文）也加入，共 5 题，见 `docs/08-eval-runbook.md §6`。
 
 **判据 3 的窄口径实测（M3 新增装置，`node bench/replay.mjs`；不是完整判据 3）**：
 
@@ -509,9 +511,11 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 | 回放结束后重问 32 件事 | 答不出 **0**；第一条注入就是旧值 **13**（40.6%） | — | 记数 |
 | 4 周里直接拒答 | **1/168**（0.6%） | — | 记数 |
 
-**这只是窄口径，不是完整判据 3**：`02-evaluation.md` 的完整判据还要求 `trap_fall_rate ≤ 25%`，而当前题集没有 `negative_transfer_probe` / 陷阱题；回放的 `--traps` 是灵敏度对照，不是判分题。因此可以写「时间回放的窄口径达标」，不能写「判据 3 成立」。
+**这只是窄口径，不是完整判据 3**：`02-evaluation.md` 的完整判据还要求 `trap_fall_rate ≤ 25%`。`core-30-v1` 现在有 4 道 `negative_transfer` 陷阱题，2026-10-17 实测 `trap_fall_rate = 1/4 = 0.25`，正好压线（f01 答出预发端口 9443）；回放的 `--traps` 仍是灵敏度对照，不是判分题。因此可以写「时间回放的窄口径达标 + 陷阱率压线」，不能写「判据 3 成立」。
 
 **口径偏离：三档已补上，残留的是回放装置**。`02-evaluation.md` 要求 `negative_transfer` 用 `closed_book` / `oracle_gold` / `real` **三档对照**算「加记忆反而更差几个点」。M3 的回放装置只有窄口径（= 第一条注入是被取代的旧值、而当前真值没排到它前面，与 `staleness_rate` 同分母）；**M4 起在 `core-30-v1` 上跑通了三档**：`node bench/run-eval.mjs --arms none,new,oracle --answerer llm --runs 3`（2026-10-17，52 题，deepseek-flash），acc 为 none **0.385** / new **0.744** / oracle **0.846**，`negative_transfer = −0.359`（≤ 0.02，记忆净收益 35.9 个百分点），`oracle_gap = 0.103`，回答层 `token_efficiency = 1.408`（< 2.0，**判据 2 不成立**）。判分是逐字子串，oracle 的 8 道错题里 7 道是同义改写被误判、1 道（k06）是题面与 `expect` 不一致，所以 0.744 是**下界**、`oracle_gap` 高估了检索损失。2026-10-17 晚已补 `answer_aliases`（32 道可答题）与 106 条判分器对抗集（误收 0、正确接受 100%，见 `02-evaluation.md §4.6.2`）；但回答层没有 API key 重跑，因此 0.744 / 1.408 只能标为**补丁前下界**，判据 2 是「旧口径下不成立、新口径下未重测」。**残留**：`bench/replay.mjs` 的 168 次时间回放仍是窄口径（没有模型回答），不能把 `core-30-v1` 的三档数字搬过去；`staleness_rate` 仍只由回放认定，回答层只负责 `negative_transfer` / `token_efficiency`。
+
+**2026-10-17 晚补能力/陷阱题后的状态**：`core-30-v1` 扩到 56 题（+2 `multi_hop` / +2 `temporal`），4 道 `negative_transfer` 陷阱题；判据 1 的 `new` 臂 `recall@5 = 0.8611`（31/36）、`correct_refusal_rate = 0.750`（15/20，压线）、`injected_tokens_mean = 266.0`、检索层 `token_efficiency = 2.081`。拒答从 0.800 降到 0.750 是补真实 `forbid` 后 r01 暴露，不是检索退化。回答层仍无 API key 重测，判据 2 仍是「旧口径不成立、新口径未测」。
 
 **这三个 0 不靠「装置测不出来」，靠一条对照臂撑着**：同一次回放里跑一遍消融 —— 把被取代的旧值改回「看起来仍然有效」（清掉 `valid_to` 与 `superseded_by`），**同一批会话重跑 35 次「有机会拿错」的召回，35 次全部把旧值排到了第一**（`stale_in_context_rate = 1`）。这条对照说明：① 指标本身是灵敏的，全 0 不是口径写漏了；② 当前防腐靠的是 **`isValidAt(note, nowMs)` 这一道有效性过滤**（`src/core/score.js`）—— 旧值在默认视图里根本不参与排序，而不是「参与了但被 recency 压下去」。
 
@@ -525,7 +529,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 
 ### 6.2 每题可追溯来源
 
-一题一条记录。**当前题集的实际字段是 `id / kind / prompt / expect[] / forbid[] / source[] / answer_aliases[]`**（`bench/core-30-v1/tasks.json`；`answer_aliases` 已于 2026-10-17 落地，其余仍是目标 schema）；`02-evaluation.md §4.6` 的 `capability / gold_notes / expected{answer, judge} / negative_transfer_probe` 是目标 schema，尚未落地（差异见 `02-evaluation.md §4.6.1`）。关键纪律：① **反向构题**——先选定一条记忆，再写一道只有它能回答的题，`source` 构造时即确定，不需要事后标注；② **防泄漏**——任务文本与 `source` 正文的字符 8-gram 重叠 >30% 退回重写，期望答案限长 ≤60 字，同答案命中多条 `source` 只算一次；③ **判分器优先级**——`substring/regex/归一化` > `set_match` > `refusal_match` > `cheap_judge`（配额 ≤20%）> 人工抽检（20%），拒答**必须用 refusal_match 判，不许让 LLM 裁判判「拒绝」**；④ **判分器本身要被评测**——用「含糊但切题」的对抗答案打自己的裁判（接受率目标 <20%，已落地 106 条对抗集），人工抽检记录 Cohen's κ（**未做**），κ<0.6 则该裁判分数不采信。
+一题一条记录。**当前题集的实际字段是 `id / kind / capability / prompt / expect[] / forbid[] / source[] / answer_aliases[] / expect_all / negative_transfer_probe`**（`bench/core-30-v1/tasks.json`；`capability`、`answer_aliases`、`expect_all`、`negative_transfer_probe` 已于 2026-10-17 落地）；`02-evaluation.md §4.6` 的 `gold_notes / expected{answer, judge} / setup.ops / difficulty / leak_check / tags` 仍是目标 schema，尚未落地（差异见 `02-evaluation.md §4.6.1`）。关键纪律：① **反向构题**——先选定一条记忆，再写一道只有它能回答的题，`source` 构造时即确定，不需要事后标注；② **防泄漏**——任务文本与 `source` 正文的字符 8-gram 重叠 >30% 退回重写，期望答案限长 ≤60 字，同答案命中多条 `source` 只算一次；③ **判分器优先级**——`substring/regex/归一化` > `set_match` > `refusal_match` > `cheap_judge`（配额 ≤20%）> 人工抽检（20%），拒答**必须用 refusal_match 判，不许让 LLM 裁判判「拒绝」**；④ **判分器本身要被评测**——用「含糊但切题」的对抗答案打自己的裁判（接受率目标 <20%，已落地 106 条对抗集），人工抽检记录 Cohen's κ（**未做**），κ<0.6 则该裁判分数不采信。
 
 ### 6.3 CI 怎么跑
 

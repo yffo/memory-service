@@ -28,7 +28,14 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 - **修的问题**：判分器用 `expect` 逐字子串，模型答「400 行」而 `expect` 是「不超过 400 行」就判错；同时没有装置检验它会不会把「含糊但切题」或「编造值」收下。判据 2 的 1.408 因此是判分器压出来的下界，不是干净的结论。
 - **做法**：`bench/scorer.mjs` 新增 `taskAnswerAliases()`，判分改判 `expect[] || answer_aliases[]`（别名只放宽 expect，不绕过 `forbid`）；32 道可答题各补 1–4 条别名。新增 `bench/core-30-v1/adversarial.json`（106 条：52 应接受、54 应拒绝）与零依赖 runner `bench/judge-adversarial.mjs`。20 道拒答题的 `forbid` 从占位值改成**语料库里可追的真实陷阱值**（测试会逐条验来源）。
 - **行为**：对抗集误收率 **0.0000**（54 条应拒全拒）、正确接受率 **1.0000**（52/52），通过；门槛是误收 < 20%、正确接受 ≥ 95%。旧回答层数字 0.744 / 1.408 标为补丁前下界，**判据 2 仍未重测**（环境没有 LLM API key）。
-- **边界**：打的是规则判分器，不是 LLM 裁判；别名是人工白名单，可能对题集过拟合，白名单外的改述仍会误判。20% 人工抽检与 Cohen's κ 未做；陷阱题 / `negative_transfer_probe`、`capability` 映射仍未落地。
+- **边界**：打的是规则判分器，不是 LLM 裁判；别名是人工白名单，可能对题集过拟合，白名单外的改述仍会误判。20% 人工抽检与 Cohen's κ 未做；陷阱题 / `capability` 当时仍未落地（见下一节）。
+
+### 评测：能力分层与陷阱题从「未测」变成有数
+
+- **修的问题**：题集只有 `kind`（事实/偏好/纠错/流程/拒答）五类，多跳、时间推理、知识更新、陷阱题全挤在 `fact_recall` 里；`trap_fall_rate` 算不出来，判据 3 的陷阱项只能写「未测」。文档里的 `capability` 与 `negative_transfer_probe` 一直是目标 schema。
+- **做法**：`bench/scorer.mjs` 加 `CAPABILITIES` / `taskCapability()`（显式优先，旧题按 `kind` 回退）、`taskNegativeTransferProbe()`、`taskExpectAll()`；`scoreTask` 输出 `capability` / `trap_fall` / `expect_all`，`forbid` 与 `fall_patterns` 都算「用了错值」。题集扩到 **56 题**：新增 2 道多跳（Harborlight 正式/预览构建目录、Orchid 生产/预发端口）与 2 道时间题（Kestrel 自动同步/失败补跑、Orchid 生产/预发缓存 TTL），4 道陷阱题带 `negative_transfer_probe`（f01/f02/f04/f07）。`bench/run-eval.mjs` 按 `capability` 分表，指标加 `trap_fall_rate`。
+- **行为**：2026-10-17 实测（56 题 / 50 篇，`--same-corpus`）`new` 臂 `recall@5 = 0.8611`（31/36）、`correct_refusal_rate = 0.750`（15/20，**正好压线**）、`injected_tokens_mean = 266.0`、检索层 `token_efficiency = 2.081`；`multi_hop` 2/2、`temporal` 2/2 全中；`trap_tasks = 4`、`trap_falls = 1`、`trap_fall_rate = 0.25`（f01 答出预发端口 9443）。判据 1 仍成立，但拒答已无余量。
+- **边界**：拒答从 0.800 降到 0.750 不是检索退化，是补真实 `forbid` 后 r01 暴露（echo 上下文里出现 `toml`）；r03/r07/r11/r12 仍是假命中。`negative_transfer` / `multi_hop` 各只有 4/2 题，陷阱率分母只有 4，只能当方向；`temporal` 测时间点/时长对齐，不测 `as_of` 回放。106 条判分器对抗集仍只覆盖原有 52 题。回答层没有 API key 重测，判据 2 仍是「旧口径不成立、新口径未测」。
 
 ### 索引：从一屏平铺改成**分层路由 + 清单**
 

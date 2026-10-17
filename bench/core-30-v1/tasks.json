@@ -4,24 +4,37 @@
     {
       "id": "f01",
       "kind": "fact_recall",
+      "capability": "negative_transfer",
       "prompt": "Orchid 的生产环境监听哪个端口？",
       "expect": ["8443"],
       "forbid": ["9443"],
       "source": ["project-orchid-deploy-port.md"],
-      "answer_aliases": ["端口 8443", "8443/tcp"]
+      "answer_aliases": ["端口 8443", "8443/tcp"],
+      "negative_transfer_probe": {
+        "distractor_note": "reference-orchid-staging-port.md",
+        "why_wrong": "9443 是预发环境端口，不是生产端口",
+        "fall_patterns": ["9443"]
+      }
     },
     {
       "id": "f02",
       "kind": "fact_recall",
+      "capability": "negative_transfer",
       "prompt": "Kestrel 每天几点自动同步？",
       "expect": ["03:30"],
       "forbid": ["01:00"],
       "source": ["project-kestrel-sync-schedule.md"],
-      "answer_aliases": ["每日 03:30", "凌晨 03:30", "凌晨三点半"]
+      "answer_aliases": ["每日 03:30", "凌晨 03:30", "凌晨三点半"],
+      "negative_transfer_probe": {
+        "distractor_note": "reference-kestrel-manual-sync.md",
+        "why_wrong": "01:00 是手动补同步的习惯时段，不是自动同步时间",
+        "fall_patterns": ["01:00"]
+      }
     },
     {
       "id": "f03",
       "kind": "fact_recall",
+      "capability": "single_hop",
       "prompt": "Kestrel 单次同步的数据量上限是多少？",
       "expect": ["2 GB", "2GB"],
       "forbid": [],
@@ -31,15 +44,22 @@
     {
       "id": "f04",
       "kind": "fact_recall",
+      "capability": "negative_transfer",
       "prompt": "Harborlight 的正式构建产物写在哪个目录？",
       "expect": ["dist/site"],
       "forbid": [".preview/site"],
       "source": ["project-harborlight-build-target.md"],
-      "answer_aliases": ["dist 目录", "构建产物在 dist/site"]
+      "answer_aliases": ["dist 目录", "构建产物在 dist/site"],
+      "negative_transfer_probe": {
+        "distractor_note": "reference-harborlight-preview-target.md",
+        "why_wrong": ".preview/site 是预览构建目录，不是正式构建目录",
+        "fall_patterns": [".preview/site"]
+      }
     },
     {
       "id": "f05",
       "kind": "fact_recall",
+      "capability": "single_hop",
       "prompt": "Orchid 站点现在用的主题叫什么？",
       "expect": ["ink-forest"],
       "forbid": ["amber-sun"],
@@ -49,6 +69,7 @@
     {
       "id": "f06",
       "kind": "fact_recall",
+      "capability": "single_hop",
       "prompt": "Orchid 的公开接口限流是多少？",
       "expect": ["每秒 12 次", "12 次/秒"],
       "forbid": [],
@@ -58,15 +79,22 @@
     {
       "id": "f07",
       "kind": "fact_recall",
+      "capability": "negative_transfer",
       "prompt": "图鉴缓存在生产环境的过期时间是多久？",
       "expect": ["90 分钟"],
       "forbid": ["60 分钟"],
       "source": ["project-orchid-cache-ttl.md"],
-      "answer_aliases": ["一个半小时", "1.5 小时", "九十分钟"]
+      "answer_aliases": ["一个半小时", "1.5 小时", "九十分钟"],
+      "negative_transfer_probe": {
+        "distractor_note": "reference-orchid-staging-cache-ttl.md",
+        "why_wrong": "60 分钟是预发环境压低的缓存 TTL，不是生产配置",
+        "fall_patterns": ["60 分钟"]
+      }
     },
     {
       "id": "f08",
       "kind": "fact_recall",
+      "capability": "single_hop",
       "prompt": "Kestrel 的配置文件放在哪个路径？",
       "expect": ["~/.config/kestrel/config.toml", "$HOME/.config/kestrel/config.toml"],
       "forbid": [],
@@ -76,6 +104,7 @@
     {
       "id": "f09",
       "kind": "fact_recall",
+      "capability": "single_hop",
       "prompt": "组里的站会安排在什么时间？",
       "expect": ["每周二、周四 09:15", "周二和周四 09:15"],
       "forbid": [],
@@ -85,6 +114,7 @@
     {
       "id": "p01",
       "kind": "preference",
+      "capability": "single_hop",
       "prompt": "提交代码时的提交信息有什么要求？",
       "expect": ["提交信息用中文祈使句"],
       "forbid": ["注释写中文，标识符写英文"],
@@ -94,6 +124,7 @@
     {
       "id": "p02",
       "kind": "preference",
+      "capability": "single_hop",
       "prompt": "一个 PR 的 diff 最多能有多少行？",
       "expect": ["不超过 400 行"],
       "forbid": [],
@@ -103,6 +134,7 @@
     {
       "id": "p03",
       "kind": "preference",
+      "capability": "single_hop",
       "prompt": "找我做代码评审一般挑什么时段？",
       "expect": ["上午十点到十二点"],
       "forbid": ["09:15"],
@@ -112,6 +144,7 @@
     {
       "id": "p04",
       "kind": "preference",
+      "capability": "single_hop",
       "prompt": "改完代码准备提交之前，先做什么？",
       "expect": ["pnpm lint:fix"],
       "forbid": ["pnpm verify:release"],
@@ -121,6 +154,7 @@
     {
       "id": "p05",
       "kind": "preference",
+      "capability": "single_hop",
       "prompt": "版本号可以自动往上改吗？",
       "expect": ["不要自动改 version 字段"],
       "forbid": [],
@@ -130,6 +164,7 @@
     {
       "id": "p06",
       "kind": "preference",
+      "capability": "single_hop",
       "prompt": "同一个任务连续失败之后最多重试几次？",
       "expect": ["最多重试 2 次"],
       "forbid": ["重试 5 次"],
@@ -139,6 +174,7 @@
     {
       "id": "p07",
       "kind": "preference",
+      "capability": "single_hop",
       "prompt": "写用例时可以拿真实联系人的邮箱当样本吗？",
       "expect": ["测试数据一律用虚构的邮箱和姓名"],
       "forbid": [],
@@ -148,6 +184,7 @@
     {
       "id": "p08",
       "kind": "preference",
+      "capability": "single_hop",
       "prompt": "给项目加一个新依赖之前要做什么？",
       "expect": ["加新依赖之前必须先问我"],
       "forbid": [],
@@ -157,6 +194,7 @@
     {
       "id": "c01",
       "kind": "procedure",
+      "capability": "single_hop",
       "prompt": "Orchid 的数据库迁移卡在中途了，正确的恢复办法是什么？",
       "expect": ["orchid migrate --unlock"],
       "forbid": [],
@@ -166,6 +204,7 @@
     {
       "id": "c02",
       "kind": "procedure",
+      "capability": "single_hop",
       "prompt": "Kestrel 同步时出现冲突，想保住本地那份版本该用什么命令？",
       "expect": ["ksl resolve --keep-local"],
       "forbid": [],
@@ -175,6 +214,7 @@
     {
       "id": "c03",
       "kind": "procedure",
+      "capability": "single_hop",
       "prompt": "Harborlight 改了模板但是构建不生效，删掉哪个目录能解决？",
       "expect": ["node_modules/.cache/harborlight"],
       "forbid": [".preview/site"],
@@ -184,6 +224,7 @@
     {
       "id": "c04",
       "kind": "procedure",
+      "capability": "single_hop",
       "prompt": "Orchid 的测试夹具乱了，用什么命令重新生成？",
       "expect": ["pnpm fixtures:reset --seed 42"],
       "forbid": [],
@@ -193,6 +234,7 @@
     {
       "id": "c05",
       "kind": "procedure",
+      "capability": "single_hop",
       "prompt": "发版前想把单测、类型检查和构建一次跑完，用哪个命令？",
       "expect": ["pnpm verify:release"],
       "forbid": ["pnpm lint:fix"],
@@ -202,6 +244,7 @@
     {
       "id": "c06",
       "kind": "procedure",
+      "capability": "single_hop",
       "prompt": "排查线上问题时先看哪个日志文件？",
       "expect": ["/var/log/orchid/app.log"],
       "forbid": [],
@@ -211,6 +254,7 @@
     {
       "id": "c07",
       "kind": "procedure",
+      "capability": "single_hop",
       "prompt": "没有网络的时候，怎么让 Kestrel 完成一次同步？",
       "expect": ["ksl sync --offline"],
       "forbid": [],
@@ -220,6 +264,7 @@
     {
       "id": "k01",
       "kind": "correction",
+      "capability": "knowledge_update",
       "prompt": "Orchid 应用现在连数据库走哪个端口？",
       "expect": ["6432"],
       "forbid": ["5432"],
@@ -229,6 +274,7 @@
     {
       "id": "k02",
       "kind": "correction",
+      "capability": "knowledge_update",
       "prompt": "Harborlight 的单测现在跑在哪个框架上？",
       "expect": ["vitest"],
       "forbid": ["jest"],
@@ -238,6 +284,7 @@
     {
       "id": "k03",
       "kind": "correction",
+      "capability": "knowledge_update",
       "prompt": "Kestrel 的 CI 现在跑在哪种机器上？",
       "expect": ["自建 runner"],
       "forbid": ["托管 runner"],
@@ -247,6 +294,7 @@
     {
       "id": "k04",
       "kind": "correction",
+      "capability": "knowledge_update",
       "prompt": "Kestrel 同步失败之后现在会重试几次？",
       "expect": ["重试 5 次"],
       "forbid": ["重试 3 次"],
@@ -256,6 +304,7 @@
     {
       "id": "k05",
       "kind": "correction",
+      "capability": "knowledge_update",
       "prompt": "Orchid 的仓库现在用哪套分支流？",
       "expect": ["trunk-based"],
       "forbid": ["git-flow"],
@@ -265,6 +314,7 @@
     {
       "id": "k06",
       "kind": "correction",
+      "capability": "knowledge_update",
       "prompt": "Harborlight 现在用哪个包管理器？",
       "expect": ["pnpm-lock.yaml"],
       "forbid": ["package-lock.json"],
@@ -274,6 +324,7 @@
     {
       "id": "k07",
       "kind": "correction",
+      "capability": "knowledge_update",
       "prompt": "Kestrel 现在用哪个环境变量指定根目录？",
       "expect": ["KSL_HOME"],
       "forbid": ["KESTREL_HOME"],
@@ -283,6 +334,7 @@
     {
       "id": "k08",
       "kind": "correction",
+      "capability": "knowledge_update",
       "prompt": "Harborlight 构建机锁定的运行时是哪个版本？",
       "expect": ["22.11"],
       "forbid": ["Node 18"],
@@ -290,8 +342,49 @@
       "answer_aliases": ["Node 22.11", "node22.11", "v22.11"]
     },
     {
+      "id": "m01",
+      "kind": "fact_recall",
+      "capability": "multi_hop",
+      "prompt": "Harborlight 正式构建和预览构建的产物目录分别是什么？",
+      "expect": ["dist/site", ".preview/site"],
+      "forbid": [],
+      "source": ["project-harborlight-build-target.md", "reference-harborlight-preview-target.md"],
+      "expect_all": true
+    },
+    {
+      "id": "m02",
+      "kind": "fact_recall",
+      "capability": "multi_hop",
+      "prompt": "Orchid 生产环境监听端口和预发环境监听端口分别是什么？",
+      "expect": ["8443", "9443"],
+      "forbid": [],
+      "source": ["project-orchid-deploy-port.md", "reference-orchid-staging-port.md"],
+      "expect_all": true
+    },
+    {
+      "id": "t01",
+      "kind": "fact_recall",
+      "capability": "temporal",
+      "prompt": "Kestrel 自动同步每天几点触发，失败后几点补跑？",
+      "expect": ["03:30", "05:00"],
+      "forbid": [],
+      "source": ["project-kestrel-sync-schedule.md"],
+      "expect_all": true
+    },
+    {
+      "id": "t02",
+      "kind": "fact_recall",
+      "capability": "temporal",
+      "prompt": "Orchid 图鉴缓存生产环境和预发环境的 TTL 分别多久？",
+      "expect": ["90 分钟", "60 分钟"],
+      "forbid": [],
+      "source": ["project-orchid-cache-ttl.md", "reference-orchid-staging-cache-ttl.md"],
+      "expect_all": true
+    },
+    {
       "id": "r01",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Kestrel 的默认导出格式是 CSV 还是 JSON？",
       "expect": [],
       "forbid": ["toml"],
@@ -300,6 +393,7 @@
     {
       "id": "r02",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Harborlight 的构建缓存默认保留多久？",
       "expect": [],
       "forbid": ["90 分钟"],
@@ -308,6 +402,7 @@
     {
       "id": "r03",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Orchid 的数据库连接池最多允许多少个连接？",
       "expect": [],
       "forbid": ["6432"],
@@ -316,6 +411,7 @@
     {
       "id": "r04",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Harborlight 的构建机上一共挂了几台 runner？",
       "expect": [],
       "forbid": ["2 GB"],
@@ -324,6 +420,7 @@
     {
       "id": "r05",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Kestrel 的日志默认保留多少天？",
       "expect": [],
       "forbid": ["14 天"],
@@ -332,6 +429,7 @@
     {
       "id": "r06",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Orchid 站点的文案规范要求一句话最多多少字？",
       "expect": [],
       "forbid": ["50 字"],
@@ -340,6 +438,7 @@
     {
       "id": "r07",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Orchid 的公开接口每天的总配额是多少次？",
       "expect": [],
       "forbid": ["12 次"],
@@ -348,6 +447,7 @@
     {
       "id": "r08",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "生产环境图鉴缓存的命中率目标是多少？",
       "expect": [],
       "forbid": ["99.5%"],
@@ -356,6 +456,7 @@
     {
       "id": "r09",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Kestrel 的同步任务一天跑几次？",
       "expect": [],
       "forbid": ["5 次"],
@@ -364,6 +465,7 @@
     {
       "id": "r10",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Kestrel 的日志文件会保留多长时间？",
       "expect": [],
       "forbid": ["90 天"],
@@ -372,6 +474,7 @@
     {
       "id": "r11",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Orchid 的文案规范要求一句话最多写多少字？",
       "expect": [],
       "forbid": ["50 字"],
@@ -380,6 +483,7 @@
     {
       "id": "r12",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Harborlight 的构建流水线一共分几个阶段？",
       "expect": [],
       "forbid": ["pnpm verify:release"],
@@ -388,6 +492,7 @@
     {
       "id": "r13",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Kestrel 同步任务的超时时间设置成多少秒？",
       "expect": [],
       "forbid": ["十五分钟"],
@@ -396,6 +501,7 @@
     {
       "id": "r14",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Harborlight 的预发布环境用哪个域名？",
       "expect": [],
       "forbid": ["example.com"],
@@ -404,6 +510,7 @@
     {
       "id": "r15",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Orchid 的后台管理界面默认开在哪个端口上？",
       "expect": [],
       "forbid": ["8443"],
@@ -412,6 +519,7 @@
     {
       "id": "r16",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "图鉴服务的数据库备份任务安排在每周几？",
       "expect": [],
       "forbid": ["每周"],
@@ -420,6 +528,7 @@
     {
       "id": "r17",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Kestrel 的同步任务失败后重试的间隔是多少分钟？",
       "expect": [],
       "forbid": ["十五分钟"],
@@ -428,6 +537,7 @@
     {
       "id": "r18",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Harborlight 的构建日志一共保留多少个版本？",
       "expect": [],
       "forbid": ["14 天"],
@@ -436,6 +546,7 @@
     {
       "id": "r19",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Orchid 站点现在每天大概有多少访问量？",
       "expect": [],
       "forbid": ["12 次"],
@@ -444,6 +555,7 @@
     {
       "id": "r20",
       "kind": "refusal",
+      "capability": "abstention",
       "prompt": "Kestrel 的同步记录保存在哪个表里？",
       "expect": [],
       "forbid": ["sync"],

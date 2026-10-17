@@ -31,6 +31,8 @@
  *   match_rate           答案逐字命中 expect、且没命中 forbid 的比例（回答器无关的准头）。
  *   answer_accuracy      match_rate 在回答层口径下的别名：接入模型回答器后，它就是「答对率」。
  *   negative_transfer    acc(closed_book) − acc(real)，**正值=记忆有害**（02 §4.5）。
+ *   trap_fall_rate       带 negative_transfer_probe 的题里，答案落入 fall_patterns 的比例。
+ *                        只统计规则判分器认得的字面陷阱，不是 LLM 语义陷阱率。
  *   oracle_gap           acc(oracle_gold) − acc(real)：检索/注入丢掉了多少本可答对的题。
  *   answer_token_efficiency  Δaccuracy ÷（real 臂注入千 token）：每千 token 换多少百分点准确率。
  *                        与上面检索层的 token_efficiency 不是一回事，报告里分开印。
@@ -97,6 +99,53 @@ export function estimateTokens(text) {
 /** 拒答题 = tasks.json 里 source 为空的题。 */
 export function isRefusalTask(task) {
   return !Array.isArray(task?.source) || task.source.length === 0;
+}
+
+/** 六类能力（02 §4.6）。题集里显式写 capability；缺省时按 kind 给一个保守的默认值。 */
+export const CAPABILITIES = Object.freeze([
+  'single_hop',
+  'multi_hop',
+  'temporal',
+  'knowledge_update',
+  'abstention',
+  'negative_transfer',
+]);
+
+/**
+ * 题目的 capability。显式字段优先；没写时按 kind 映射，保证旧题/手写测试仍能判分。
+ * 显式写了但不认识的值返回 unknown，而不是悄悄套默认值——脏数据要浮出来。
+ */
+export function taskCapability(task) {
+  const explicit = typeof task?.capability === 'string' ? task.capability.trim() : '';
+  if (explicit) return CAPABILITIES.includes(explicit) ? explicit : 'unknown';
+  if (task?.kind === 'refusal') return 'abstention';
+  if (task?.kind === 'correction') return 'knowledge_update';
+  if (['fact_recall', 'preference', 'procedure'].includes(task?.kind)) return 'single_hop';
+  return 'unknown';
+}
+
+/**
+ * 负迁移陷阱探针。只认完整形状，缺字段就当没有——不能拿半个探针算陷阱率。
+ * 返回 null 表示这题没有可判的陷阱；返回对象则 fall_patterns 至少一条。
+ */
+export function taskNegativeTransferProbe(task) {
+  const probe = task?.negative_transfer_probe;
+  if (!probe || typeof probe !== 'object' || Array.isArray(probe)) return null;
+  const distractorNote = typeof probe.distractor_note === 'string' ? probe.distractor_note.trim() : '';
+  const whyWrong = typeof probe.why_wrong === 'string' ? probe.why_wrong.trim() : '';
+  const fallPatterns = Array.isArray(probe.fall_patterns)
+    ? probe.fall_patterns
+        .filter((value) => typeof value === 'string')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    : [];
+  if (!distractorNote || !whyWrong || fallPatterns.length === 0) return null;
+  return { distractor_note: distractorNote, why_wrong: whyWrong, fall_patterns: fallPatterns };
+}
+
+/** multi_hop 题要求 expect 全部命中；其它题保持「任一等价写法命中」的旧语义。 */
+export function taskExpectAll(task) {
+  return task?.expect_all === true;
 }
 
 /**
@@ -188,34 +237,48 @@ export function scoreTask(task, run = {}, options = {}) {
   const injected = normalizeText(run.injected);
   const answer = normalizeText(run.answer);
   const answerAliases = taskAnswerAliases(task);
+  const expectAll = taskExpectAll(task);
+  const probe = taskNegativeTransferProbe(task);
   const expects = matchTerms(task.expect, injected);
   const expectedInAnswer = matchTerms(task.expect, answer);
   const aliasesInContext = matchTerms(answerAliases, injected);
   const aliasesInAnswer = matchTerms(answerAliases, answer);
   const forbidsInContext = matchTerms(task.forbid, injected);
   const forbidsInAnswer = matchTerms(task.forbid, answer);
+  const trapTerms = matchTerms(probe?.fall_patterns ?? [], answer);
 
-  const expectHit = expects.some((d) => d.hit) || aliasesInContext.some((d) => d.hit);
-  const expectUsed = expectedInAnswer.some((d) => d.hit) || aliasesInAnswer.some((d) => d.hit);
+  // multi_hop 要求整组 expect 都在；旧题保持 OR（expect 里是同一事实的等价写法）。
+  const expectHit = expectAll
+    ? expects.length > 0 && expects.every((d) => d.hit)
+    : expects.some((d) => d.hit) || aliasesInContext.some((d) => d.hit);
+  const expectUsed = expectAll
+    ? expectedInAnswer.length > 0 && expectedInAnswer.every((d) => d.hit)
+    : expectedInAnswer.some((d) => d.hit) || aliasesInAnswer.some((d) => d.hit);
   const forbidHit = forbidsInContext.some((d) => d.hit);
   const forbidUsed = forbidsInAnswer.some((d) => d.hit);
-  const refused = looksRefused(run, forbidUsed);
+  const trapFall = probe ? trapTerms.some((d) => d.hit) : null;
+  // 陷阱值也算「错值已出口」：哪怕它没写进 forbid，也不能判对，更不能算干净拒答。
+  const wrongValueUsed = forbidUsed || trapFall === true;
+  const refused = looksRefused(run, wrongValueUsed);
   const answered = !refused;
   const refusalTask = isRefusalTask(task);
   const recall = recallAtK(task, run.hits, k);
 
-  const correctRefusal = refusalTask ? refused && !forbidUsed : null;
-  const match = refusalTask ? refused && !forbidUsed : answered && expectUsed && !forbidUsed;
+  const correctRefusal = refusalTask ? refused && !wrongValueUsed : null;
+  const match = refusalTask ? refused && !wrongValueUsed : answered && expectUsed && !wrongValueUsed;
 
   return {
     task_id: task.id,
     kind: task.kind ?? 'unknown',
+    capability: taskCapability(task),
     refusal_task: refusalTask,
     recall_at_k: recall,
+    expect_all: expectAll,
     expect_hit: expectHit,
     expect_used: expectUsed,
     forbid_hit: forbidHit,
     forbid_used: forbidUsed,
+    trap_fall: trapFall,
     refused,
     answered,
     hit_but_unused: expectHit && !expectUsed,
@@ -228,6 +291,9 @@ export function scoreTask(task, run = {}, options = {}) {
       expect: expects.map((d, i) => ({ ...d, used: expectedInAnswer[i].hit })),
       answer_aliases: aliasesInContext.map((d, i) => ({ ...d, used: aliasesInAnswer[i].hit })),
       forbid: forbidsInContext.map((d, i) => ({ ...d, used: forbidsInAnswer[i].hit })),
+      trap: probe
+        ? { distractor_note: probe.distractor_note, why_wrong: probe.why_wrong, fall_patterns: trapTerms }
+        : null,
     },
   };
 }
@@ -244,6 +310,7 @@ function aggregate(rows, k) {
   const hitButUnused = rows.filter((r) => r.hit_but_unused).length;
   const matched = rows.filter((r) => r.match).length;
   const answered = rows.filter((r) => r.answered).length;
+  const trapRows = rows.filter((r) => r.trap_fall === true || r.trap_fall === false);
   return {
     tasks: rows.length,
     answerable_tasks: answerable.length,
@@ -263,6 +330,9 @@ function aggregate(rows, k) {
     hit_but_unused: hitButUnused,
     hit_but_unused_rate: rate(hitButUnused, expectHits),
     injected_tokens: rows.reduce((sum, r) => sum + r.tokens, 0),
+    trap_tasks: trapRows.length,
+    trap_falls: trapRows.filter((r) => r.trap_fall).length,
+    trap_fall_rate: rate(trapRows.filter((r) => r.trap_fall).length, trapRows.length),
   };
 }
 
@@ -278,10 +348,15 @@ export function scoreRun(tasks, runs, options = {}) {
   const rows = (tasks ?? []).map((task) => scoreTask(task, byId.get(task.id) ?? {}, { k }));
   const overall = aggregate(rows, k);
   const kinds = {};
+  const capabilities = {};
   for (const row of rows) {
     (kinds[row.kind] ??= []).push(row);
+    (capabilities[row.capability] ??= []).push(row);
   }
   const byKind = Object.fromEntries(Object.entries(kinds).map(([kind, list]) => [kind, aggregate(list, k)]));
+  const byCapability = Object.fromEntries(
+    Object.entries(capabilities).map(([capability, list]) => [capability, aggregate(list, k)]),
+  );
 
   const injectedTokens = overall.injected_tokens;
   const tokenEfficiency = injectedTokens > 0 ? overall.expect_hits / (injectedTokens / 1000) : null;
@@ -307,6 +382,7 @@ export function scoreRun(tasks, runs, options = {}) {
     injected_tokens_mean: meanTokens === null ? null : round(meanTokens, 2),
     token_efficiency: tokenEfficiency === null ? null : round(tokenEfficiency, 4),
     by_kind: byKind,
+    by_capability: byCapability,
     verdict,
     rows,
   };

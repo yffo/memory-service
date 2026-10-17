@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  CAPABILITIES,
   EXPECT_ALIASES,
   REFUSAL_PATTERNS,
   THRESHOLDS,
@@ -32,6 +33,9 @@ import {
   scoreRun,
   scoreTask,
   taskAnswerAliases,
+  taskCapability,
+  taskExpectAll,
+  taskNegativeTransferProbe,
   termVariants,
 } from '../bench/scorer.mjs';
 
@@ -415,6 +419,126 @@ test('跑分器输出契约：--json 走管道也必须是一条完整可解析�
   assert.ok(none, '空上下文基线臂必须在报告里');
   assert.equal(none.metrics.tasks, SUITE_TASKS, '--dry 也要把题跑齐');
   assert.equal(none.metrics.injected_tokens, 0, '无记忆臂的注入 token 必须是 0');
+});
+
+test('taskCapability：显式优先；非法显式不静默套默认；旧 kind 有保守映射', () => {
+  assert.deepEqual([...CAPABILITIES], ['single_hop', 'multi_hop', 'temporal', 'knowledge_update', 'abstention', 'negative_transfer']);
+  assert.equal(taskCapability({ kind: 'refusal', capability: 'temporal' }), 'temporal', '显式值优先于 kind');
+  assert.equal(taskCapability({ kind: 'refusal' }), 'abstention');
+  assert.equal(taskCapability({ kind: 'correction' }), 'knowledge_update');
+  assert.equal(taskCapability({ kind: 'fact_recall' }), 'single_hop');
+  assert.equal(taskCapability({ kind: 'preference' }), 'single_hop');
+  assert.equal(taskCapability({ kind: 'procedure' }), 'single_hop');
+  assert.equal(taskCapability({ kind: 'mystery' }), 'unknown');
+  assert.equal(taskCapability({ kind: 'fact_recall', capability: 'bogus' }), 'unknown', '脏 capability 要浮出来，不能悄悄当 single_hop');
+  assert.equal(taskCapability(null), 'unknown');
+});
+
+test('taskNegativeTransferProbe / taskExpectAll：半截探针不算，expect_all 只认 true', () => {
+  const full = {
+    distractor_note: ' reference-x.md ',
+    why_wrong: ' 这是另一个环境的配置 ',
+    fall_patterns: [' 9443 ', '', 42],
+  };
+  assert.deepEqual(taskNegativeTransferProbe({ negative_transfer_probe: full }), {
+    distractor_note: 'reference-x.md',
+    why_wrong: '这是另一个环境的配置',
+    fall_patterns: ['9443'],
+  });
+  assert.equal(taskNegativeTransferProbe({}), null);
+  assert.equal(taskNegativeTransferProbe({ negative_transfer_probe: { ...full, why_wrong: ' ' } }), null, '缺 why_wrong 不算探针');
+  assert.equal(taskNegativeTransferProbe({ negative_transfer_probe: { ...full, fall_patterns: [] } }), null, '空 fall_patterns 不算探针');
+  assert.equal(taskNegativeTransferProbe({ negative_transfer_probe: [] }), null);
+  assert.equal(taskExpectAll({ expect_all: true }), true);
+  assert.equal(taskExpectAll({ expect_all: 'true' }), false, '字符串 true 不算');
+  assert.equal(taskExpectAll({}), false);
+});
+
+test('scoreTask：陷阱值出口就算错，哪怕它没写进 forbid；拒答也不许端出陷阱值', () => {
+  const trapTask = {
+    ...fact('f01'),
+    capability: 'negative_transfer',
+    forbid: [],
+    negative_transfer_probe: {
+      distractor_note: 'reference-orchid-staging-port.md',
+      why_wrong: '9443 是预发环境端口，不是生产端口',
+      fall_patterns: ['9443'],
+    },
+  };
+  const correct = scoreTask(trapTask, { answer: '8443', injected: '8443', hits: [{ id: 'project-orchid-deploy-port' }] });
+  assert.equal(correct.trap_fall, false);
+  assert.equal(correct.match, true);
+  const fell = scoreTask(trapTask, { answer: '8443，也可能是 9443', injected: '8443', hits: [{ id: 'project-orchid-deploy-port' }] });
+  assert.equal(fell.trap_fall, true);
+  assert.equal(fell.forbid_used, false, 'forbid 里没写这个值');
+  assert.equal(fell.match, false, '陷阱值出口不能判对');
+  assert.equal(fell.details.trap.fall_patterns[0].hit, true);
+
+  const trapRefusal = {
+    ...refusal('r01'),
+    negative_transfer_probe: {
+      distractor_note: 'reference-x.md',
+      why_wrong: '这条值属于别的题目',
+      fall_patterns: ['4242'],
+    },
+  };
+  const clean = scoreTask(trapRefusal, { answer: '', refused: true, hits: [] });
+  assert.equal(clean.correct_refusal, true);
+  const dirty = scoreTask(trapRefusal, { answer: '无法回答，但答案可能是 4242', refused: true, hits: [] });
+  assert.equal(dirty.trap_fall, true);
+  assert.equal(dirty.correct_refusal, false, '先拒答再端出陷阱值不是干净拒答');
+});
+
+test('scoreTask：expect_all 要求整组命中；只答一半不能算对', () => {
+  const multi = {
+    id: 'm01',
+    kind: 'fact_recall',
+    capability: 'multi_hop',
+    prompt: '两件事分别是什么？',
+    expect: ['03:30', '2 GB'],
+    expect_all: true,
+    forbid: [],
+    source: ['a.md', 'b.md'],
+  };
+  const one = scoreTask(multi, { answer: '03:30', injected: '03:30 和 2 GB', hits: [{ id: 'a' }, { id: 'b' }] });
+  assert.equal(one.expect_hit, true, '上下文里两件都在');
+  assert.equal(one.expect_used, false, '答案只答了一半');
+  assert.equal(one.match, false);
+  const both = scoreTask(multi, { answer: '03:30，单次 2 GB', injected: '03:30 和 2 GB', hits: [{ id: 'a' }, { id: 'b' }] });
+  assert.equal(both.expect_used, true);
+  assert.equal(both.match, true);
+  const noContext = scoreTask(multi, { answer: '03:30，单次 2 GB', injected: '', hits: [] });
+  assert.equal(noContext.expect_hit, false, '上下文缺一条，expect_hit 也是假');
+});
+
+test('scoreRun：by_capability 分组，trap_fall_rate 只拿有探针的题当分母', () => {
+  const trapTask = {
+    ...fact('f01'),
+    capability: 'negative_transfer',
+    negative_transfer_probe: {
+      distractor_note: 'reference-orchid-staging-port.md',
+      why_wrong: '9443 是预发环境端口',
+      fall_patterns: ['9443'],
+    },
+  };
+  const plainTask = { ...fact('f02'), expect: ['03:30'], forbid: [], source: ['b.md'], capability: 'single_hop' };
+  const runs = (trapAnswer) => [
+    { task_id: 'f01', hits: [{ id: 'project-orchid-deploy-port' }], injected: '8443', answer: trapAnswer, tokens: 10 },
+    { task_id: 'f02', hits: [{ id: 'b' }], injected: '03:30', answer: '03:30', tokens: 10 },
+  ];
+  const ok = scoreRun([trapTask, plainTask], runs('8443'));
+  assert.equal(ok.by_capability.negative_transfer.tasks, 1);
+  assert.equal(ok.by_capability.single_hop.tasks, 1);
+  assert.equal(ok.trap_tasks, 1, '只有带探针的题进分母');
+  assert.equal(ok.trap_falls, 0);
+  assert.equal(ok.trap_fall_rate, 0);
+  assert.equal(ok.by_capability.negative_transfer.trap_fall_rate, 0);
+
+  const fell = scoreRun([trapTask, plainTask], runs('9443'));
+  assert.equal(fell.trap_falls, 1);
+  assert.equal(fell.trap_fall_rate, 1);
+  assert.equal(fell.match_rate, 0.5, '陷阱题判错，另一题仍对');
+  assert.equal(fell.by_capability.negative_transfer.match_rate, 0);
 });
 
 test('纯函数：跑两遍结果一样，且不改入参', () => {

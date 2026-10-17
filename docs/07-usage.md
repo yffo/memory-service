@@ -10,7 +10,7 @@
 ```bash
 git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
-node --test 'test/**/*.test.mjs'       # 全绿才继续（382 条）
+node --test 'test/**/*.test.mjs'       # 全绿才继续（388 条）
 ```
 
 ## 一条事实一个文件
@@ -402,9 +402,11 @@ node bench/judge-adversarial.mjs                 # 判分器对抗集 106 条，
 
 - 判据 1 用默认的 `echo` 回答器即可；判据 2/3 的回答层必须显式加 `--answerer llm` 并提供
   `EVAL_LLM_API_KEY` 或 `DEEPSEEK_API_KEY`，结果不进 CI。
-- 判分器支持题级 `answer_aliases`（32 道可答题已补）；对抗集用来确认它「该收的收、该拒的拒」，
+- 判分器支持题级 `answer_aliases`（原 32 道可答题已补）；对抗集用来确认它「该收的收、该拒的拒」，
   通过门槛是误收率 < 20%、正确接受率 ≥ 95%。详细口径见 `docs/02-evaluation.md §4.6.2` 与
   `docs/08-eval-runbook.md §6.4`。
+- 题集 56 题已标 `capability`（六类），其中 4 道 `negative_transfer` 陷阱题带 `negative_transfer_probe`；
+  `run-eval` 会按能力分表并报 `trap_fall_rate`。当前 4 题里 1 题落入（0.25，压线），分母太小，只当方向。
 - 当前回答层没有可用 API key，所以判据 2 的新口径数字**未重测**；旧的 1.408 是补别名前的下界，不能当结论。
 
 ## MCP（给 Agent 用）

@@ -121,6 +121,8 @@
    | **知识更新/失效** | 6 | 同一条记忆后来被推翻，必须用新的；**测遗忘** |
    | **拒答**（abstention） | 4 | 记忆库里根本没有，正确行为是说不知道 |
    | **负迁移陷阱** | 4 | 库里有一条「看起来相关但错误/过期」的记忆，考它会不会被带偏 |
+**当前落地（2026-10-17）**：`core-30-v1` 扩到 56 题 —— 可答 36（`single_hop` 20 / `knowledge_update` 8 / `negative_transfer` 4 / `multi_hop` 2 / `temporal` 2）+ 拒答 20。`capability` 已在每题显式标注，缺省仍按 `kind` 回退；但 `multi_hop` / `temporal` 各只有 2 题、`negative_transfer` 4 题，分层数字只当方向。
+
 4. **写期望答案时用「判分三选一」**：能确定性判分的优先（数值/日期/ID/枚举），其次关键词集合，最后才允许 LLM 裁判（配额 ≤ 20%）。
 
 ### 4.3 怎么避免自欺（防泄漏五条）
@@ -241,18 +243,18 @@
 
 | 目标字段 | 当前实际 | 后果 |
 |---|---|---|
-| `capability` | `kind`（`fact_recall` / `preference` / `procedure` / `correction` / `refusal`） | 只能按这 5 类分层；`single_hop` / `multi_hop` / `temporal` / `knowledge_update` / `negative_transfer` 分不出来。多跳、时间推理、知识更新、陷阱题的结论目前是**未测**，不是「通过」。 |
+| `capability` | 顶层 `capability`（六类之一），缺省从 `kind` 回退 | **已实现（2026-10-17）**：56 题全部显式标注；`single_hop` 20 / `multi_hop` 2 / `temporal` 2 / `knowledge_update` 8 / `abstention` 20 / `negative_transfer` 4。可按能力分层报告。边界：`multi_hop` / `temporal` 各只有 2 题，`negative_transfer` 4 题，分母太小，只当方向；`temporal` 测的是时间点/时长对齐，不是 `as_of` 历史回放。 |
 | `gold_notes[]` | `source[]`（笔记 id） | 有等价物；oracle 臂读它。 |
 | `expected.answer` | `expect[]`（逐字子串） | 判分仍是 substring；`expect` 之外的正确改述要靠 `answer_aliases` 兜，语义判分未做。 |
 | `expected.answer_aliases` | 顶层 `answer_aliases[]`（不是 `expected` 内） | **已实现（2026-10-17）**：32 道可答题各补 1–4 条，判分改判 `expect[] || answer_aliases[]`；`forbid[]` 优先级不变，别名不能绕过反向约束。仍是人工白名单，不是语义判分；白名单没覆盖的改述仍会误判。 |
 | `expected.must_not_contain` | `forbid[]` | 已用于反向约束。 |
 | `expected.judge` / `judge_args` | 无（只有硬编码 substring + 拒答规则） | 没有 `set_match` / `cheap_judge` / 人工抽检；拒答用「空答案 / `refused` 标志 / 固定措辞正则」判（`bench/scorer.mjs` 的 `looksRefused`），不是独立的 `refusal_match` 字段。 |
-| `negative_transfer_probe` | 无 | 没有陷阱题，`trap_fall_rate` 算不出来；`negative_transfer` 只能算「加记忆的净收益」，不能算「被错记忆带偏」。**不能据此写「判据 3 成立」**。 |
+| `negative_transfer_probe` | 顶层 `negative_transfer_probe`（4 道 `negative_transfer` 题） | **已实现（2026-10-17）**：`distractor_note` + `why_wrong` + `fall_patterns`，探针值必须能在 distractor 正文追到且不进 `source`。当前 `trap_tasks=4`、`trap_falls=1`、`trap_fall_rate=0.25`（压线，1 题是 f01 答出预发端口 9443）。n 太小，不能据此写「判据 3 成立」。 |
 | `setup.ops` | 无 | 不能在题级构造失效/更新场景；目前靠 `bench/replay.mjs` 的时间回放单独测。 |
 | `difficulty` / `leak_check` / `tags` | 无 | 不能按难度分层报告，也没有自动 8-gram 防泄漏自检。 |
 | 顶层 `budgets` / `baselines` / `scoring` | 无 | 预算曲线、基线与权重在 CLI/脚本层表达，不在题集 schema 里。 |
 
-**迁移顺序**：① 先把 `kind` 映射到 `capability`，并给现有 32 道可答题补 `answer_aliases`——**其中 `answer_aliases` 已完成（2026-10-17），`kind` → `capability` 仍未做**；② 再加 `setup.ops` 与 `negative_transfer_probe`（陷阱/更新题）；③ `difficulty` / `leak_check` 随新题一起补。在 ①② 完成前，分层、陷阱相关的结论一律写「未测」；别名只证明「白名单内的改述能被接住」，不证明语义判分。
+**迁移顺序**：① **已完成（2026-10-17）**：`kind` → 显式 `capability`、原 32 道可答题补 `answer_aliases`；② **部分完成**：`negative_transfer_probe` 已落地 4 道题，`setup.ops` 仍未做；③ `difficulty` / `leak_check` / `tags` 未做，改由测试里的 8-gram / 标题重叠检查兜底。分层、陷阱现在有数，但 `multi_hop` / `temporal` 各 2 题、`negative_transfer` 4 题，只当方向，不是统计结论；别名只证明「白名单内的改述能被接住」，不证明语义判分。
 
 **同目录放最小语料快照**：只放被 gold_notes 引用到的笔记 + 陷阱笔记（约 20~30 条），其余从真实库里按快照 ID 引用，避免评测集里囤一份会腐烂的副本。
 
@@ -260,13 +262,13 @@
 
 判分器自己也会错：宽松的判分器会把「含糊但切题」的错答案收下，严格的逐字判分器会把正确改述判错。两种错误都会污染后续所有数字，所以先打裁判、再信分数。
 
-- **题集**：`bench/core-30-v1/adversarial.json`，106 条用例，全部挂在 `core-30-v1` 的 52 道题上。
+- **题集**：`bench/core-30-v1/adversarial.json`，106 条用例，仍挂在 `core-30-v1` 原有 52 道题上（新加的 4 道多跳/时间题暂未进对抗集）。
   - 应接受 52 条：32 条正确改述 + 20 条干净拒答。
   - 应拒绝 54 条：32 条「含糊但切题」（`ambiguous_wrong`）+ 20 条编造答案（`hallucinated`）+ 2 条「先拒答再补编造值」的 `hedged_hallucination`。
 - **跑法**：`node bench/judge-adversarial.mjs`（`--json` 出机器可读，`--verbose` 列全部用例，`--tasks` / `--suite` 换题集）。零依赖、零模型调用，失败退 1，参数/文件错误退 2。
 - **判据**：误收率 = 实际接受的应拒绝用例 / 应拒绝用例总数，必须 **< 0.20**；正确接受率必须 **≥ 0.95**（正确改述被拒也是判分器 bug）。两条同时满足才 `pass`。
 - **2026-10-17 实测**：106 条全部符合预期；应拒绝 54 条**一条没被收**（误收率 0.0000），应接受 52 条**全部接住**（正确接受率 1.0000）。按 label：`correct` 32/32、`correct_refusal` 20/20、`ambiguous_wrong` 32 全拒、`hallucinated` 20 全拒、`hedged_hallucination` 2 全拒。
-- **边界**：这打的是**规则判分器**（substring + 别名 + 拒答正则），不是 LLM 裁判；20% 人工抽检与 Cohen's κ **仍未做**。别名是人工白名单，可能对题集过拟合；它只说明「这批改述能接住」，不说明「任意语义等价都能接住」。`negative_transfer_probe` 仍未落地，陷阱题与 `trap_fall_rate` 仍是「未测」。
+- **边界**：这打的是**规则判分器**（substring + 别名 + 拒答正则），不是 LLM 裁判；20% 人工抽检与 Cohen's κ **仍未做**。别名是人工白名单，可能对题集过拟合；它只说明「这批改述能接住」，不说明「任意语义等价都能接住」。`negative_transfer_probe` 已落地 4 道题，但对抗集没有覆盖新加的多跳/时间题；`trap_fall_rate` 现有 4 题分母（1/4 = 0.25），只能当方向。
 
 ### 4.7 跑分脚本接口（设计 vs 现状）
 
@@ -379,6 +381,7 @@ node bench/run-eval.mjs --same-corpus --arms none,new,oracle \
 **判据 3 · 不腐烂、不害人**
 > 4 周回放后 `staleness_rate ≤ 0.05`，且 `negative_transfer ≤ 0.02`（正值=有害，即记忆不得让准确率下降超过 2 个百分点）。
 - 证伪条件：同一个问题跨周答案自相矛盾；或加入记忆后比 closed-book 更差；或陷阱题落入率 > 25%。
+- **当前实测（2026-10-17）**：`core-30-v1` 已有 4 道 `negative_transfer` 陷阱题，`trap_fall_rate = 1/4 = 0.25`，正好压在阈值线上（f01 答出了预发端口 9443）；n 只有 4，不能据此写「判据 3 成立」。`staleness_rate` 仍由 `bench/replay.mjs` 的 4 周回放单独测。
 - 为什么：记忆系统的失败模式不是「没想起来」而是「想起了错的」，而这一条恰恰是所有公开基准（LoCoMo 完全没测、LongMemEval 有 abstention 但无时间回放）覆盖最弱的。
 
 ---
