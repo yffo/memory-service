@@ -30,6 +30,10 @@ jobs:
           test -z "${NODE_AUTH_TOKEN:-}" || { echo "NODE_AUTH_TOKEN 不该存在（应走 OIDC）"; exit 1; }
 
       - name: 测试
+        # 固定时区：`parseTime` 的「不带时区 = 本机时区」语义在 UTC 机器上无实验条件
+        # （本地时间与 UTC 相等，性质退化成恒等式）。+08:00 是项目的部署时区。
+        env:
+          TZ: Asia/Shanghai
         run: npm test
 
       - name: 发布（OIDC Trusted Publisher）

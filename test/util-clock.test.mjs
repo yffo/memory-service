@@ -17,7 +17,13 @@ test('parseTime：ISO 带时区按绝对时刻解析', () => {
   assert.equal(a, Date.UTC(2026, 9, 16, 19, 25, 24));
 });
 
-test('parseTime：不带时区的 ISO 当**本地时间**（不是 UTC）', () => {
+test('parseTime：不带时区的 ISO 当**本地时间**（不是 UTC）', (t) => {
+  // 在 UTC 机器上「本地」就是「UTC」，这条性质无从检验（两者本来就该相等）。
+  // 跳而不是硬断言：用例要的是「非零偏移时两者被当成不同时刻」，零点机器上它没有实验条件。
+  if (new Date().getTimezoneOffset() === 0) {
+    t.skip('本机时区偏移为 0（UTC），无法区分本地时间与 UTC');
+    return;
+  }
   const local = parseTime('2026-10-17T10:00:00');
   const utc = parseTime('2026-10-17T10:00:00Z');
   // 本机在 +08:00 时两者差 8 小时；断言的是「两者被当成不同时刻」这件事本身，
