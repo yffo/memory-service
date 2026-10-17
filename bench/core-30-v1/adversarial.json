@@ -1,0 +1,768 @@
+{
+  "version": "core-30-v1-adversarial/1",
+  "description": "判分器对抗集：正确改述应被接受；含糊但切题/接近但错误的答案应被拒绝；拒答题要区分干净拒答与带编造值的假拒答。",
+  "cases": [
+    {
+      "id": "f01-correct",
+      "task_id": "f01",
+      "label": "correct",
+      "answer": "生产环境监听 8443 端口，由反向代理转进来。",
+      "accept": true
+    },
+    {
+      "id": "f02-correct",
+      "task_id": "f02",
+      "label": "correct",
+      "answer": "每天 03:30 自动同步一次。",
+      "accept": true
+    },
+    {
+      "id": "f03-correct",
+      "task_id": "f03",
+      "label": "correct",
+      "answer": "单次同步上限是 2GB。",
+      "accept": true
+    },
+    {
+      "id": "f04-correct",
+      "task_id": "f04",
+      "label": "correct",
+      "answer": "正式构建的产物写在 dist/site。",
+      "accept": true
+    },
+    {
+      "id": "f05-correct",
+      "task_id": "f05",
+      "label": "correct",
+      "answer": "站点主题现在用 ink-forest。",
+      "accept": true
+    },
+    {
+      "id": "f06-correct",
+      "task_id": "f06",
+      "label": "correct",
+      "answer": "公开接口每秒 12 次。",
+      "accept": true
+    },
+    {
+      "id": "f07-correct",
+      "task_id": "f07",
+      "label": "correct",
+      "answer": "生产环境的图鉴缓存一个半小时过期。",
+      "accept": true
+    },
+    {
+      "id": "f08-correct",
+      "task_id": "f08",
+      "label": "correct",
+      "answer": "配置读 ~/.config/kestrel/config.toml。",
+      "accept": true
+    },
+    {
+      "id": "f09-correct",
+      "task_id": "f09",
+      "label": "correct",
+      "answer": "站会固定在每周二、周四 09:15。",
+      "accept": true
+    },
+    {
+      "id": "p01-correct",
+      "task_id": "p01",
+      "label": "correct",
+      "answer": "提交信息用中文祈使句，一行说清楚。",
+      "accept": true
+    },
+    {
+      "id": "p02-correct",
+      "task_id": "p02",
+      "label": "correct",
+      "answer": "单个 PR 的 diff 控制在 400 行以内。",
+      "accept": true
+    },
+    {
+      "id": "p03-correct",
+      "task_id": "p03",
+      "label": "correct",
+      "answer": "评审集中在上午 10 点到 12 点。",
+      "accept": true
+    },
+    {
+      "id": "p04-correct",
+      "task_id": "p04",
+      "label": "correct",
+      "answer": "提交前先跑 pnpm lint:fix 再提交。",
+      "accept": true
+    },
+    {
+      "id": "p05-correct",
+      "task_id": "p05",
+      "label": "correct",
+      "answer": "版本号不要自动改，发布时手工处理。",
+      "accept": true
+    },
+    {
+      "id": "p06-correct",
+      "task_id": "p06",
+      "label": "correct",
+      "answer": "失败后最多重试两次，第三次前先汇报。",
+      "accept": true
+    },
+    {
+      "id": "p07-correct",
+      "task_id": "p07",
+      "label": "correct",
+      "answer": "测试数据只用虚构的邮箱和姓名。",
+      "accept": true
+    },
+    {
+      "id": "p08-correct",
+      "task_id": "p08",
+      "label": "correct",
+      "answer": "加新依赖前先问我，不要先装。",
+      "accept": true
+    },
+    {
+      "id": "c01-correct",
+      "task_id": "c01",
+      "label": "correct",
+      "answer": "先 orchid migrate --status，再 orchid migrate --unlock。",
+      "accept": true
+    },
+    {
+      "id": "c02-correct",
+      "task_id": "c02",
+      "label": "correct",
+      "answer": "用 ksl resolve --keep-local 保住本地版本。",
+      "accept": true
+    },
+    {
+      "id": "c03-correct",
+      "task_id": "c03",
+      "label": "correct",
+      "answer": "删掉 node_modules/.cache/harborlight 再重新构建。",
+      "accept": true
+    },
+    {
+      "id": "c04-correct",
+      "task_id": "c04",
+      "label": "correct",
+      "answer": "跑 pnpm fixtures:reset --seed 42 重新生成夹具。",
+      "accept": true
+    },
+    {
+      "id": "c05-correct",
+      "task_id": "c05",
+      "label": "correct",
+      "answer": "发版前跑 pnpm verify:release 一次串完。",
+      "accept": true
+    },
+    {
+      "id": "c06-correct",
+      "task_id": "c06",
+      "label": "correct",
+      "answer": "先看 /var/log/orchid/app.log。",
+      "accept": true
+    },
+    {
+      "id": "c07-correct",
+      "task_id": "c07",
+      "label": "correct",
+      "answer": "没有网络时用 ksl sync --offline。",
+      "accept": true
+    },
+    {
+      "id": "k01-correct",
+      "task_id": "k01",
+      "label": "correct",
+      "answer": "应用连连接池，端口是 6432。",
+      "accept": true
+    },
+    {
+      "id": "k02-correct",
+      "task_id": "k02",
+      "label": "correct",
+      "answer": "单测框架已经迁到 vitest。",
+      "accept": true
+    },
+    {
+      "id": "k03-correct",
+      "task_id": "k03",
+      "label": "correct",
+      "answer": "CI 全部跑在自建 runner 上。",
+      "accept": true
+    },
+    {
+      "id": "k04-correct",
+      "task_id": "k04",
+      "label": "correct",
+      "answer": "同步失败后重试 5 次，指数退避。",
+      "accept": true
+    },
+    {
+      "id": "k05-correct",
+      "task_id": "k05",
+      "label": "correct",
+      "answer": "现在走 trunk-based，短分支当天合回主干。",
+      "accept": true
+    },
+    {
+      "id": "k06-correct",
+      "task_id": "k06",
+      "label": "correct",
+      "answer": "包管理器统一用 pnpm，锁文件是 pnpm-lock.yaml。",
+      "accept": true
+    },
+    {
+      "id": "k07-correct",
+      "task_id": "k07",
+      "label": "correct",
+      "answer": "根目录环境变量是 KSL_HOME。",
+      "accept": true
+    },
+    {
+      "id": "k08-correct",
+      "task_id": "k08",
+      "label": "correct",
+      "answer": "构建机固定用 Node 22.11。",
+      "accept": true
+    },
+    {
+      "id": "f01-ambiguous-wrong",
+      "task_id": "f01",
+      "label": "ambiguous_wrong",
+      "answer": "生产环境从外部走 443，容器内部再转到 8080。",
+      "accept": false
+    },
+    {
+      "id": "f02-ambiguous-wrong",
+      "task_id": "f02",
+      "label": "ambiguous_wrong",
+      "answer": "每天凌晨跑，具体时间看负载，通常在一两点之间。",
+      "accept": false
+    },
+    {
+      "id": "f03-ambiguous-wrong",
+      "task_id": "f03",
+      "label": "ambiguous_wrong",
+      "answer": "单次同步上限大概是 5 GB，超过会截断。",
+      "accept": false
+    },
+    {
+      "id": "f04-ambiguous-wrong",
+      "task_id": "f04",
+      "label": "ambiguous_wrong",
+      "answer": "产物在 build/ 目录，部署脚本会自己拷过去。",
+      "accept": false
+    },
+    {
+      "id": "f05-ambiguous-wrong",
+      "task_id": "f05",
+      "label": "ambiguous_wrong",
+      "answer": "主题是 forest-green，深色底配青绿。",
+      "accept": false
+    },
+    {
+      "id": "f06-ambiguous-wrong",
+      "task_id": "f06",
+      "label": "ambiguous_wrong",
+      "answer": "按来源 IP 限流，大概每分钟几百次。",
+      "accept": false
+    },
+    {
+      "id": "f07-ambiguous-wrong",
+      "task_id": "f07",
+      "label": "ambiguous_wrong",
+      "answer": "缓存一小时左右过期。",
+      "accept": false
+    },
+    {
+      "id": "f08-ambiguous-wrong",
+      "task_id": "f08",
+      "label": "ambiguous_wrong",
+      "answer": "配置文件在项目根目录的 kestrel.toml。",
+      "accept": false
+    },
+    {
+      "id": "f09-ambiguous-wrong",
+      "task_id": "f09",
+      "label": "ambiguous_wrong",
+      "answer": "站会放在工作日上午，具体看日历。",
+      "accept": false
+    },
+    {
+      "id": "p01-ambiguous-wrong",
+      "task_id": "p01",
+      "label": "ambiguous_wrong",
+      "answer": "提交信息用英文祈使句，尽量短。",
+      "accept": false
+    },
+    {
+      "id": "p02-ambiguous-wrong",
+      "task_id": "p02",
+      "label": "ambiguous_wrong",
+      "answer": "一个 PR 控制在 800 行左右比较合适。",
+      "accept": false
+    },
+    {
+      "id": "p03-ambiguous-wrong",
+      "task_id": "p03",
+      "label": "ambiguous_wrong",
+      "answer": "一般下午评审，提前一天发链接。",
+      "accept": false
+    },
+    {
+      "id": "p04-ambiguous-wrong",
+      "task_id": "p04",
+      "label": "ambiguous_wrong",
+      "answer": "提交前先跑一遍 pnpm verify:release。",
+      "accept": false
+    },
+    {
+      "id": "p05-ambiguous-wrong",
+      "task_id": "p05",
+      "label": "ambiguous_wrong",
+      "answer": "可以自动改，发布时顺手 bump 一下 version。",
+      "accept": false
+    },
+    {
+      "id": "p06-ambiguous-wrong",
+      "task_id": "p06",
+      "label": "ambiguous_wrong",
+      "answer": "失败后最多重试 5 次再汇报。",
+      "accept": false
+    },
+    {
+      "id": "p07-ambiguous-wrong",
+      "task_id": "p07",
+      "label": "ambiguous_wrong",
+      "answer": "用真实邮箱脱敏后当样本就行。",
+      "accept": false
+    },
+    {
+      "id": "p08-ambiguous-wrong",
+      "task_id": "p08",
+      "label": "ambiguous_wrong",
+      "answer": "先装上，评审时再解释为什么加。",
+      "accept": false
+    },
+    {
+      "id": "c01-ambiguous-wrong",
+      "task_id": "c01",
+      "label": "ambiguous_wrong",
+      "answer": "重启数据库，然后重跑迁移。",
+      "accept": false
+    },
+    {
+      "id": "c02-ambiguous-wrong",
+      "task_id": "c02",
+      "label": "ambiguous_wrong",
+      "answer": "用 ksl resolve --keep-remote。",
+      "accept": false
+    },
+    {
+      "id": "c03-ambiguous-wrong",
+      "task_id": "c03",
+      "label": "ambiguous_wrong",
+      "answer": "删掉整个 node_modules 重新安装。",
+      "accept": false
+    },
+    {
+      "id": "c04-ambiguous-wrong",
+      "task_id": "c04",
+      "label": "ambiguous_wrong",
+      "answer": "跑 pnpm fixtures:reset --seed 7。",
+      "accept": false
+    },
+    {
+      "id": "c05-ambiguous-wrong",
+      "task_id": "c05",
+      "label": "ambiguous_wrong",
+      "answer": "先跑 pnpm lint:fix，再手工跑单测。",
+      "accept": false
+    },
+    {
+      "id": "c06-ambiguous-wrong",
+      "task_id": "c06",
+      "label": "ambiguous_wrong",
+      "answer": "先看浏览器控制台和边缘机访问日志。",
+      "accept": false
+    },
+    {
+      "id": "c07-ambiguous-wrong",
+      "task_id": "c07",
+      "label": "ambiguous_wrong",
+      "answer": "用 ksl sync --force 强制跑一次。",
+      "accept": false
+    },
+    {
+      "id": "k01-ambiguous-wrong",
+      "task_id": "k01",
+      "label": "ambiguous_wrong",
+      "answer": "应用直连数据库，端口 5432。",
+      "accept": false
+    },
+    {
+      "id": "k02-ambiguous-wrong",
+      "task_id": "k02",
+      "label": "ambiguous_wrong",
+      "answer": "还是 jest，构建配置里能看到。",
+      "accept": false
+    },
+    {
+      "id": "k03-ambiguous-wrong",
+      "task_id": "k03",
+      "label": "ambiguous_wrong",
+      "answer": "跑在 GitHub 托管的 runner 上。",
+      "accept": false
+    },
+    {
+      "id": "k04-ambiguous-wrong",
+      "task_id": "k04",
+      "label": "ambiguous_wrong",
+      "answer": "失败后重试 3 次，然后停。",
+      "accept": false
+    },
+    {
+      "id": "k05-ambiguous-wrong",
+      "task_id": "k05",
+      "label": "ambiguous_wrong",
+      "answer": "用 git-flow，主分支只放发布。",
+      "accept": false
+    },
+    {
+      "id": "k06-ambiguous-wrong",
+      "task_id": "k06",
+      "label": "ambiguous_wrong",
+      "answer": "用 npm，锁文件是 package-lock.json。",
+      "accept": false
+    },
+    {
+      "id": "k07-ambiguous-wrong",
+      "task_id": "k07",
+      "label": "ambiguous_wrong",
+      "answer": "用 KESTREL_HOME 指定根目录。",
+      "accept": false
+    },
+    {
+      "id": "k08-ambiguous-wrong",
+      "task_id": "k08",
+      "label": "ambiguous_wrong",
+      "answer": "构建机用 Node 18，本地随便。",
+      "accept": false
+    },
+    {
+      "id": "r01-correct-refusal",
+      "task_id": "r01",
+      "label": "correct_refusal",
+      "answer": "没有找到相关记录。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r01-hallucinated",
+      "task_id": "r01",
+      "label": "hallucinated",
+      "answer": "默认导出格式是 TOML。",
+      "accept": false
+    },
+    {
+      "id": "r02-correct-refusal",
+      "task_id": "r02",
+      "label": "correct_refusal",
+      "answer": "笔记里没有提到这件事，无法确认。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r02-hallucinated",
+      "task_id": "r02",
+      "label": "hallucinated",
+      "answer": "构建缓存默认保留 90 分钟。",
+      "accept": false
+    },
+    {
+      "id": "r03-correct-refusal",
+      "task_id": "r03",
+      "label": "correct_refusal",
+      "answer": "查不到这条信息。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r03-hallucinated",
+      "task_id": "r03",
+      "label": "hallucinated",
+      "answer": "连接池最多 6432 个连接。",
+      "accept": false
+    },
+    {
+      "id": "r04-correct-refusal",
+      "task_id": "r04",
+      "label": "correct_refusal",
+      "answer": "未找到相关记录。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r04-hallucinated",
+      "task_id": "r04",
+      "label": "hallucinated",
+      "answer": "每台 runner 2 GB，一共挂了 4 台。",
+      "accept": false
+    },
+    {
+      "id": "r05-correct-refusal",
+      "task_id": "r05",
+      "label": "correct_refusal",
+      "answer": "不知道，库里没有写。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r05-hallucinated",
+      "task_id": "r05",
+      "label": "hallucinated",
+      "answer": "日志默认保留 14 天。",
+      "accept": false
+    },
+    {
+      "id": "r06-correct-refusal",
+      "task_id": "r06",
+      "label": "correct_refusal",
+      "answer": "没有相关信息，不能确定。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r06-hallucinated",
+      "task_id": "r06",
+      "label": "hallucinated",
+      "answer": "一句话最多 50 字。",
+      "accept": false
+    },
+    {
+      "id": "r07-correct-refusal",
+      "task_id": "r07",
+      "label": "correct_refusal",
+      "answer": "找不到相关笔记。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r07-hallucinated",
+      "task_id": "r07",
+      "label": "hallucinated",
+      "answer": "每天总配额 12 次。",
+      "accept": false
+    },
+    {
+      "id": "r08-correct-refusal",
+      "task_id": "r08",
+      "label": "correct_refusal",
+      "answer": "记录里没有提到，说不准。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r08-hallucinated",
+      "task_id": "r08",
+      "label": "hallucinated",
+      "answer": "缓存命中率目标是 99.5%。",
+      "accept": false
+    },
+    {
+      "id": "r09-correct-refusal",
+      "task_id": "r09",
+      "label": "correct_refusal",
+      "answer": "未检索到相关内容。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r09-hallucinated",
+      "task_id": "r09",
+      "label": "hallucinated",
+      "answer": "同步任务一天跑 5 次。",
+      "accept": false
+    },
+    {
+      "id": "r10-correct-refusal",
+      "task_id": "r10",
+      "label": "correct_refusal",
+      "answer": "无法确认，现有笔记没写。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r10-hallucinated",
+      "task_id": "r10",
+      "label": "hallucinated",
+      "answer": "日志文件保留 90 天。",
+      "accept": false
+    },
+    {
+      "id": "r11-correct-refusal",
+      "task_id": "r11",
+      "label": "correct_refusal",
+      "answer": "这条没有记录。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r11-hallucinated",
+      "task_id": "r11",
+      "label": "hallucinated",
+      "answer": "一句话最多 50 字。",
+      "accept": false
+    },
+    {
+      "id": "r12-correct-refusal",
+      "task_id": "r12",
+      "label": "correct_refusal",
+      "answer": "无法确认，相关资料里没有。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r12-hallucinated",
+      "task_id": "r12",
+      "label": "hallucinated",
+      "answer": "流水线一共 3 个阶段，最后跑 pnpm verify:release。",
+      "accept": false
+    },
+    {
+      "id": "r13-correct-refusal",
+      "task_id": "r13",
+      "label": "correct_refusal",
+      "answer": "没有找到，无法判断。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r13-hallucinated",
+      "task_id": "r13",
+      "label": "hallucinated",
+      "answer": "同步超时设成十五分钟。",
+      "accept": false
+    },
+    {
+      "id": "r14-correct-refusal",
+      "task_id": "r14",
+      "label": "correct_refusal",
+      "answer": "未提及，不能确认。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r14-hallucinated",
+      "task_id": "r14",
+      "label": "hallucinated",
+      "answer": "预发布域名是 preview.example.com。",
+      "accept": false
+    },
+    {
+      "id": "r15-correct-refusal",
+      "task_id": "r15",
+      "label": "correct_refusal",
+      "answer": "不知道，没有相关说明。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r15-hallucinated",
+      "task_id": "r15",
+      "label": "hallucinated",
+      "answer": "后台默认开在 8443 端口。",
+      "accept": false
+    },
+    {
+      "id": "r16-correct-refusal",
+      "task_id": "r16",
+      "label": "correct_refusal",
+      "answer": "找不到相关记录。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r16-hallucinated",
+      "task_id": "r16",
+      "label": "hallucinated",
+      "answer": "备份任务安排在每周日。",
+      "accept": false
+    },
+    {
+      "id": "r17-correct-refusal",
+      "task_id": "r17",
+      "label": "correct_refusal",
+      "answer": "没有这条信息。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r17-hallucinated",
+      "task_id": "r17",
+      "label": "hallucinated",
+      "answer": "失败后每十五分钟重试一次。",
+      "accept": false
+    },
+    {
+      "id": "r18-correct-refusal",
+      "task_id": "r18",
+      "label": "correct_refusal",
+      "answer": "不确定，笔记里查不到。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r18-hallucinated",
+      "task_id": "r18",
+      "label": "hallucinated",
+      "answer": "构建日志保留 14 天，一共 10 个版本。",
+      "accept": false
+    },
+    {
+      "id": "r19-correct-refusal",
+      "task_id": "r19",
+      "label": "correct_refusal",
+      "answer": "没有相关数据。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r19-hallucinated",
+      "task_id": "r19",
+      "label": "hallucinated",
+      "answer": "每天大概 12 次访问。",
+      "accept": false
+    },
+    {
+      "id": "r20-correct-refusal",
+      "task_id": "r20",
+      "label": "correct_refusal",
+      "answer": "查不到，无法回答。",
+      "refused": true,
+      "accept": true
+    },
+    {
+      "id": "r20-hallucinated",
+      "task_id": "r20",
+      "label": "hallucinated",
+      "answer": "同步记录存在 sync_records 表里。",
+      "accept": false
+    },
+    {
+      "id": "r01-hedged-hallucination",
+      "task_id": "r01",
+      "label": "hedged_hallucination",
+      "answer": "不太确定，可能是 TOML 吧。",
+      "accept": false
+    },
+    {
+      "id": "r15-hedged-hallucination",
+      "task_id": "r15",
+      "label": "hedged_hallucination",
+      "answer": "记不清了，好像是 8443。",
+      "accept": false
+    }
+  ]
+}

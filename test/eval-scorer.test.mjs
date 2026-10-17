@@ -31,6 +31,7 @@ import {
   round,
   scoreRun,
   scoreTask,
+  taskAnswerAliases,
   termVariants,
 } from '../bench/scorer.mjs';
 
@@ -119,6 +120,58 @@ test('termVariants：别名白名单能把题面写法换算成笔记写法', ()
     assert.equal(typeof alias.to, 'function');
   }
   assert.ok(EXPECT_ALIASES.length >= 3);
+});
+
+test('taskAnswerAliases：顶层与 expected 两种位置都认，脏值丢掉', () => {
+  assert.deepEqual(taskAnswerAliases({ answer_aliases: [' 400 行以内 ', 3, '', null] }), ['400 行以内']);
+  assert.deepEqual(taskAnswerAliases({ expected: { answer_aliases: ['500元/月', '每月 500'] } }), ['500元/月', '每月 500']);
+  assert.deepEqual(taskAnswerAliases({}), []);
+  assert.deepEqual(taskAnswerAliases({ answer_aliases: '400 行' }), [], '非数组不算别名，避免字符串被逐字拆开');
+});
+
+test('scoreTask：题级 answer_aliases 接受正确改述，但不绕过 forbid', () => {
+  const task = {
+    ...fact('p02'),
+    expect: ['不超过 400 行'],
+    forbid: ['800 行'],
+    answer_aliases: ['400 行以内'],
+  };
+  const row = scoreTask(task, {
+    hits: [{ id: 'project-orchid-deploy-port' }],
+    injected: '单个 PR 的 diff 不超过 400 行',
+    answer: '单个 PR 控制在 400 行以内。',
+    tokens: 50,
+  });
+  assert.equal(row.expect_used, true, '别名也算命中 expect');
+  assert.equal(row.match, true);
+  assert.deepEqual(row.alias_used, ['400 行以内']);
+  assert.equal(row.details.answer_aliases[0].used, true);
+
+  const dirty = scoreTask(task, {
+    answer: '单个 PR 控制在 400 行以内，800 行也能接受。',
+  });
+  assert.equal(dirty.forbid_used, true);
+  assert.equal(dirty.match, false, '别名不能绕过 forbid');
+});
+
+test('scoreTask：别名只在上下文里时 expect_hit 为真、expect_used 仍为假', () => {
+  const task = { ...fact('p02'), expect: ['不超过 400 行'], forbid: [], answer_aliases: ['400 行以内'] };
+  const row = scoreTask(task, { injected: '单个 PR 控制在 400 行以内', answer: '这个我不知道。' });
+  assert.equal(row.expect_hit, true);
+  assert.equal(row.expect_used, false);
+  assert.equal(row.hit_but_unused, true);
+});
+
+test('scoreTask：没有别名的题行为不变', () => {
+  const row = scoreTask(fact(), {
+    hits: [{ id: 'project-orchid-deploy-port' }],
+    injected: '生产环境监听 8443',
+    answer: '监听 8443。',
+    tokens: 120,
+  });
+  assert.equal(row.match, true);
+  assert.deepEqual(row.alias_used, []);
+  assert.deepEqual(row.details.answer_aliases, []);
 });
 
 test('scoreTask：expect 只在上下文里时 hit_but_unused 为真、不算答对', () => {

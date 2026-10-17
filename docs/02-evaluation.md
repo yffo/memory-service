@@ -179,7 +179,7 @@
 
 ### 4.6 评测集 JSON schema 草案
 
-> **实现现状（2026-10-17）**：下面这份 schema 是**目标设计**，尚未落地。当前 `bench/core-30-v1/tasks.json` 只有顶层 `version` 和 `tasks`；每题字段为 `id / kind / prompt / expect[] / forbid[] / source[]`。逐字段差异与迁移顺序见 §4.6.1。
+> **实现现状（2026-10-17）**：下面这份 schema 仍是**目标设计**，尚未整体落地。当前 `bench/core-30-v1/tasks.json` 只有顶层 `version` 和 `tasks`；每题字段为 `id / kind / prompt / expect[] / forbid[] / source[] / answer_aliases[]`。其中 `answer_aliases` 已实现，其余差异与迁移顺序见 §4.6.1。
 
 ```jsonc
 {
@@ -243,8 +243,8 @@
 |---|---|---|
 | `capability` | `kind`（`fact_recall` / `preference` / `procedure` / `correction` / `refusal`） | 只能按这 5 类分层；`single_hop` / `multi_hop` / `temporal` / `knowledge_update` / `negative_transfer` 分不出来。多跳、时间推理、知识更新、陷阱题的结论目前是**未测**，不是「通过」。 |
 | `gold_notes[]` | `source[]`（笔记 id） | 有等价物；oracle 臂读它。 |
-| `expected.answer` | `expect[]`（逐字子串） | 判分硬编码 substring；同义改写被误判，0.744 / 1.408 是下界。 |
-| `expected.answer_aliases` | 无 | 无法接纳「400 行」对「不超过 400 行」这类正确改述；修它是下一刀判分器工作的第一项。 |
+| `expected.answer` | `expect[]`（逐字子串） | 判分仍是 substring；`expect` 之外的正确改述要靠 `answer_aliases` 兜，语义判分未做。 |
+| `expected.answer_aliases` | 顶层 `answer_aliases[]`（不是 `expected` 内） | **已实现（2026-10-17）**：32 道可答题各补 1–4 条，判分改判 `expect[] || answer_aliases[]`；`forbid[]` 优先级不变，别名不能绕过反向约束。仍是人工白名单，不是语义判分；白名单没覆盖的改述仍会误判。 |
 | `expected.must_not_contain` | `forbid[]` | 已用于反向约束。 |
 | `expected.judge` / `judge_args` | 无（只有硬编码 substring + 拒答规则） | 没有 `set_match` / `cheap_judge` / 人工抽检；拒答用「空答案 / `refused` 标志 / 固定措辞正则」判（`bench/scorer.mjs` 的 `looksRefused`），不是独立的 `refusal_match` 字段。 |
 | `negative_transfer_probe` | 无 | 没有陷阱题，`trap_fall_rate` 算不出来；`negative_transfer` 只能算「加记忆的净收益」，不能算「被错记忆带偏」。**不能据此写「判据 3 成立」**。 |
@@ -252,9 +252,21 @@
 | `difficulty` / `leak_check` / `tags` | 无 | 不能按难度分层报告，也没有自动 8-gram 防泄漏自检。 |
 | 顶层 `budgets` / `baselines` / `scoring` | 无 | 预算曲线、基线与权重在 CLI/脚本层表达，不在题集 schema 里。 |
 
-**迁移顺序**：① 先把 `kind` 映射到 `capability`，并给现有 32 道可答题补 `answer_aliases`（下一刀，判分器口径）；② 再加 `setup.ops` 与 `negative_transfer_probe`（陷阱/更新题）；③ `difficulty` / `leak_check` 随新题一起补。在 ①② 完成前，分层、陷阱、别名相关的结论一律写「未测」。
+**迁移顺序**：① 先把 `kind` 映射到 `capability`，并给现有 32 道可答题补 `answer_aliases`——**其中 `answer_aliases` 已完成（2026-10-17），`kind` → `capability` 仍未做**；② 再加 `setup.ops` 与 `negative_transfer_probe`（陷阱/更新题）；③ `difficulty` / `leak_check` 随新题一起补。在 ①② 完成前，分层、陷阱相关的结论一律写「未测」；别名只证明「白名单内的改述能被接住」，不证明语义判分。
 
 **同目录放最小语料快照**：只放被 gold_notes 引用到的笔记 + 陷阱笔记（约 20~30 条），其余从真实库里按快照 ID 引用，避免评测集里囤一份会腐烂的副本。
+
+#### 4.6.2 判分器对抗集（已实现，2026-10-17）
+
+判分器自己也会错：宽松的判分器会把「含糊但切题」的错答案收下，严格的逐字判分器会把正确改述判错。两种错误都会污染后续所有数字，所以先打裁判、再信分数。
+
+- **题集**：`bench/core-30-v1/adversarial.json`，106 条用例，全部挂在 `core-30-v1` 的 52 道题上。
+  - 应接受 52 条：32 条正确改述 + 20 条干净拒答。
+  - 应拒绝 54 条：32 条「含糊但切题」（`ambiguous_wrong`）+ 20 条编造答案（`hallucinated`）+ 2 条「先拒答再补编造值」的 `hedged_hallucination`。
+- **跑法**：`node bench/judge-adversarial.mjs`（`--json` 出机器可读，`--verbose` 列全部用例，`--tasks` / `--suite` 换题集）。零依赖、零模型调用，失败退 1，参数/文件错误退 2。
+- **判据**：误收率 = 实际接受的应拒绝用例 / 应拒绝用例总数，必须 **< 0.20**；正确接受率必须 **≥ 0.95**（正确改述被拒也是判分器 bug）。两条同时满足才 `pass`。
+- **2026-10-17 实测**：106 条全部符合预期；应拒绝 54 条**一条没被收**（误收率 0.0000），应接受 52 条**全部接住**（正确接受率 1.0000）。按 label：`correct` 32/32、`correct_refusal` 20/20、`ambiguous_wrong` 32 全拒、`hallucinated` 20 全拒、`hedged_hallucination` 2 全拒。
+- **边界**：这打的是**规则判分器**（substring + 别名 + 拒答正则），不是 LLM 裁判；20% 人工抽检与 Cohen's κ **仍未做**。别名是人工白名单，可能对题集过拟合；它只说明「这批改述能接住」，不说明「任意语义等价都能接住」。`negative_transfer_probe` 仍未落地，陷阱题与 `trap_fall_rate` 仍是「未测」。
 
 ### 4.7 跑分脚本接口（设计 vs 现状）
 
@@ -376,7 +388,7 @@ node bench/run-eval.mjs --same-corpus --arms none,new,oracle \
 1. **不要复现公开基准，要复现「受控对照」这个方法论**。LoCoMo 的教训是：只要 prompt/裁判/baseline 任一不对称，10 分的差距可以凭空产生。我们做任何对比，必须同时报出 `closed_book` / `oracle_gold` / `real` 三条线，缺一条就不下结论。
 2. **评测先行 = 先写 schema 和 baseline 采集，再写检索代码**。旧插件的账本已经提供了检索侧基线和真实正样本；在新服务写第一行代码前，先把 `ledger_replay` 适配器做出来，把 8.1%（或厘清口径后的真实值）钉死为必须击败的数字。
 3. **一等指标是「注入 token」，不是「准确率」**。因为准确率的天花板被 full-context 基线压着（§3 证据 5），而我们真正的优势只可能来自「同等答案、更少上下文」。所以 `token_efficiency` 与成本曲线必须进 CI，每次改动都重画。
-4. **判分器本身要被评测**。用 V2 式「含糊但切题」的对抗答案先打自己的裁判（目标：接受率 < 20%），并记录人工抽检的一致性 κ。一个未经对抗测试的 LLM 裁判会让所有后续数字失去意义（LoCoMo 上它的误收率是 62.81%）。
+4. **判分器本身要被评测**。用 V2 式「含糊但切题」的对抗答案先打自己的裁判（目标：接受率 < 20%），并记录人工抽检的一致性 κ。一个未经对抗测试的 LLM 裁判会让所有后续数字失去意义（LoCoMo 上它的误收率是 62.81%）。本仓库已落地规则判分器的对抗集（`bench/judge-adversarial.mjs`，106 条，见 §4.6.2）；人工抽检 κ 仍未做。
 5. **`hit_but_unused_rate` 是旧项目真正的尸检报告**。旧方案只知道「后来被打开」（8.1%），不知道「推送了、也检索对了、但模型没用」。新评测必须把「命中」「注入」「使用」拆成三个独立事件记录，否则下一个 2.4% 还是查不出原因。
 
 ---

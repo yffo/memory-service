@@ -35,10 +35,12 @@
  *   answer_token_efficiency  Δaccuracy ÷（real 臂注入千 token）：每千 token 换多少百分点准确率。
  *                        与上面检索层的 token_efficiency 不是一回事，报告里分开印。
  *
- * ── 两条硬规则 ───────────────────────────────────────────────────
+ * ── 三条硬规则 ───────────────────────────────────────────────────
  *   1. 比较前一律 normalizeText（NFKC + 去空白 + 小写）：中文没有词边界，
  *      逐字比较必须先把排版差异吃掉，否则「2 GB」和「2GB」会被判成两回事。
  *   2. 答案里出现 forbid 就是错的，哪怕 expect 也在里面（编造与真值同时出现，不算答对）。
+ *   3. answer_aliases 是**题级**的等价答案，只放宽 expect 的写法，不能绕过 forbid；
+ *      它要显式写在题集里，不许在判分器里临时放水。
  */
 
 /** 判据阈值（docs/06-architecture.md §M1）。 */
@@ -95,6 +97,19 @@ export function estimateTokens(text) {
 /** 拒答题 = tasks.json 里 source 为空的题。 */
 export function isRefusalTask(task) {
   return !Array.isArray(task?.source) || task.source.length === 0;
+}
+
+/**
+ * 题级等价答案。目标 schema 写在 expected.answer_aliases；当前 core-30-v1 用顶层
+ * answer_aliases，两种都认。非数组/空串会静静丢掉——评分不能让一条脏数据把整轮打挂。
+ */
+export function taskAnswerAliases(task) {
+  const raw = task?.answer_aliases ?? task?.expected?.answer_aliases;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((value) => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
 }
 
 /** 一次运行里所有题的 id 列表（缺题的运行必须能被发现，不能悄悄按「跑过的题」算分）。 */
@@ -172,13 +187,16 @@ export function scoreTask(task, run = {}, options = {}) {
   const k = Number.isInteger(options.k) ? options.k : 5;
   const injected = normalizeText(run.injected);
   const answer = normalizeText(run.answer);
+  const answerAliases = taskAnswerAliases(task);
   const expects = matchTerms(task.expect, injected);
   const expectedInAnswer = matchTerms(task.expect, answer);
+  const aliasesInContext = matchTerms(answerAliases, injected);
+  const aliasesInAnswer = matchTerms(answerAliases, answer);
   const forbidsInContext = matchTerms(task.forbid, injected);
   const forbidsInAnswer = matchTerms(task.forbid, answer);
 
-  const expectHit = expects.some((d) => d.hit);
-  const expectUsed = expectedInAnswer.some((d) => d.hit);
+  const expectHit = expects.some((d) => d.hit) || aliasesInContext.some((d) => d.hit);
+  const expectUsed = expectedInAnswer.some((d) => d.hit) || aliasesInAnswer.some((d) => d.hit);
   const forbidHit = forbidsInContext.some((d) => d.hit);
   const forbidUsed = forbidsInAnswer.some((d) => d.hit);
   const refused = looksRefused(run, forbidUsed);
@@ -205,8 +223,10 @@ export function scoreTask(task, run = {}, options = {}) {
     match: Boolean(match),
     error: run.error ?? null,
     tokens: Number(run.tokens ?? 0) || 0,
+    alias_used: aliasesInAnswer.filter((d) => d.hit).map((d) => d.text),
     details: {
       expect: expects.map((d, i) => ({ ...d, used: expectedInAnswer[i].hit })),
+      answer_aliases: aliasesInContext.map((d, i) => ({ ...d, used: aliasesInAnswer[i].hit })),
       forbid: forbidsInContext.map((d, i) => ({ ...d, used: forbidsInAnswer[i].hit })),
     },
   };

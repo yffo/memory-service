@@ -122,8 +122,18 @@ test('tasks.json：形状、版本、题量、四类配额', () => {
 
 test('tasks.json：id 唯一、字段齐、expect 不为空（拒答除外）、expect 限长 ≤60', () => {
   const ids = new Set();
+  const required = ['expect', 'forbid', 'id', 'kind', 'prompt', 'source'];
+  const allowed = [...required, 'answer_aliases'];
   for (const t of tasks) {
-    assert.deepEqual(Object.keys(t).sort(), ['expect', 'forbid', 'id', 'kind', 'prompt', 'source'], `${t.id} 字段不齐`);
+    for (const key of Object.keys(t)) assert.ok(allowed.includes(key), `${t.id} 有未定义字段 ${key}`);
+    for (const key of required) assert.ok(Object.hasOwn(t, key), `${t.id} 缺字段 ${key}`);
+    if (t.answer_aliases !== undefined) {
+      assert.ok(Array.isArray(t.answer_aliases), `${t.id} 的 answer_aliases 必须是数组`);
+      for (const alias of t.answer_aliases) {
+        assert.ok(typeof alias === 'string' && alias.trim().length > 0, `${t.id} 的别名必须是非空字符串`);
+        assert.ok(alias.length <= MAX_EXPECT_CHARS, `${t.id} 的别名超过 ${MAX_EXPECT_CHARS} 字：${alias}`);
+      }
+    }
     assert.match(t.id, /^[a-z]\d{2}$/, `id 形状：${t.id}`);
     assert.ok(!ids.has(t.id), `id 重复：${t.id}`);
     ids.add(t.id);

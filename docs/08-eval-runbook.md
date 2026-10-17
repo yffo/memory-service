@@ -7,8 +7,9 @@
   拒答题靠 `source: []` 判定（不是靠 `kind`），它不新增能力维度，但必须单独存在才可能算 `correct_refusal_rate`；
   每条的 `forbid` 都是「最诱人的编造值」，且那个值能在**别的**笔记里找到，不是凭空编的）
 - 语料库：`bench/core-30-v1/library/*.md`（50 篇，全虚构）
-- 判分器：`bench/scorer.mjs`（纯函数，零依赖、零模型调用）
+- 判分器：`bench/scorer.mjs`（纯函数，零依赖、零模型调用；支持题级 `answer_aliases`）
 - 跑分器：`bench/run-eval.mjs`（三臂，取上下文一律**子进程调 CLI**，不 import 被测代码内部模块）
+- 判分器对抗集：`bench/core-30-v1/adversarial.json` + `bench/judge-adversarial.mjs`（106 条，零模型，见 §6.4）
 
 ## 0. 一分钟版
 
@@ -17,6 +18,7 @@ node --test                                        # 判分器 + 题集纪律 + 
 node bench/run-eval.mjs --same-corpus              # 判据 1 的主口径（三臂同语料，Markdown 表）
 node bench/run-eval.mjs --json | jq .judgement      # 机器可读；提示信息走 stderr，stdout 是纯 JSON
 node bench/run-eval.mjs --dry                       # 不调 CLI：只验证评分路径没坏
+node bench/judge-adversarial.mjs                    # 先打裁判：106 条该收的收、该拒的拒
 ```
 
 **默认零模型成本**：回答器是 `echo`（非模型，只回显注入上下文），量的是「检索有没有把正确笔记拿进上下文」。
@@ -161,7 +163,7 @@ EVAL_LLM_API_KEY=... node bench/run-eval.mjs --arms none,new,oracle \
 **结论：判据 1 成立。** `recall@5 = 0.844` 与 `correct_refusal_rate = 0.800` 都过线，
 且拒答这一项现在有 **1/20 = 0.05 的余量**（M2 时是 0.750 压线，少对一题就不达标）。
 `token_efficiency = 2.037` 是**检索层代理**（期望串命中数 ÷ 注入千 token），不是 `02-evaluation.md §4.5` 判据 2 的 `Δaccuracy ÷ 注入千 token`。
-用真模型回答器按判据 2 口径实测是 **1.408 < 2.0，判据 2 不成立**（§6.3）。判据 1 的结论不受影响，但
+在补 `answer_aliases` 之前，用真模型回答器按判据 2 口径实测是 **1.408 < 2.0，旧口径下判据 2 不成立**（§6.3）；新口径没有 API key 重测，状态是「未重测」而不是「成立」。判据 1 的结论不受影响，但
 此前把 2.037 当成判据 2 达标是**口径混用**，这次一并改掉。检索层值得看的仍然是「注入量随题集变化」这一点：
 M2 的 32 题是 310.0，M3 的 52 题是 254.9，变的不是系统而是题目组合。
 
@@ -204,9 +206,9 @@ EVAL_LLM_API_KEY=... node bench/run-eval.mjs --arms none,new,oracle \
   --out bench/core-30-v1/runs/2026-10-17-answer.md
 ```
 
-2026-10-17 实测（`core-30-v1` 52 题 / deepseek-flash / 温度 0 / max_tokens 256 / 3 轮并发 4）：
+2026-10-17 实测（`core-30-v1` 52 题 / deepseek-flash / 温度 0 / max_tokens 256 / 3 轮并发 4）。**这是判分器补 `answer_aliases` 之前的数字，只作历史下界**：
 
-| 臂 | acc（逐字判分） | 单题注入 token | API 调用 | 输入/输出 token | 成本 USD | 平均延迟 ms |
+| 臂 | acc（旧逐字判分） | 单题注入 token | API 调用 | 输入/输出 token | 成本 USD | 平均延迟 ms |
 | --- | --- | --- | --- | --- | --- | --- |
 | `none` | 0.385（20/52） | 0 | 156 | 22,833 / 2,086 | 0.0047 | 687 |
 | `new` | 0.744（逐轮 0.750 / 0.750 / 0.731） | 254.9 | 96 | 39,999 / 2,836 | 0.0077 | 847 |
@@ -222,27 +224,39 @@ EVAL_LLM_API_KEY=... node bench/run-eval.mjs --arms none,new,oracle \
 - `oracle_gap = 0.846 − 0.744 = 0.103`，参照值；差额一半以上不是检索的锅，见下。
 - 成本：三臂各 3 轮共 468 次调用，**$0.0187 / 约 2 分钟**（deepseek-flash 2026-10 非高峰价）。
 
-**这个 0.744 / 1.408 是下界，原因在判分器而不在回答器**：判分用 `expect` 逐字子串（`bench/scorer.mjs`），
-模型答「400 行」而 `expect` 是「不超过 400 行」、答「5 次」而 `expect` 是「重试 5 次」都算错。
-oracle 的 8 道错题里 7 道是这类同义改写（p01/p02/p05/p07/p08/c01/k04），语义都对；
-第 8 道 k06 是**题集 bug**——题面问「用哪个包管理器」、`expect` 却是「pnpm-lock.yaml」，gold 笔记正文两者都有。
-`new` 的 14 道错题 = oracle 的 8 道 + 5 道检索没给够（p03/c03/c04/c07/k05，均被模型按无记录拒答）+ 1 道 p06（三轮里只有一轮答出完整 `expect`，另两轮答「2 次」被多数轮压成 false）。
-所以当前严格判分下，`oracle_gap` 高估了检索损失、`answer_token_efficiency` 低估了真实效率；**但在修判分口径之前，
-按 deny-by-default 只能记「判据 2 不成立」**，不能把「补上同义答案后可能过线」当成结论。
-下一刀应当是 `answer_aliases` / 判分器对抗集（`02-evaluation.md §6.2` 本来就要求先评测判分器），而不是改题面迁就模型。
+**上表的 0.744 / 1.408 是判分器补别名前的数字，用旧逐字 `expect` 算，不能当当前口径**：模型答「400 行」而 `expect` 是「不超过 400 行」、答「5 次」而 `expect` 是「重试 5 次」都算错。oracle 的 8 道错题里 7 道是这类同义改写（p01/p02/p05/p07/p08/c01/k04），语义都对；第 8 道 k06 是**题集 bug**——题面问「用哪个包管理器」、`expect` 却是「pnpm-lock.yaml」，gold 笔记正文两者都有。`new` 的 14 道错题 = oracle 的 8 道 + 5 道检索没给够（p03/c03/c04/c07/k05，均被模型按无记录拒答）+ 1 道 p06（三轮里只有一轮答出完整 `expect`，另两轮答「2 次」被多数轮压成 false）。
+2026-10-17 晚已给 32 道可答题补 `answer_aliases`，并把 20 道拒答题的 `forbid` 从占位值改成语料库里可追的真实陷阱值，再用 106 条对抗集验证规则判分器（§6.4）。这修的是「正确改述被误判」，但**回答层没有 API key 重跑**：
+- 旧数字 0.744 / 1.408 只保留为**历史下界**，不能与别名后的判分器混用；
+- 别名后的回答层 acc / `answer_token_efficiency` **未重测**，判据 2 的状态是「旧口径下不成立，新口径下算不出来」，不是「已成立」；
+- k06 的题集 bug 仍未改，它会继续压 oracle 和 `oracle_gap`。
 
 逐轮稳定性：`new` 三轮 0.750 / 0.750 / 0.731，单题一致率 0.962；`oracle` 三轮完全一致；`none` 三轮一致。
 温度 0 下波动来自推理链与上下文长度，重跑 3 轮取均值是这条口径的最低要求（单轮会差 1~2 题）。
 注意：deepseek-flash 的 thinking 默认开启，thinking 模式下温度参数不生效，所以「温度 0」不等于确定性；波动主要来自推理链长度。
 
 
+## 6.4 判分器对抗集（零模型）
+
+**为什么先打裁判**：判分器宽松，会把「含糊但切题」的错答案收下；判分器严格，会把正确改述判错。两者都会让判据 2 的数字失真。所以补 `answer_aliases` 之后，立刻用一批「该收 / 该拒」的固定答案打它，而不是直接相信新分数。
+
+```bash
+node bench/judge-adversarial.mjs              # Markdown 报告
+node bench/judge-adversarial.mjs --json       # 机器可读
+node bench/judge-adversarial.mjs --verbose    # 列全部 106 条
+```
+
+- **用例**：`bench/core-30-v1/adversarial.json`，106 条。应接受 52 条（32 正确改述 + 20 干净拒答）；应拒绝 54 条（32 含糊但切题 + 20 编造答案 + 2 先拒答后补编造值）。
+- **门槛**：误收率 < 0.20，正确接受率 ≥ 0.95，两条同时满足才退 0；否则退 1。参数或文件错误退 2。
+- **2026-10-17 实测**：误收率 **0.0000**（54 条应拒全拒），正确接受率 **1.0000**（52/52），通过。
+- **边界**：这打的是规则判分器（substring + `answer_aliases` + 拒答正则），不是 LLM 裁判；20% 人工抽检与 Cohen's κ 未做。别名是人工白名单，存在对题集过拟合的风险；它证明「这 32 道题的白名单改述能接住」，不证明「任意语义等价都能接住」。陷阱题 / `negative_transfer_probe` 仍未落地。
+
 ## 7. 已知局限（读数字时要扣掉的部分）
 
 - **`hit_but_unused_rate` 在默认口径下结构性为 0**：`echo` 回答器回显全部上下文，进了上下文的必然进答案。
   要测漏用必须 `--answerer llm`（本次 `new` 0.309、`oracle` 0.25）或 `first-hit`。默认表的 0 不代表「模型都会用」。
-- **判分器还是逐字子串，不是语义判分**：`--answerer llm` 的准确率是**下界**，同义改写会被判错（§6.3 的 7/8 例）。
-  这也意味着 `oracle_gap` 与 `answer_token_efficiency` 当前不是纯净的检索/成本信号。`02-evaluation.md §6.2` 要求判分器
-  先用对抗答案评测、再做 20% 人工抽检（Cohen's κ），这一刀**还没有做**；在那之前，回答层数字只能当方向。
+- **判分器是「逐字 `expect` + 人工别名」，仍不是语义判分**：32 道可答题的 `answer_aliases` 能接住常见改述，
+  白名单没覆盖的改述仍会判错；`oracle_gap` 与 `answer_token_efficiency` 不是纯净的检索/成本信号。判分器对抗集（§6.4）
+  已通过（106 条，误收 0），但 20% 人工抽检（Cohen's κ）**仍未做**；在那之前，回答层数字只能当方向。
 - **判据 1 与回答层是两套口径**：判据 1 只要求集合运算，默认 `echo` 零模型成本；判据 2/3 的回答层要显式开模型，
   不进 CI（见 §8）。两者的 `new` 臂召回相同，但 `correct_refusal_rate` 会不同：`echo` 是 0.800，模型回答器是 1.000
   （模型对 20 道拒答题全拒），不要拿一张表的这一格去对另一张表。
@@ -258,9 +272,10 @@ oracle 的 8 道错题里 7 道是这类同义改写（p01/p02/p05/p07/p08/c01/k
 ## 8. CI 怎么接
 
 ```bash
-# 每次 push：判据 1 的子集（单跳 6 + 拒答 4）+ 判分器单测，秒级、零模型成本
+# 每次 push：判据 1 的子集（单跳 6 + 拒答 4）+ 判分器单测 + 对抗集，秒级、零模型成本
 node --test
 node bench/run-eval.mjs --dry
+node bench/judge-adversarial.mjs
 
 # nightly：全量三臂（echo）+ 成本曲线，留档，零模型成本
 node bench/run-eval.mjs --same-corpus --out bench/core-30-v1/runs/$(date +%F).md
