@@ -17,8 +17,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
+          # 不设 registry-url：setup-node 会写入占位 token，反而挡住 OIDC 认证
           node-version: 22
-          registry-url: https://registry.npmjs.org
 
       # Trusted Publishing 需要 npm >= 11.5.1
       - run: npm install -g npm@11
@@ -32,5 +32,7 @@ jobs:
       - name: 测试
         run: npm test
 
-      - name: 发布
-        run: npm publish --access public --provenance
+      - name: 发布（OIDC Trusted Publisher）
+        run: |
+          npm config set registry https://registry.npmjs.org/
+          npm publish --access public --provenance
