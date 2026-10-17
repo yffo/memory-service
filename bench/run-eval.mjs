@@ -55,7 +55,7 @@ const DEFAULT_LEGACY_STORE = path.join(os.homedir(), 'memory', 'engramory');
 
 export const ARM_META = Object.freeze({
   none: { label: '无记忆', how: '空上下文' },
-  new: { label: 'memory-service', how: 'node bin/memory search --query <q> --json' },
+  new: { label: 'tabellio', how: 'node bin/memory search --query <q> --json' },
   legacy: { label: 'dsh-engramory-recall', how: '旧库 BM25（store.js + bm25.js，子进程只读）' },
 });
 

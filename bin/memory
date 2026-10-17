@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * `memory` —— 命令行入口（零依赖，只有 Node 内置模块）。
+ * `tabellio` —— 命令行入口（零依赖，只有 Node 内置模块；文件仍叫 `bin/memory`，
+ * 包里的可执行名由 `package.json` 的 `bin` 决定）。
  *
  * 设计口径：
  *
@@ -12,7 +13,7 @@
  * 3. **退出码**：0 = 成功；1 = 判定拒绝（deny，含 `status` 发现解析失败这种「库不健康」）；
  *    2 = 用法错误。脚本里可以只判 `$?`。
  */
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import {
@@ -36,22 +37,22 @@ import { finiteOr } from '../src/util/text.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const VERSION = '0.1.0';
 
-export const USAGE = `memory — 显式记忆服务（M1）
+export const USAGE = `tabellio — 显式记忆服务（M1）
 
 用法：
-  memory status [--store DIR] [--rebuild-index] [--json]
-  memory index  [--store DIR] [--rebuild] [--json]              # 索引层体检（默认只读）
-  memory search --query "<词>" [--budget-tokens N] [--kinds a,b] [--trusts a,b]
-                [--min-relevance F] [--min-score F] [--min-coverage F] [--ledger] [--json]
-  memory read   --id <ulid|notes/ulid.md> [--ledger] [--json]
-  memory remember --file <path.md> [--dry] [--json]
-                  [--kind k] [--trust t] [--scope s] [--tags a,b] [--id ULID]
-  memory import --from <旧 Engramory 库目录> [--dry] [--json]
-  memory recall --query "<词>" [--budget-tokens N] [--json]      # §9 完整形状
-  memory help | --help | -h | --version
+  tabellio status [--store DIR] [--rebuild-index] [--json]
+  tabellio index  [--store DIR] [--rebuild] [--json]             # 索引层体检（默认只读）
+  tabellio search --query "<词>" [--budget-tokens N] [--kinds a,b] [--trusts a,b]
+                 [--min-relevance F] [--min-score F] [--min-coverage F] [--ledger] [--json]
+  tabellio read   --id <ulid|notes/ulid.md> [--ledger] [--json]
+  tabellio remember --file <path.md> [--dry] [--json]
+                   [--kind k] [--trust t] [--scope s] [--tags a,b] [--id ULID]
+  tabellio import --from <旧 Engramory 库目录> [--dry] [--json]
+  tabellio recall --query "<词>" [--budget-tokens N] [--json]     # §9 完整形状
+  tabellio help | --help | -h | --version
 
 全局：
-  --store DIR    库目录（默认 $MEMORY_STORE 或 ~/memory/memory-service）
+  --store DIR    库目录（默认 $MEMORY_STORE / $TABELLIO_STORE，否则 ~/memory/tabellio）
   --json         机器可读输出（形状见 docs/07-usage.md）
   --ledger       把这次只读操作记进账本（默认不写）
 
@@ -147,7 +148,7 @@ function humanRecall(r) {
 function humanIndex(r) {
   const head = r.exists
     ? `索引：${r.lines} 行 / ${r.bytes} 字节（上限 ${r.caps.lines} 行 / ${r.caps.bytes} 字节）  |  层级 ${r.levels}（路由 + 清单）`
-    : '索引还没生成（跑 `memory index --rebuild`）';
+    : '索引还没生成（跑 `tabellio index --rebuild`）';
   const lines = [
     `库：${r.store}`,
     head,
@@ -220,9 +221,9 @@ export async function main(argv, io = {}) {
         return r.unreachableCount > 0 || r.missingFiles.length > 0 ? 1 : 0;
       }
       case 'search': {
-        // 参数校验**必须先做**：先查「库存在吗」的话，`memory search`（忘了 --query）
+        // 参数校验**必须先做**：先查「库存在吗」的话，`tabellio search`（忘了 --query）
         // 在一个空库上会返回 `{refused:true, reason:'store_empty'}` 且退出码 0 ——
-        // 脚本里 `memory search --query "$Q" || exit 1` 这种写法会静默通过一个用错的命令。
+        // 脚本里 `tabellio search --query "$Q" || exit 1` 这种写法会静默通过一个用错的命令。
         // 用错了就是退出码 2，和「检索结果为空」是两回事。
         const query = args.query ?? args.q ?? args._.slice(1).join(' ');
         if (!query || !String(query).trim()) {
@@ -338,7 +339,7 @@ export async function main(argv, io = {}) {
         return 2;
     }
   } catch (e) {
-    err.write(`memory ${command} 失败：${e?.stack ?? e}\n`);
+    err.write(`tabellio ${command} 失败：${e?.stack ?? e}\n`);
     return 2;
   }
 }
@@ -382,7 +383,19 @@ function renderImport(r, src) {
 }
 
 /** 只有被直接执行时才跑 CLI（被测试 import 时不跑）。 */
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+// 必须比 realpath：npm 装出来的 `tabellio` 是 node_modules/.bin/ 下的**符号链接**，
+// 此时 process.argv[1] 是链接路径、而 import.meta.url 已被 Node 解析成真实文件路径，
+// 直接比 resolve() 永远不相等 —— 装完的 CLI 会静默什么都不做、退出码还是 0。
+const realOrSelf = (p) => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+};
+const invokedDirectly =
+  !!process.argv[1] &&
+  realOrSelf(process.argv[1]) === realOrSelf(fileURLToPath(import.meta.url));
 if (invokedDirectly) {
   const code = await main(process.argv.slice(2));
   process.exitCode = code;

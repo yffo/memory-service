@@ -173,7 +173,7 @@ function countLines(text) {
 }
 
 /**
- * `memory status --json`。
+ * `tabellio status --json`。
  *
  * 冻结字段：`{store, notes, indexLines, caps}`。其余字段都是**账**，
  * 账是 `status` 存在的理由（旧项目「读不完的笔记必须能被 status 看见」）：
@@ -262,10 +262,10 @@ function buildWarnings({ scan, index, total, oversizeChars, oversizeTokens, inde
   if (index.exists && indexListed < total) {
     // 分层索引之后这句警告的含义变了：不再是「索引装不下」，而是「有笔记没有路可走」。
     // 路由树把容量从 ~190 条提到 ~76000 条，正常库里**不该**再看到这句；
-    // 看到就是路由层真的削了（组多到打包都装不下），必须查 `memory index --json`。
+    // 看到就是路由层真的削了（组多到打包都装不下），必须查 `tabellio index --json`。
     w.push(
       `索引层只列了 ${indexListed}/${total} 条（路由层上限 ${INDEX_CAPS.maxLines} 行 / ${INDEX_CAPS.maxBytes} 字节），` +
-        '其余笔记仍在 notes/ 里、检索不受影响，但「读索引」这条路径看不到它们（见 `memory index --json`）',
+        '其余笔记仍在 notes/ 里、检索不受影响，但「读索引」这条路径看不到它们（见 `tabellio index --json`）',
     );
   }
   if (index.exists && Number.isFinite(indexed) && indexed !== total) {
@@ -273,12 +273,12 @@ function buildWarnings({ scan, index, total, oversizeChars, oversizeTokens, inde
       `索引是旧的：路由层记着 ${indexed} 条、库里有 ${total} 条（跑 \`memory status --rebuild-index\` 重建）`,
     );
   }
-  if (!index.exists) w.push('索引还没生成（跑 `memory status --rebuild-index`）');
+  if (!index.exists) w.push('索引还没生成（跑 `tabellio status --rebuild-index`）');
   return w;
 }
 
 /**
- * 索引层的账（`memory index --json` 的全部内容；`status` 用的是它的一部分）。
+ * 索引层的账（`tabellio index --json` 的全部内容；`status` 用的是它的一部分）。
  *
  * **只读**：不带 `--rebuild` 时一个字都不写。为什么单开一条命令而不是塞进 `status`：
  * `status` 的契约字段已经冻结（`{store, notes, indexLines, caps}`），而索引层的账
@@ -338,7 +338,7 @@ export function indexReport(ctx, options = {}) {
 function buildIndexWarnings({ route, total, listed, unreachable, verify }) {
   const w = [];
   if (!route.exists) {
-    w.push('索引还没生成（跑 `memory index --rebuild`）');
+    w.push('索引还没生成（跑 `tabellio index --rebuild`）');
     return w;
   }
   if (verify.reason === 'list_file_missing') {
@@ -385,7 +385,7 @@ export function recallOptions(options = {}) {
 }
 
 /**
- * `memory recall`（完整形状）。`§9` 的返回：`items` / `budget` / `why_not` / `nearest`。
+ * `tabellio recall`（完整形状）。`§9` 的返回：`items` / `budget` / `why_not` / `nearest`。
  */
 export function recallQuery(ctx, query, options = {}) {
   const scan = ctx.scan();
@@ -410,7 +410,7 @@ export function recallQuery(ctx, query, options = {}) {
 }
 
 /**
- * `memory search --json`。**冻结形状**：
+ * `tabellio search --json`。**冻结形状**：
  * `{hits:[{id,title,score}], tokens, refused:boolean, reason}`。
  *
  * 这是 `recall` 的投影（同一个函数内部投影，不是第二套检索），
@@ -457,7 +457,7 @@ export function search(ctx, query, options = {}) {
 }
 
 /**
- * `memory read --id <file> --json`。**冻结形状**：`{id, title, body}`。
+ * `tabellio read --id <file> --json`。**冻结形状**：`{id, title, body}`。
  * 永远只读；读不到或解析失败时 `ok:false` 且 `reason` 有值（不抛异常）。
  */
 export function read(ctx, id, options = {}) {
@@ -482,7 +482,7 @@ export function read(ctx, id, options = {}) {
 }
 
 /**
- * `memory remember`。冻结形状：`{ok, verdict:'allow'|'deny', reason}`。
+ * `tabellio remember`。冻结形状：`{ok, verdict:'allow'|'deny', reason}`。
  *
  * 输入三选一：`--file <md>`（必须有）/ 直接给 `content` / 给 `candidate`（程序内调用）。
  * `--dry` 走同一条判定，只是不落盘——**dry 与真写的判定必须是同一个函数**，
@@ -557,7 +557,7 @@ export function remember(ctx, input = {}, options = {}) {
   return result;
 }
 
-/** 库的初始化（`memory status` 会顺手做，不单独暴露命令）。 */
+/** 库的初始化（`tabellio status` 会顺手做，不单独暴露命令）。 */
 export function initStore(storePath) {
   const p = ensureStore(storePath);
   const index = readIndexFile(p.store);
@@ -569,7 +569,7 @@ export function initStore(storePath) {
 }
 
 /**
- * `memory import --from <engramory 库> [--dry]`。
+ * `tabellio import --from <engramory 库> [--dry]`。
  *
  * 读源库 → 生成计划 → 逐条过闸门写入。`--dry` 与真写走**同一套判定**，
  * 区别只在最后落不落盘（`applyImport({dry:true})`）。

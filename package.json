@@ -1,16 +1,27 @@
 {
-  "name": "memory-service",
+  "name": "tabellio",
   "version": "0.1.0",
-  "description": "显式记忆服务：文件是唯一真相源，词法检索 + 预算感知选片，写入过闸门。零运行时依赖。",
+  "description": "显式记忆服务（CLI + MCP）：markdown 是唯一真相源，词法检索 + 预算感知选片，写入过闸门。零运行时依赖。",
   "type": "module",
-  "private": true,
+  "private": false,
   "license": "MIT",
+  "author": "Yang Fu <yffo@users.noreply.github.com> (https://github.com/yffo)",
+  "keywords": [
+    "tabellio",
+    "memory",
+    "mcp",
+    "model-context-protocol",
+    "agent-memory",
+    "bm25",
+    "local-first",
+    "markdown"
+  ],
   "engines": {
     "node": ">=20.11.0"
   },
   "bin": {
-    "memory": "bin/memory",
-    "memory-mcp": "bin/memory-mcp"
+    "tabellio": "bin/memory",
+    "tabellio-mcp": "bin/memory-mcp"
   },
   "main": "src/api.js",
   "exports": {
@@ -23,21 +34,23 @@
     "bin/",
     "src/",
     "docs/07-usage.md",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yffo/memory-service.git"
+  },
+  "homepage": "https://github.com/yffo/memory-service#readme",
+  "bugs": {
+    "url": "https://github.com/yffo/memory-service/issues"
+  },
   "scripts": {
     "test": "node --test",
     "test:one": "node --test --test-name-pattern",
     "status": "node bin/memory status",
     "mcp": "node bin/memory-mcp"
   },
-  "keywords": [
-    "memory",
-    "mcp",
-    "bm25",
-    "agent-memory",
-    "local-first"
-  ],
   "dependencies": {},
   "devDependencies": {}
 }

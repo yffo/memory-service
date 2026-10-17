@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * `memory-mcp` —— MCP 的 stdio 服务器（薄壳，协议在 `src/mcp/protocol.js`）。
+ * `tabellio-mcp` —— MCP 的 stdio 服务器（薄壳，协议在 `src/mcp/protocol.js`）。
+ * 文件仍叫 `bin/memory-mcp`，包里的可执行名由 `package.json` 的 `bin` 决定。
  *
  * stdio 的硬要求（`03-hosts-and-interfaces.md §1.4`）：
  *
@@ -13,9 +14,10 @@
  * `--allow-write` 才把 `remember` 挂上去（§6.3「工具 5±2、默认只读」）。
  *
  * 用法：
- *   memory-mcp [--store DIR] [--allow-write] [--ledger]
- * 环境变量：`MEMORY_STORE`（与 CLI 同一个默认值解析）。
+ *   tabellio-mcp [--store DIR] [--allow-write] [--ledger]
+ * 环境变量：`MEMORY_STORE` / `TABELLIO_STORE`（与 CLI 同一套默认值解析，见 `defaultStorePath`）。
  */
+import { realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -42,10 +44,10 @@ export function parseMcpArgs(argv) {
   return out;
 }
 
-const USAGE = `memory-mcp — 记忆库的 MCP stdio 服务器（默认只读）
+const USAGE = `tabellio-mcp — 记忆库的 MCP stdio 服务器（默认只读）
 
-用法：memory-mcp [--store DIR] [--allow-write] [--ledger]
-  --store DIR    库目录（默认 $MEMORY_STORE 或 ~/memory/memory-service）
+用法：tabellio-mcp [--store DIR] [--allow-write] [--ledger]
+  --store DIR    库目录（默认 $MEMORY_STORE / $TABELLIO_STORE，否则 ~/memory/tabellio）
   --allow-write  挂上 remember 工具（写入仍过闸门）
   --ledger       把 search/read 也记进账本（默认不写）
 
@@ -68,7 +70,7 @@ export function serveStdio(options = {}) {
   try {
     handler = createHandler({ store: ctxStore, allowWrite: options.allowWrite, ledger: options.ledger });
   } catch (e) {
-    err.write(`memory-mcp 打不开库 ${ctxStore}：${e?.message ?? e}\n`);
+    err.write(`tabellio-mcp 打不开库 ${ctxStore}：${e?.message ?? e}\n`);
     return Promise.resolve(2);
   }
 
@@ -94,20 +96,32 @@ export function serveStdio(options = {}) {
         write(handler.handleLine(line));
       } catch (e) {
         // 任何未捕获异常都不能让进程带着半条消息死掉：回一条 -32603，继续服务。
-        err.write(`memory-mcp 处理失败：${e?.stack ?? e}\n`);
+        err.write(`tabellio-mcp 处理失败：${e?.stack ?? e}\n`);
         write({ jsonrpc: '2.0', id: null, error: { code: -32603, message: String(e?.message ?? e) } });
       }
     });
     // stdin EOF（客户端关管道）= 唯一的优雅关闭信号。
     rl.on('close', () => finish(0));
     input.on?.('error', (e) => {
-      err.write(`memory-mcp stdin 出错：${e?.message ?? e}\n`);
+      err.write(`tabellio-mcp stdin 出错：${e?.message ?? e}\n`);
       finish(2);
     });
   });
 }
 
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+// 必须比 realpath：npm 装出来的 `tabellio` 是 node_modules/.bin/ 下的**符号链接**，
+// 此时 process.argv[1] 是链接路径、而 import.meta.url 已被 Node 解析成真实文件路径，
+// 直接比 resolve() 永远不相等 —— 装完的 CLI 会静默什么都不做、退出码还是 0。
+const realOrSelf = (p) => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+};
+const invokedDirectly =
+  !!process.argv[1] &&
+  realOrSelf(process.argv[1]) === realOrSelf(fileURLToPath(import.meta.url));
 if (invokedDirectly) {
   const args = parseMcpArgs(process.argv.slice(2));
   if (args.help) {
@@ -115,7 +129,7 @@ if (invokedDirectly) {
     process.exitCode = 0;
   } else {
     process.stderr.write(
-      `memory-service MCP stdio 已启动（store=${args.store ?? defaultStorePath()}，${args.allowWrite ? '可写' : '只读'}）\n`,
+      `tabellio MCP stdio 已启动（store=${args.store ?? defaultStorePath()}，${args.allowWrite ? '可写' : '只读'}）\n`,
     );
     process.exitCode = await serveStdio({
       store: args.store ? resolve(args.store) : undefined,

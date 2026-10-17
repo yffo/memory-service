@@ -27,7 +27,7 @@ import { selectBudget, budgetOf, costOf } from './select.js';
  *  - `minScore`（展示）：三因子合成后的门槛，比 relevance 宽，因为它还叠加了
  *    重要度与新鲜度——一条刚写的 core 笔记可以靠这两项过线。
  *
- * 这两个数是**配置项**（`memory search --min-relevance`），因为 `02-evaluation.md §6`
+ * 这两个数是**配置项**（`tabellio search --min-relevance`），因为 `02-evaluation.md §6`
  * 明确禁止在跑分集上调参：要动就动配置，别动默认值。
  */
 export const DEFAULT_THRESHOLDS = Object.freeze({
@@ -317,7 +317,7 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
       // 取 0.5 也行（正确拒答率 0.75），0.6 留了余量（0.875）。
       // 覆盖率对**笔记**取各段的最大值（一篇长笔记有一段正面回答了就算数）。
       //
-      // 这个数是配置项（`memory search --min-coverage`）：`02-evaluation.md §6`
+      // 这个数是配置项（`tabellio search --min-coverage`）：`02-evaluation.md §6`
       // 不许在计分集上调参，所以要能把默认值摆到命令行上，用别的语料换。
       (!Number.isFinite(s.coverage) || s.coverage >= coverGate) &&
       // **组合级共现闸**（`cooccurrence.js`）：光「覆盖率够」还不够 ——
@@ -508,7 +508,7 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
       // 覆盖率必须和拒答分支同形：少一个字段，调用方就得写两套读法。
       coverage: round(s.coverage ?? 0),
     })),
-    // 与拒答分支同形的诊断块：`memory status` / `explain` 都吃它，
+    // 与拒答分支同形的诊断块：`tabellio status` / `explain` 都吃它，
     // 两个分支形状不一致的话调用方得写两套读法（而它一定会漏掉一套）。
     diagnostics: {
       thresholds,

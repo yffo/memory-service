@@ -1,14 +1,14 @@
 # 07 · 用法
 
-`memory-service` 的 M1 是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
+`tabellio` 的 M1 是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
 零运行时依赖：`node bin/memory` 直接就能跑，不需要 `npm install`。
 
 - 要求：Node ≥ 20.11（实测 Node 25.8）。
 - 库（store）就是一个目录：笔记是普通 `.md` 文件，`index/` 全是生成物、可删可重建。
-- 默认库路径：`$MEMORY_STORE`，否则 `~/memory/memory-service`。
+- 默认库路径：`$MEMORY_STORE` / `$TABELLIO_STORE`，否则 `~/memory/tabellio`（改名前的 `~/memory/memory-service` 若已存在则继续沿用，stderr 会提一句）。
 
 ```bash
-git clone <repo> memory-service && cd memory-service
+git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
 node --test 'test/**/*.test.mjs'       # 全绿才继续（241 条）
 ```
@@ -29,7 +29,7 @@ tags: [preference, tooling]
 
 `kind` / `trust` / `tags` 都可以不写（默认 `semantic` / `user_stated` / 无标签）。
 正文上限 **400 字 / 200 token** —— 超了闸门会拒，并且告诉你超了多少。
-超过一条事实该有的量，说明该拆成多条（`memory import` 会自动切）。
+超过一条事实该有的量，说明该拆成多条（`tabellio import` 会自动切）。
 
 ## 六个命令
 
@@ -39,7 +39,7 @@ tags: [preference, tooling]
 
 ```bash
 $ node bin/memory status
-库：/Users/you/memory/memory-service
+库：/Users/you/memory/tabellio
 笔记：1321 条（core 0）  |  索引：80 行 / 7529 字节（上限 200 行 / 25600 字节）
 单条上限：400 字 / 200 token  |  库上限：20000 条
 候选（notes/candidates）：0  |  账本：1325 条事件
@@ -100,7 +100,7 @@ $ node bin/memory index --json
 - **索引是不是旧的** —— `stale`：`true` 表示路由层记的条数和库里的对不上（真相源改过没重建）。
 
 退出码：**`stale` 或 `unreachableCount > 0` 时退出 1**，干净时 0。CI 里直接
-`memory index --json > /dev/null` 就能当门禁用（索引健康是可机检的，
+`tabellio index --json > /dev/null` 就能当门禁用（索引健康是可机检的，
 不该靠人记得去跑 `status`）。
 
 `--rebuild` 重建索引并顺带报出写入账；默认只读。
@@ -250,8 +250,8 @@ $ node bin/memory import --from ~/memory/engramory --dry --json
 ## MCP（给 Agent 用）
 
 ```bash
-node bin/memory-mcp --store ~/memory/memory-service            # 只读
-node bin/memory-mcp --store ~/memory/memory-service --allow-write
+node bin/memory-mcp --store ~/memory/tabellio                  # 只读
+node bin/memory-mcp --store ~/memory/tabellio --allow-write
 ```
 
 stdio、一行一个 JSON-RPC 消息、stdout 只有协议字节（日志走 stderr）。
@@ -295,7 +295,7 @@ for l in sys.stdin:
 `index/` 全是 `notes/` 的纯函数：删掉它只损失时间，不损失事实。
 
 ```bash
-rm -rf ~/memory/memory-service/index && node bin/memory status --rebuild-index
+rm -rf ~/memory/tabellio/index && node bin/memory status --rebuild-index
 ```
 
 **组是什么**：笔记 id 里第一个 `#` 之前的部分（`reference-x#137` → 组 `reference-x`）。

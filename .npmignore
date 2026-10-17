@@ -1,0 +1,15 @@
+# `files` 已是白名单；这里是防「有人往白名单里加目录」的第二道闸。
+*.tgz
+.tmp/
+.DS_Store
+
+# 评测装置与题集：不随包发布
+bench/
+test/
+
+# 调研原料（体积大、与运行时无关）
+research/
+
+# 发布面只留 docs/07-usage.md（用 README 导流），其余设计文档不进包
+docs/
+!docs/07-usage.md

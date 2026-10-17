@@ -292,7 +292,7 @@
        maxRerankDocTokens: 200      # 硬上限：只喂摘要
        maxEmbeddingTokensPerWrite: 400
      accounting:
-       ledgerPath: .memory-service/cost.jsonl   # 每次调用落一行，可审计
+       ledgerPath: .tabellio/cost.jsonl   # 每次调用落一行，可审计
        hardStopOnFileMissing: true              # 记不了账就不许花钱
    ```
 

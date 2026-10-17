@@ -209,8 +209,8 @@
 
 **C：一个进程模型 + 两个入口。**
 
-- `memory serve`：常驻本地核心，绑定 `127.0.0.1` + bearer token（令牌文件 0600），负责写串行化、索引/嵌入缓存、后台整理（对应 Letta 的 dreaming）。
-- `memory mcp`：stdio 薄壳，宿主配置里默认只写这一行（`npx -y <pkg> mcp` 或本地路径）。壳启动时探测本地核心：活着→转发；不活→自己起（可选）或退化成**只读**模式并在 `initialize`/`instructions` 里明说。
+- `tabellio serve`：常驻本地核心，绑定 `127.0.0.1` + bearer token（令牌文件 0600），负责写串行化、索引/嵌入缓存、后台整理（对应 Letta 的 dreaming）。
+- `tabellio mcp`：stdio 薄壳，宿主配置里默认只写这一行（`npx -y <pkg> mcp` 或本地路径）。壳启动时探测本地核心：活着→转发；不活→自己起（可选）或退化成**只读**模式并在 `initialize`/`instructions` 里明说。
 - 为什么不是纯 A：宿主数量一旦 >3，「写并发 + 索引重复构建 + 每个宿主一份模型调用预算」就会变成常态成本，而官方 memory server 的锁代码一遍遍重写不划算（§2.1）。
 - 为什么不是纯 B：stdio 是所有宿主的公共子集（Claude Code、Cursor、Cline、Zed、VS Code、Continue、Gemini、Codex、DSH 全支持），HTTP 则在这些宿主里配置各异且偶尔不通（沙箱）。壳是「最大公约数」，核心是「共享状态」。
 

@@ -1,8 +1,33 @@
-# memory-service（工作名，产品名待定）
+# tabellio
 
-一个**通用记忆服务**：给 agent 用的长期记忆，跨宿主（DSH / Claude Code / Cursor / 任意 MCP 客户端），本地优先、成本可控、可审计、可带走。
+> 罗马的**契约代书人**：公开立契，且必须留存副本以备日后核验。
+>
+> 一个通用记忆服务，让 agent 记住该记的事 —— 并且答得出「这条记忆谁写的、依据什么」。
 
-> 现状：**调研阶段（M0）**。这里只有决策文档，没有产品代码 —— 这一轮的产出是「为什么这样设计、怎么证明它对」，不是能跑的东西。
+`tabellio` 给 agent 用的**长期记忆**：本地优先、纯文本落盘、成本可控、可审计、可带走。
+一次落盘，任何 CLI / IDE / 自研 agent 通过 **MCP** 共用同一份记忆。
+
+```bash
+npm i -g tabellio
+tabellio status                          # 建库 + 看一眼
+tabellio recall --query "编辑器偏好"      # 按预算取回记忆
+tabellio-mcp                             # 给宿主用的 MCP stdio 服务器（默认只读）
+```
+
+零运行时依赖，Node ≥ 20.11，不需要 `npm install`。
+
+## 它到底是什么
+
+一条事实一个 `.md` 文件，frontmatter 记着 `kind` / `trust` / `tags` / 来源与有效期；
+`index/` 全是生成物，删掉能重建。没有数据库、没有后台进程、没有网络调用。
+
+- **默认 pull，push 例外**：agent 要什么就问什么；always-on 的只有极小核心档。
+- **文件是唯一真相源**：任何时刻可 `cat`、可 git、可带走；索引可以丢，事实不能丢。
+- **写入过闸门**：去重、长度、信任分级、破坏性改写，全部 fail-closed；拒绝是正常结果。
+- **预算感知**：调用方给 token 预算，服务端裁剪并说明裁掉了什么。
+- **有 receipt**：每次召回/写入都能回答「为什么给了它 / 为什么没给」。
+
+用法、六个命令、`--json` 的冻结形状、库布局：[docs/07-usage.md](docs/07-usage.md)。
 
 ## 为什么要新起一个项目
 
@@ -15,26 +40,33 @@
 | 携带 ≥8 次、一次没被翻开 | **23 条** |
 | 能不能证明「让回答变好」 | **不能**（指标只到「后来被打开」） |
 
-结论：push 式注入的信息密度太低，而且没有评测就没有方向。新项目的三条不同：**默认 pull**、**评测先行**、**记忆分层 + 巩固管线**。
+结论：push 式注入的信息密度太低，而且没有评测就没有方向。tabellio 的三条不同：**默认 pull**、**评测先行**、**记忆分层 + 巩固管线**。
 
-**但这不是替代关系**（杨总 2026-10-16 定调：旧插件不许冻结 —— 「一个不变的项目没有任何意义」）：旧插件继续迭代，新能力优先在它身上验证；通用化与跨宿主的部分进本项目。两条线共享一个 `memory-core` 内核，详见 [docs/00-brief.md §10](docs/00-brief.md)。
+**但这不是替代关系**（2026-10-16 的项目决定：旧插件不许冻结 —— 「一个不变的项目没有任何意义」）：旧插件继续迭代，新能力优先在它身上验证；通用化与跨宿主的部分进本项目。两条线共享一个 `memory-core` 内核。
 
 ## 文档导航
 
 | 文件 | 内容 | 状态 |
 |---|---|---|
-| [docs/00-brief.md](docs/00-brief.md) | 立项书：目标、非目标、判据、里程碑、风险 | 已写 |
-| [docs/01-landscape-systems.md](docs/01-landscape-systems.md) | 竞品架构调研（mem0 / Letta / Zep / Cognee / …） | 调研中 |
-| [docs/02-evaluation.md](docs/02-evaluation.md) | 评测方法与自建评测集方案 | 调研中 |
-| [docs/03-hosts-and-interfaces.md](docs/03-hosts-and-interfaces.md) | 宿主支持、MCP 现状、分发渠道、进程模型 | 调研中 |
-| [docs/04-cost-model.md](docs/04-cost-model.md) | 模型选型与月成本模型（三档方案） | 调研中 |
-| [docs/05-agi-direction.md](docs/05-agi-direction.md) | 记忆在 AGI 方向的前沿与可下注之处 | 调研中 |
-| docs/06-architecture.md | 架构草案（等调研落地后写） | 待写 |
+| [docs/00-brief.md](docs/00-brief.md) | 立项书：目标、非目标、判据、里程碑、风险 | 已定稿 |
+| [docs/01-landscape-systems.md](docs/01-landscape-systems.md) | 竞品架构调研（mem0 / Letta / Zep / Cognee / …） | 已完成 |
+| [docs/02-evaluation.md](docs/02-evaluation.md) | 评测方法与自建评测集方案 | 已完成 |
+| [docs/03-hosts-and-interfaces.md](docs/03-hosts-and-interfaces.md) | 宿主支持、MCP 现状、分发渠道、进程模型 | 已完成 |
+| [docs/04-cost-model.md](docs/04-cost-model.md) | 模型选型与月成本模型（三档方案） | 已完成 |
+| [docs/05-agi-direction.md](docs/05-agi-direction.md) | 记忆在 AGI 方向的前沿与可下注之处 | 已完成 |
+| [docs/06-architecture.md](docs/06-architecture.md) | 架构设计（分层、闸门、账本、检索） | 已定稿 |
+| [docs/07-usage.md](docs/07-usage.md) | 用法：六个命令、MCP、库布局、退出码 | 已定稿 |
+| [docs/08-eval-runbook.md](docs/08-eval-runbook.md) | 评测跑法与判据 | 已完成 |
+| [docs/09-naming.md](docs/09-naming.md) | 命名调研（为什么叫 tabellio） | 已完成 |
 
-## 纪律（这一轮就定下来，免得重蹈覆辙）
+## 纪律（一开始就定下来，免得重蹈覆辙）
 
 1. **判据先行**：三条必须满足的判据没定稿、没跑出基线之前，不写产品代码。
 2. **评测是产品的一部分**：每个里程碑都必须能跑一次端到端评测，并留下结果；没有数字的功能等于没做。
 3. **旧插件是同伴不是遗产**：两条线并行、共享 `memory-core`；它的库（72 篇）与账本（`.engramory-recall.jsonl`）直接当迁移样本与评测输入。新系统要在评测上赢过它 —— 赢的是长板，不是把它判死。
 4. **数据可带走**：纯文本（或可导出为纯文本）永远是真相源。
 5. **成本是约束不是事后优化**：默认档必须便宜到「不心疼」，贵的档必须可关。
+
+## License
+
+MIT © [Yang Fu](https://github.com/yffo)

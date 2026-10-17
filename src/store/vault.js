@@ -48,11 +48,40 @@ export const STORE_CAPS = Object.freeze({ maxNotes: 20000, maxNoteBytes: 512 * 1
  *
  * 与旧插件（`~/memory/engramory`）**必须不同**：两条线并行、共享同一批记忆内容
  * 但各自有独立的库与索引，混用同一个目录会让两边的闸门互相拆台。
+ *
+ * 优先级（高 → 低）：
+ *   1. `--store`（调用方显式指定，不在这里处理）
+ *   2. `$MEMORY_STORE` —— 旧的中性名，保留（评测/脚本/别人的配置都还在用它）
+ *   3. `$TABELLIO_STORE` —— 以产品名命名的变量
+ *   4. `~/memory/tabellio` —— 新库
+ *   5. `~/memory/memory-service` —— **仅当它已经存在时**才用（改名前的旧库）
+ *
+ * 第 5 条是刻意的兼容：改名不能让已经在用的库「凭空消失」（默认路径一变，
+ * 老用户会看到一个空库，症状是「我的记忆没了」）。新装的机器不会有这个目录，
+ * 所以新用户拿到的就是 `~/memory/tabellio`。命中旧库时往 stderr 提一句迁移提示，
+ * 每个进程只说一次。
  */
+export const STORE_DIRNAME = 'tabellio';
+export const LEGACY_STORE_DIRNAME = 'memory-service';
+
+let legacyStoreWarned = false;
+
 export function defaultStorePath() {
   if (process.env.MEMORY_STORE) return resolve(process.env.MEMORY_STORE);
-  if (process.env.MEMORY_SERVICE_STORE) return resolve(process.env.MEMORY_SERVICE_STORE);
-  return join(homedir(), 'memory', 'memory-service');
+  if (process.env.TABELLIO_STORE) return resolve(process.env.TABELLIO_STORE);
+  const current = join(homedir(), 'memory', STORE_DIRNAME);
+  const legacy = join(homedir(), 'memory', LEGACY_STORE_DIRNAME);
+  if (!existsSync(current) && existsSync(legacy)) {
+    if (!legacyStoreWarned) {
+      legacyStoreWarned = true;
+      process.stderr.write(
+        `tabellio：沿用旧库 ${legacy}（改名前的默认路径）。搬到新的默认路径用：` +
+          `mv "${legacy}" "${current}"，或用 --store / $TABELLIO_STORE 显式指定。\n`,
+      );
+    }
+    return legacy;
+  }
+  return current;
 }
 
 export function resolveStore(explicit) {

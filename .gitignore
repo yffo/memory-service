@@ -1,0 +1,10 @@
+# 打包/备份残留
+*.tgz
+*.orig
+*.rej
+
+# macOS
+.DS_Store
+
+# 本地临时目录（评测/调试的 scratch）
+.tmp/

@@ -192,7 +192,7 @@ export function collapse(text, n = 160) {
  *
  * ⚠️ 不能用 `Number(value)` 直接判：`Number(null) === 0`、`Number('') === 0`，
  * 于是「显式传了个空值」会被当成 0，而 0 在阈值场景里恰恰是**把闸门关掉**。
- * 症状：`memory search --query x --min-coverage`（命令行漏了值）静默返回全部结果，
+ * 症状：`tabellio search --query x --min-coverage`（命令行漏了值）静默返回全部结果，
  * 而人以为自己设了阈值。所以 null / '' / 布尔 一律走默认值。
  */
 export function finiteOr(value, fallback) {

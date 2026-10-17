@@ -70,7 +70,7 @@ test('legacy：initialize 建会话并把 serverInfo 给出去', () => {
     assert.equal(res.jsonrpc, '2.0');
     assert.equal(res.id, 1);
     assert.equal(res.result.protocolVersion, '2025-11-25', '回客户端声明的版本，不是我们的最新版');
-    assert.equal(res.result.serverInfo.name, 'memory-service');
+    assert.equal(res.result.serverInfo.name, 'tabellio');
     assert.equal(typeof res.result.serverInfo.version, 'string');
     assert.ok(res.result.capabilities.tools, '必须声明 tools 能力，否则客户端不会让我们列工具');
     assert.equal(res.result.resultType, 'complete', 'Modern 时代要求 resultType（legacy 多一个字段无害）');
