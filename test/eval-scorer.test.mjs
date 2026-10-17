@@ -20,6 +20,7 @@ import {
   EXPECT_ALIASES,
   REFUSAL_PATTERNS,
   THRESHOLDS,
+  answerTokenEfficiency,
   coveredTaskIds,
   estimateTokens,
   isRefusalTask,
@@ -331,6 +332,17 @@ test('scoreRun：超预算会被判不达标（单题均值 > 500）', () => {
   assert.equal(run.verdict.recall_at_5, true);
   assert.equal(run.verdict.correct_refusal_rate, true);
   assert.equal(run.verdict.pass, false, '只剩预算这一条不达标');
+});
+
+test('answerTokenEfficiency：分母必须是单题均值，不是整套题总量', () => {
+  // 真踩过的坑：用 injected_tokens（13.25k）当分母，1.383 被算成 0.027，比阈值低 52 倍。
+  const real = { match_rate: 0.7, injected_tokens: 5200, injected_tokens_mean: 100 };
+  const base = { match_rate: 0.4 };
+  assert.equal(answerTokenEfficiency(real, base), 3, '(0.7−0.4) ÷ (100/1000)');
+  assert.equal(answerTokenEfficiency({ ...real, injected_tokens: 999999 }, base), 3, '总量不许影响结果');
+  assert.equal(answerTokenEfficiency({ ...real, match_rate: 0.3 }, base), -1, 'Δ 为负时保留负号');
+  assert.equal(answerTokenEfficiency({ ...real, injected_tokens_mean: 0 }, base), null, '均值为 0 没有分母');
+  assert.equal(answerTokenEfficiency(real, { match_rate: null }), null);
 });
 
 test('跑分器输出契约：--json 走管道也必须是一条完整可解析的 JSON', () => {

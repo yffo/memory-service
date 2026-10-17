@@ -472,7 +472,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 | `recall@5` | **0.844**（27/32） | ≥ 0.80 | 判据 1 |
 | `correct_refusal_rate` | **0.750**（6/8） | ≥ 0.75 | 判据 1 |
 | `injected_tokens_mean` | **310.0** | ≤ 500（判据 1）/ ≤ 545（判据 2） | 判据 1、2 |
-| `token_efficiency` | **2.177** | ≥ 2.0 | 判据 2 |
+| `token_efficiency`（检索层代理，非 02 §4.5 口径） | **2.177** | — | 参照 |
 
 `correct_refusal_rate` 是**只在拒答题上**算的（8 题里对 6 题），这是相对 `02-evaluation.md §5` 的有意偏离：若按全部 40 题算，一个「永不拒答」的系统白拿 32/40 = 0.80，闸门形同虚设。文档口径的原始值单独保留为 `refusal_calibration` 并一起打印，两个数都能看到。
 
@@ -485,7 +485,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 | `recall@5` | 0.844（27/32） | **0.844（27/32）** | ≥ 0.80 | 判据 1 |
 | `correct_refusal_rate` | 0.750（6/8） | **0.800（16/20）** | ≥ 0.75 | 判据 1 |
 | `injected_tokens_mean` | 310.0 | **254.9** | ≤ 500（判据 1）/ ≤ 545（判据 2） | 判据 1、2 |
-| `token_efficiency` | 2.177 | **2.037** | ≥ 2.0 | 判据 2 |
+| `token_efficiency`（检索层代理，非 02 §4.5 口径） | 2.177 | **2.037** | — | 参照 |
 | `refusal_calibration`（文档口径，全部 52 题） | 0.750 | **0.808** | — | 参照 |
 
 硬约束「真答案一条不许丢」成立：`recall@5` 逐题不变（27/32），新增的 12 题全部是拒答题（`source: []`），按 `bench/scorer.mjs` 的口径不进 `recall@5` 的分母。**余量从 0 变成 1/20 = 0.05**：现在少对一题（`correct_refusal_rate` 0.789）仍然达标，正确答案是 1/8 = 0.125。`recall@5` 的分母仍是 32，与 M2 逐题可比。
@@ -503,7 +503,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 | 回放结束后重问 32 件事 | 答不出 **0**；第一条注入就是旧值 **13**（40.6%） | — | 记数 |
 | 4 周里直接拒答 | **1/168**（0.6%） | — | 记数 |
 
-**口径偏离（要记账）**：`06-architecture.md` 与 `02-evaluation.md` 都要求 `negative_transfer` 用 `closed_book` / `oracle_gold` / `real` **三档对照**算「加记忆反而更差几个点」。M3 的装置**没有实现这三档**，它实现的是同一份报告里那一行 `negative_transfer` 的**窄口径**（= 第一条注入是被取代的旧值、而当前真值没排到它前面，与 `staleness_rate` 同分母）。三条理由：① 三档里的 `closed_book` 要真有一个模型来回答（本装置零模型调用，`docs/08-eval-runbook.md` 的立场），用 `echo` 回答器的「臂间准确率差」会把装置成本变成模型成本；② 现在的 `recall@5` 类指标只能判「gold 有没有进上下文」，判不了「答得对不对」，而 `negative_transfer` 的语义是**答题准确率**；③ M2/M3 一期没有可用的答题器，硬凑三档只会得到一个看起来像结论的数字。**M4 补**：接模型回答器之后，`closed_book` / `oracle_gold` / `real` 三臂跑同 168 题，`negative_transfer = acc(closed_book) - acc(real)`。在那之前，本表里的 `negative_transfer` 只能读作「没有旧值被当成答案」，不能读作「记忆没有让答题变差」。
+**口径偏离：三档已补上，残留的是回放装置**。`02-evaluation.md` 要求 `negative_transfer` 用 `closed_book` / `oracle_gold` / `real` **三档对照**算「加记忆反而更差几个点」。M3 的回放装置只有窄口径（= 第一条注入是被取代的旧值、而当前真值没排到它前面，与 `staleness_rate` 同分母）；**M4 起在 `core-30-v1` 上跑通了三档**：`node bench/run-eval.mjs --arms none,new,oracle --answerer llm --runs 3`（2026-10-17，52 题，deepseek-flash），acc 为 none **0.385** / new **0.744** / oracle **0.846**，`negative_transfer = −0.359`（≤ 0.02，记忆净收益 35.9 个百分点），`oracle_gap = 0.103`，回答层 `token_efficiency = 1.408`（< 2.0，**判据 2 不成立**）。判分是逐字子串，oracle 的 8 道错题里 7 道是同义改写被误判、1 道（k06）是题面与 `expect` 不一致，所以 0.744 是**下界**、`oracle_gap` 高估了检索损失；修判分口径（`answer_aliases` / 判分器对抗集）是下一刀。**残留**：`bench/replay.mjs` 的 168 次时间回放仍是窄口径（没有模型回答），不能把 `core-30-v1` 的三档数字搬过去；`staleness_rate` 仍只由回放认定，回答层只负责 `negative_transfer` / `token_efficiency`。
 
 **这三个 0 不靠「装置测不出来」，靠一条对照臂撑着**：同一次回放里跑一遍消融 —— 把被取代的旧值改回「看起来仍然有效」（清掉 `valid_to` 与 `superseded_by`），**同一批会话重跑 35 次「有机会拿错」的召回，35 次全部把旧值排到了第一**（`stale_in_context_rate = 1`）。这条对照说明：① 指标本身是灵敏的，全 0 不是口径写漏了；② 当前防腐靠的是 **`isValidAt(note, nowMs)` 这一道有效性过滤**（`src/core/score.js`）—— 旧值在默认视图里根本不参与排序，而不是「参与了但被 recency 压下去」。
 

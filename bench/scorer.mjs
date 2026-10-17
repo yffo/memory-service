@@ -29,6 +29,11 @@
  *                        死板回显全部上下文的回答器结构性为 0，这是真结论不是 bug：
  *                        要看出信号得用 --answerer first-hit（只回显 rank-1 那篇）。
  *   match_rate           答案逐字命中 expect、且没命中 forbid 的比例（回答器无关的准头）。
+ *   answer_accuracy      match_rate 在回答层口径下的别名：接入模型回答器后，它就是「答对率」。
+ *   negative_transfer    acc(closed_book) − acc(real)，**正值=记忆有害**（02 §4.5）。
+ *   oracle_gap           acc(oracle_gold) − acc(real)：检索/注入丢掉了多少本可答对的题。
+ *   answer_token_efficiency  Δaccuracy ÷（real 臂注入千 token）：每千 token 换多少百分点准确率。
+ *                        与上面检索层的 token_efficiency 不是一回事，报告里分开印。
  *
  * ── 两条硬规则 ───────────────────────────────────────────────────
  *   1. 比较前一律 normalizeText（NFKC + 去空白 + 小写）：中文没有词边界，
@@ -41,6 +46,8 @@ export const THRESHOLDS = Object.freeze({
   recallAt5: 0.8,
   correctRefusalRate: 0.75,
   maxInjectedTokensPerQuery: 500,
+  negativeTransfer: 0.02,
+  answerTokenEfficiency: 2.0,
 });
 
 /** expect 的等价写法白名单：只有这里列的写法才算「能追到笔记」，不许临时放水。 */
@@ -292,6 +299,50 @@ export function scoreRun(tasks, runs, options = {}) {
 function verdictOf(actual, limit, op = 'min') {
   if (actual === null || actual === undefined) return null;
   return op === 'min' ? actual >= limit : actual <= limit;
+}
+
+/* ────────────────────────── 回答层指标（02 §4.5） ────────────────────────── */
+
+/**
+ * 答对率。match_rate 已经把「该拒的拒了」算成对，所以它就是三臂共同的口径。
+ * @param {object|null} result scoreRun 的结果
+ * @returns {number|null}
+ */
+export function answerAccuracy(result) {
+  const v = result?.match_rate;
+  return Number.isFinite(v) ? v : null;
+}
+
+/**
+ * negative_transfer = acc(no_memory) − acc(real)。正值=加了记忆反而更差（有害）。
+ * 只在两个臂用的是**同一个回答器**时才有意义；调用方负责检查（echo 下数字无意义）。
+ */
+export function negativeTransfer(closedBook, real) {
+  const a = answerAccuracy(closedBook);
+  const b = answerAccuracy(real);
+  return a === null || b === null ? null : round(a - b, 4);
+}
+
+/** oracle_gap = acc(oracle_gold) − acc(real)：检索上限与实跑之间的差距。 */
+export function oracleGap(oracle, real) {
+  const a = answerAccuracy(oracle);
+  const b = answerAccuracy(real);
+  return a === null || b === null ? null : round(a - b, 4);
+}
+
+/**
+ * answer_token_efficiency = Δaccuracy ÷（real 臂单题注入 token 均值/1000），02 §4.5 的定义。
+ * 分母必须是 injected_tokens_mean（单题均值），不是整套题的总注入量——
+ * 用总量会让分母随题数膨胀 52 倍，1.38 被算成 0.027（2026-10-17 实测踩过）。
+ * Δaccuracy 可能为负（记忆帮了倒忙）；那时效率也是负的，不许截成 0。
+ * 单题均值为 0 或 acc 算不出来时返回 null（"没有分母" 不是 "效率无限大"）。
+ */
+export function answerTokenEfficiency(real, closedBook) {
+  const accReal = answerAccuracy(real);
+  const accBase = answerAccuracy(closedBook);
+  const tokensMean = real?.injected_tokens_mean;
+  if (accReal === null || accBase === null || !Number.isFinite(tokensMean) || tokensMean <= 0) return null;
+  return round((accReal - accBase) / (tokensMean / 1000), 4);
 }
 
 export { round };

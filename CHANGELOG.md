@@ -64,6 +64,24 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 `docs/07-usage.md` 新增 `index` 命令一节、重写 `status` 一节、补
 `no_informative_term` 与「覆盖率闸门的洞」小节。
 
+### 回答层：第一次用真模型测判据 2/3
+
+- **修的问题**：`bench/run-eval.mjs` 的回答器一直是非模型的 `echo`，判据 2 的 `token_efficiency` 与判据 3 的
+  `negative_transfer` 都定义在**答对率**上，零模型装置只能拿「gold 有没有进上下文」当代理。
+  M3 报的 `token_efficiency = 2.037` 就是代理值，不是 `02-evaluation.md §4.5` 的口径。
+- **做法**：新增 `bench/llm-answerer.mjs`（零依赖、OpenAI 兼容 `/chat/completions`，deepseek-flash 默认；
+  超时/重试、token 成本估算、错误信息不含 key），`run-eval` 加 `--answerer llm`、`--runs`、`--concurrency` 与
+  `oracle` 臂；`--dry` 强制回 `echo`，CI 不调网络。默认仍是零成本 `echo`。
+- **实测**（2026-10-17，`core-30-v1` 52 题，3 轮，温度 0，max_tokens 256）：acc closed_book **0.385** /
+  real **0.744** / oracle_gold **0.846**；`negative_transfer = −0.359` **达标**（阈值 ≤ 0.02，
+  记忆净收益 35.9 点）；`oracle_gap = 0.103`；回答层 `token_efficiency = 1.408` **不达标**（阈值 ≥ 2.0）。
+  **判据 3（负迁移）成立，判据 2 不成立。** 三臂 468 次调用共 **$0.0187 / 约 2 分钟**。
+- **口径修正**：此前「判据 2 达标」的结论作废——2.037 是检索层代理。回答层 1.408 是严格逐字判分下的**下界**；
+  oracle 8 道错题里 7 道是语义正确的同义改写被逐字 `expect` 判错，1 道（k06）是题面问「包管理器」而 `expect`
+  写「pnpm-lock.yaml」的题集 bug。修判分口径（`answer_aliases` / 判分器对抗集）是下一刀，不靠改题面迁就模型。
+- **没做**：`bench/replay.mjs` 的 168 次时间回放还没接模型（`staleness_rate` 仍由回放认定，三档不搬过去）；
+  判分器对抗集与人工 κ 抽检未做；回答层不进 CI。
+
 ## M6（未发布）
 
 M6 是**生产行为变化**：M5 逐格指名了缺的那条机制（「判定命中之后再核一次『被问的实体 ×

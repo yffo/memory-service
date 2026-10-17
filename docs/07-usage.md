@@ -10,7 +10,7 @@
 ```bash
 git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
-node --test 'test/**/*.test.mjs'       # 全绿才继续（241 条）
+node --test 'test/**/*.test.mjs'       # 全绿才继续（322 条）
 ```
 
 ## 一条事实一个文件
@@ -31,9 +31,12 @@ tags: [preference, tooling]
 正文上限 **400 字 / 200 token** —— 超了闸门会拒，并且告诉你超了多少。
 超过一条事实该有的量，说明该拆成多条（`tabellio import` 会自动切）。
 
-## 六个命令
+## 七个命令
 
-`status` / `index` / `search` / `read` / `remember` / `import`（另有 `paths` 查路径）。
+`status` / `index` / `search` / `recall` / `read` / `remember` / `import`（另有 `paths` 查路径）。
+
+`search` 与 `recall` 的分工：前者给**指针**（pull，读哪条由调用方决定），后者一步给出
+**可直接进上下文**的正文（按 token 预算裁剪、带拒答）；两者都零模型调用。
 
 ### 1. `status` —— 先看账，再看库
 
@@ -246,6 +249,39 @@ $ node bin/memory import --from ~/memory/engramory --dry --json
   他没说过的话），记进 `not_imported` 让人看一眼。
 - 碎片（< 8 字的行）不送闸门（否则 `denied` 里全是本来就没打算要的东西），
   但**有账**：`fragmentsDropped` / `fragmentsChars`。
+
+### 7. `recall` —— 一步取回可用上下文（M2 新增）
+
+```bash
+$ node bin/memory recall --query "索引上限是多少行" --budget-tokens 500
+```
+
+`search` 返回指针（id / title / score），正文还要再 `read` 一次；`recall` 是**给回答层
+用的那一步**：候选过滤 → BM25 → 拒答判定 → 预算裁剪，一次返回可直接拼进上下文的正文。
+四步全确定性、零模型调用。
+
+```bash
+$ node bin/memory recall --query "索引上限是多少行" --budget-tokens 500 --json
+{"ok":true,"status":"ok","refused":false,"reason":null,
+ "items":[{"id":"...","title":"...","content":"<正文>","kind":"semantic","trust":"user_stated",
+           "scope":"user","score":{"total":0.71,"relevance":0.79,"coverage":0.29,...},
+           "why":"词法命中 …"}],
+ "nearest":null,"tokens":341,"chars":767,
+ "budget":{"requested":500,"used":341,"maxNotes":8,"dropped":[...]},
+ "split":{"pull":2,"push":0},"truncated":true,"dropped":[…],"droppedCount":1,
+ "skipped":{...},"candidates":137,"thresholds":{...},"scores":[...],"diagnostics":{...}}
+```
+
+- **`refused:true` 是正常回答，不是错误**：此时 `items` 为空、`reason` 说明为什么拒
+  （`top_score_below_threshold` / `only_external_low_trust` / `all_hits_expired` /
+  `no_index` / `no_informative_term` / `cooccurrence_required_pair_missing`），
+  `nearest` 给几条「最接近但不作为证据」的候选，供人放宽阈值，**不许自动塞进上下文**。
+- `tokens` 是这次实际占用的预算，不是请求值；`budget.dropped[]` 逐条记谁被裁、
+  为什么（`low_trust` / `expired` / `maxTokens` 等），`truncated` 说的是有没有裁过。
+- `items[].content` 已经是正文（不是指针）；`scores[]` 保留全部候选分数，便于归因
+  「是没召回，还是召回了被裁」。
+- 阈值可用 `--min-relevance` / `--min-score` / `--min-coverage` 覆盖；**调参是评测纪律问题**，
+  默认值不允许在跑分集上动（见 `02-evaluation.md §6`）。
 
 ## MCP（给 Agent 用）
 

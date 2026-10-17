@@ -55,7 +55,7 @@ tabellio-mcp                             # 给宿主用的 MCP stdio 服务器�
 | [docs/04-cost-model.md](docs/04-cost-model.md) | 模型选型与月成本模型（三档方案） | 已完成 |
 | [docs/05-agi-direction.md](docs/05-agi-direction.md) | 记忆在 AGI 方向的前沿与可下注之处 | 已完成 |
 | [docs/06-architecture.md](docs/06-architecture.md) | 架构设计（分层、闸门、账本、检索） | 已定稿 |
-| [docs/07-usage.md](docs/07-usage.md) | 用法：六个命令、MCP、库布局、退出码 | 已定稿 |
+| [docs/07-usage.md](docs/07-usage.md) | 用法：七个命令、MCP、库布局、退出码 | 已定稿 |
 | [docs/08-eval-runbook.md](docs/08-eval-runbook.md) | 评测跑法与判据 | 已完成 |
 | [docs/09-naming.md](docs/09-naming.md) | 命名调研（为什么叫 tabellio） | 已完成 |
 

@@ -2,20 +2,26 @@
 /**
  * core-30-v1 三臂评测 —— 取上下文一律走**子进程调 CLI**，不 import 被测代码的内部模块。
  *
- * 三臂：
+ * 检索层三臂：
  *   none    空上下文（退化基线：什么都不给）
  *   new     node bin/memory search --query "<q>" --json   ← 被测系统
  *   legacy  ~/yffto/dsh-engramory-recall 的 BM25（子进程 import 它的 store.js + bm25.js，只读）
  *
- * 回答器是 `none`（不是模型）：echo（默认，回显全部注入上下文）或 first-hit（只回显 rank-1 那篇）。
- * 所以这个跑分器**零模型成本**，它量的是「检索有没有把正确笔记拿进上下文」，不是「模型会不会用」。
+ * 回答层三臂（02 §4.5 要求的三档对照）：
+ *   none      = closed_book，模型只看题面
+ *   new       = real，模型看检索注入的上下文
+ *   oracle    = oracle_gold，模型只看 gold 笔记正文（检索上限）
+ *   跑满三档：`--arms none,new,oracle --answerer llm --runs 3`
+ *   回答器默认仍是 echo（不是模型）：零 API 成本、不联网，量的是「检索有没有把正确笔记拿进上下文」；
+ *   只有 `--answerer llm` 才调模型，并额外给出 acc / negative_transfer / oracle_gap / 成本。
  *
  * 用法：
- *   node bench/run-eval.mjs                      # 三臂，Markdown 表打到 stdout
+ *   node bench/run-eval.mjs                      # 三臂检索层，Markdown 表打到 stdout
  *   node bench/run-eval.mjs --json                # 机器可读（纯 JSON，提示走 stderr）
- *   node bench/run-eval.mjs --dry                 # 不调 CLI，只跑 none 臂 + 评分路径
+ *   node bench/run-eval.mjs --dry                 # 不调 CLI/模型，只跑 none 臂 + 评分路径
  *   node bench/run-eval.mjs --arms none,new --out /tmp/eval.md
  *   node bench/run-eval.mjs --legacy-store ~/memory/engramory --legacy-repo /path/to/repo
+ *   node bench/run-eval.mjs --arms none,new,oracle --answerer llm --runs 3 --concurrency 4
  *
  * 关键选项：
  *   --tasks <file>        题集（默认 bench/core-30-v1/tasks.json）
@@ -25,10 +31,17 @@
  *   --store-mode <mode>   怎么把库告诉 CLI：auto（默认，同时给 --store 与 MEMORY_STORE）/ flag / env / plain
  *   --same-corpus         legacy 臂也读同一份虚构语料（默认读 ~/memory/engramory 私人库）
  *   --cli-args <str>      追加给 CLI 的参数（空格分隔，便于 CLI 改口径时对齐）
- *   --answerer <mode>     echo（默认）| first-hit
+ *   --arms <list>         逗号分隔，默认 none,new,legacy；回答层用 none,new,oracle
+ *   --answerer <mode>     echo（默认）| first-hit | llm
+ *   --runs <n>            每臂重复几轮（默认 1；02 要求 ≥3 才报均值/极差，成本按 n 倍算）
+ *   --concurrency <n>     llm 回答器并发数（默认 1；4 左右安全）
  *   --k <n>               recall@k（默认 5）
  *   --timeout <ms>        单次 CLI 调用超时（默认 20000）
  *   --keep-scratch        保留临时库（默认跑完删掉）
+ *
+ * 环境变量（只有 --answerer llm 用）：EVAL_LLM_API_KEY / DEEPSEEK_API_KEY、
+ *   EVAL_LLM_BASE_URL（默认 https://api.deepseek.com）、EVAL_LLM_MODEL（默认 deepseek-flash）、
+ *   EVAL_LLM_TIMEOUT_MS、EVAL_LLM_MAX_TOKENS、EVAL_LLM_TEMPERATURE。
  *
  * 为什么默认跑临时副本：CLI 的库是 `notes/*.md` 布局，而题集语料是 flat 的 `library/*.md`；
  * 且 CLI 会往库里写索引/账本。所以跑分时把语料**复制**到 /tmp 的临时库里跑，
@@ -43,7 +56,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { estimateTokens, round, scoreRun, THRESHOLDS } from './scorer.mjs';
+import {
+  answerAccuracy,
+  answerTokenEfficiency,
+  estimateTokens,
+  negativeTransfer,
+  oracleGap,
+  round,
+  scoreRun,
+  THRESHOLDS,
+} from './scorer.mjs';
+import { answerQuestion, estimateCostUsd, resolveConfig as resolveLlmConfig } from './llm-answerer.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -54,8 +77,9 @@ const DEFAULT_LEGACY_REPO = '~/yffto/dsh-engramory-recall';
 const DEFAULT_LEGACY_STORE = path.join(os.homedir(), 'memory', 'engramory');
 
 export const ARM_META = Object.freeze({
-  none: { label: '无记忆', how: '空上下文' },
-  new: { label: 'tabellio', how: 'node bin/memory search --query <q> --json' },
+  none: { label: '无记忆（closed_book）', how: '空上下文' },
+  new: { label: 'tabellio（real）', how: 'node bin/memory search --query <q> --json' },
+  oracle: { label: 'gold（oracle_gold）', how: '只把题集声明的 gold 笔记正文喂给回答器（检索上限）' },
   legacy: { label: 'dsh-engramory-recall', how: '旧库 BM25（store.js + bm25.js，子进程只读）' },
 });
 
@@ -76,6 +100,8 @@ export function parseArgs(argv) {
     legacyStore: DEFAULT_LEGACY_STORE,
     arms: ['none', 'new', 'legacy'],
     answerer: 'echo',
+    runs: 1,
+    concurrency: 1,
     k: 5,
     timeout: 20000,
     out: null,
@@ -93,7 +119,7 @@ export function parseArgs(argv) {
   for (const arg of argv) {
     if (!arg.startsWith('--')) continue;
     const key = arg.split('=')[0];
-    if (!flags.has(key) && !['--tasks', '--library', '--cli', '--store', '--store-mode', '--cli-args', '--legacy-repo', '--legacy-store', '--arms', '--answerer', '--k', '--timeout', '--out'].includes(key)) {
+    if (!flags.has(key) && !['--tasks', '--library', '--cli', '--store', '--store-mode', '--cli-args', '--legacy-repo', '--legacy-store', '--arms', '--answerer', '--runs', '--concurrency', '--k', '--timeout', '--out'].includes(key)) {
       throw new Error(`未知参数 ${arg}（--help 看用法）`);
     }
   }
@@ -107,6 +133,8 @@ export function parseArgs(argv) {
   opts.legacyRepo = pick('--legacy-repo', opts.legacyRepo);
   opts.legacyStore = pick('--legacy-store', opts.legacyStore);
   opts.answerer = pick('--answerer', opts.answerer);
+  opts.runs = Number(pick('--runs', opts.runs));
+  opts.concurrency = Number(pick('--concurrency', opts.concurrency));
   opts.k = Number(pick('--k', opts.k));
   opts.timeout = Number(pick('--timeout', opts.timeout));
   opts.out = pick('--out', opts.out);
@@ -118,9 +146,19 @@ export function parseArgs(argv) {
   opts.help = argv.includes('--help') || argv.includes('-h');
   const arms = pick('--arms', null);
   if (arms) opts.arms = String(arms).split(',').map((s) => s.trim()).filter(Boolean);
-  if (opts.dry) opts.arms = ['none'];
-  for (const arm of opts.arms) if (!ARM_META[arm]) throw new Error(`未知臂 ${arm}（可选 none/new/legacy）`);
-  if (!['echo', 'first-hit'].includes(opts.answerer)) throw new Error(`未知回答器 ${opts.answerer}（可选 echo/first-hit）`);
+  if (opts.dry) {
+    // 干跑只验评分路径：不调 CLI，也不调模型（否则 --dry 会悄悄花掉 API 钱）。
+    opts.arms = ['none'];
+    opts.answerer = 'echo';
+  }
+  for (const arm of opts.arms) if (!ARM_META[arm]) throw new Error(`未知臂 ${arm}（可选 none/new/oracle/legacy）`);
+  if (!['echo', 'first-hit', 'llm'].includes(opts.answerer)) throw new Error(`未知回答器 ${opts.answerer}（可选 echo/first-hit/llm）`);
+  if (!Number.isInteger(opts.runs) || opts.runs < 1) throw new Error('--runs 必须是正整数');
+  if (!Number.isInteger(opts.concurrency) || opts.concurrency < 1) throw new Error('--concurrency 必须是正整数');
+  if (opts.arms.includes('oracle') && opts.answerer !== 'llm') {
+    throw new Error('oracle 臂要配 --answerer llm：gold 笔记正文不是答案，回显它会得出假的准确率');
+  }
+  if (opts.answerer === 'llm' && opts.runs < 3) log('提示：--runs < 3，单次/两次结果只能当冒烟，不能当结论（02 §4.7 要求 ≥3 次）。');
   if (!Number.isInteger(opts.k) || opts.k < 1) throw new Error('--k 必须是正整数');
   if (!['auto', 'flag', 'env', 'plain'].includes(opts.storeMode)) throw new Error('--store-mode 只能是 auto/flag/env/plain');
   return opts;
@@ -351,80 +389,185 @@ export function answerFor(mode, { injected, chunks }) {
   return { answer: injected, refused: injected.trim() === '' };
 }
 
+/** 简单并发闸：保持输入顺序，limit=1 就是顺序执行。llm 回答器靠它把 3 轮压进几分钟。 */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const i = next;
+      next += 1;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+/** oracle 臂：只读题集声明的 gold 笔记，不走检索。读不到是数据错误，必须浮出来。 */
+export function goldChunks(task, ctx, k = 5) {
+  const sources = (Array.isArray(task.source) ? task.source : []).slice(0, k);
+  const chunks = [];
+  const missing = [];
+  for (const file of sources) {
+    const body = ctx.readNote(file);
+    if (body === null || body === undefined) {
+      missing.push(String(file));
+      continue;
+    }
+    const label = ctx.maskIds ? `note#${chunks.length + 1}` : String(file);
+    chunks.push({ file: label, text: `[${label}] ${body}` });
+  }
+  return { chunks, sources, missing };
+}
+
+/** 一次真实模型回答；顺带记账（token / 成本 / 延迟）。失败往上抛，由 runArm 记成 error。 */
+async function answerViaLlm(task, injected, opts, stats) {
+  const res = await answerQuestion({ prompt: task.prompt, context: injected, config: opts.llm });
+  const usage = res.usage ?? {};
+  const model = res.model ?? opts.llm.model;
+  const cost = estimateCostUsd(usage, model);
+  if (Number.isFinite(usage.prompt_tokens)) stats.prompt_tokens += usage.prompt_tokens;
+  if (Number.isFinite(usage.completion_tokens)) stats.completion_tokens += usage.completion_tokens;
+  if (Number.isFinite(usage.total_tokens)) stats.total_tokens += usage.total_tokens;
+  stats.calls += 1;
+  stats.latency_ms_total += Number.isFinite(res.latencyMs) ? res.latencyMs : 0;
+  if (cost !== null && Number.isFinite(cost)) stats.cost_usd += cost;
+  return { answer: String(res.text ?? '').trim(), usage, model, cost, latencyMs: res.latencyMs ?? null };
+}
+
 /* ────────────────────────── 一轮跑分 ────────────────────────── */
 
-export function runArm(arm, tasks, opts, ctx) {
-  const runs = [];
-  let errors = 0;
-  let successes = 0;
-  let tokensFromCli = 0;
-  let libraryHits = 0;
-  for (const task of tasks) {
-    let raw = { hits: [], tokens: 0, refused: false };
+export async function runArm(arm, tasks, opts, ctx) {
+  const llmStats =
+    opts.answerer === 'llm'
+      ? { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost_usd: 0, latency_ms_total: 0 }
+      : null;
+  const processed = await mapLimit(tasks, opts.answerer === 'llm' ? opts.concurrency : 1, async (task) => {
+    let hits = [];
+    let cliTokens = null;
+    let refused = false;
+    let reason = null;
+    let oracle = null;
     if (arm === 'new') {
-      raw = callNewArm(task, opts);
-      if (raw.error) {
-        errors += 1;
-        runs.push({ task_id: task.id, answer: '', injected: '', hits: [], tokens: 0, error: raw.error });
-        log(`  [${arm}] ${task.id} 调用失败：${raw.error}`);
-        continue;
-      }
-      successes += 1;
-      for (const hit of raw.hits) if (ctx.libraryFiles.has(String(hit.id))) libraryHits += 1;
+      const raw = callNewArm(task, opts);
+      if (raw.error) return { task_id: task.id, error: raw.error };
+      hits = raw.hits ?? [];
+      cliTokens = raw.tokens;
+      refused = raw.refused === true;
+      reason = raw.reason ?? null;
     } else if (arm === 'legacy') {
-      raw = callLegacyArm(task, opts);
-      if (raw.error) {
-        errors += 1;
-        runs.push({ task_id: task.id, answer: '', injected: '', hits: [], tokens: 0, error: raw.error });
-        log(`  [${arm}] ${task.id} 桥失败：${raw.error}`);
-        continue;
+      const raw = callLegacyArm(task, opts);
+      if (raw.error) return { task_id: task.id, error: raw.error };
+      hits = raw.hits ?? [];
+    } else if (arm === 'oracle') {
+      oracle = goldChunks(task, ctx, opts.k);
+      if (oracle.sources.length > 0 && oracle.chunks.length === 0) {
+        return { task_id: task.id, error: `gold 笔记读不到：${oracle.missing.join('、')}` };
       }
-      successes += 1;
+      hits = oracle.sources.map((id) => ({ id, score: 1 }));
     }
-    const chunks = buildContext({
-      hits: raw.hits,
+    const chunks = oracle ? oracle.chunks : buildContext({
+      hits,
       store: ctx.store,
       maskIds: ctx.maskIds,
       readNote: ctx.readNote,
       k: opts.k,
     });
-    const injected = raw.refused ? `REFUSED: ${raw.reason ?? 'no relevant note'}` : chunks.map((c) => c.text).join('\n\n');
-    const { answer, refused } = answerFor(opts.answerer, { injected, chunks });
-    const tokens = Number.isFinite(raw.tokens) && raw.tokens !== null ? raw.tokens : estimateTokens(injected);
-    if (Number.isFinite(raw.tokens) && raw.tokens !== null) tokensFromCli += 1;
-    runs.push({
+    const injected = refused ? `REFUSED: ${reason ?? 'no relevant note'}` : chunks.map((c) => c.text).join('\n\n');
+    let answer = '';
+    let answerLlm = null;
+    let refusedNow = refused;
+    if (opts.answerer === 'llm') {
+      if (!refused) {
+        try {
+          answerLlm = await answerViaLlm(task, injected, opts, llmStats);
+          answer = answerLlm.answer;
+        } catch (err) {
+          llmStats.errors += 1;
+          return { task_id: task.id, error: `llm: ${err.message}` };
+        }
+      }
+    } else {
+      const a = answerFor(opts.answerer, { injected, chunks });
+      answer = a.answer;
+      refusedNow = a.refused;
+    }
+    const tokens = Number.isFinite(cliTokens) && cliTokens !== null ? cliTokens : estimateTokens(injected);
+    let libraryHitCount = 0;
+    if (arm === 'new') for (const hit of hits) if (ctx.libraryFiles.has(String(hit.id))) libraryHitCount += 1;
+    if (arm === 'oracle') libraryHitCount = oracle.chunks.length;
+    return {
       task_id: task.id,
-      answer,
-      injected,
-      // hits 保持**原样**（判分要用真 id）；打码只影响输出，见 hits_display。
-      hits: raw.hits ?? [],
-      hits_display: (raw.hits ?? []).map((h, i) => ({
-        rank: i + 1,
-        id: ctx.maskIds ? `note#${i + 1}` : String(h.id ?? ''),
-        score: Number.isFinite(h.score) ? round(h.score, 4) : null,
-      })),
-      tokens,
-      refused,
-      reason: raw.reason ?? null,
-      error: null,
-    });
+      run: {
+        task_id: task.id,
+        answer,
+        injected,
+        // hits 保持**原样**（判分要用真 id）；打码只影响输出，见 hits_display。
+        hits,
+        hits_display: hits.map((h, i) => ({
+          rank: i + 1,
+          id: ctx.maskIds ? `note#${i + 1}` : String(h.id ?? ''),
+          score: Number.isFinite(h.score) ? round(h.score, 4) : null,
+        })),
+        tokens,
+        refused: refusedNow,
+        reason,
+        error: null,
+        llm_usage: answerLlm?.usage ?? null,
+        llm_model: answerLlm?.model ?? null,
+        llm_cost_usd: answerLlm?.cost ?? null,
+        llm_latency_ms: answerLlm?.latencyMs ?? null,
+      },
+      success: true,
+      cliToken: Number.isFinite(cliTokens) && cliTokens !== null,
+      libraryHitCount,
+    };
+  });
+
+  const runs = [];
+  let errors = 0;
+  let successes = 0;
+  let tokensFromCli = 0;
+  let libraryHits = 0;
+  for (const item of processed) {
+    if (item.error) {
+      errors += 1;
+      runs.push({ task_id: item.task_id, answer: '', injected: '', hits: [], tokens: 0, error: item.error });
+      log(`  [${arm}] ${item.task_id} 失败：${item.error}`);
+      continue;
+    }
+    successes += 1;
+    if (item.cliToken) tokensFromCli += 1;
+    libraryHits += item.libraryHitCount;
+    runs.push(item.run);
   }
   const result = scoreRun(tasks, runs, { k: opts.k, arm, errors });
+  result.answerer = opts.answerer;
   result.arm_diagnostics = {
     errors,
     successes,
     tokens_from_cli: tokensFromCli,
-    tokens_estimated: successes - tokensFromCli,
+    tokens_estimated: arm === 'new' ? successes - tokensFromCli : 0,
     library_hits: libraryHits,
   };
-  // 逐题的运行明细（注入 token / 是否拒答 / 召回了哪些笔记）—— 排障要靠它，判分不靠它。
+  if (llmStats) {
+    llmStats.cost_usd = round(llmStats.cost_usd, 6);
+    llmStats.latency_ms_mean = llmStats.calls > 0 ? round(llmStats.latency_ms_total / llmStats.calls, 1) : null;
+    delete llmStats.latency_ms_total;
+    result.llm = llmStats;
+  }
+  // 逐题的运行明细（注入 token / 是否拒答 / 回答 / 召回了哪些笔记）—— 排障要靠它，判分不靠它。
   result.runs = runs.map((r) => ({
     task_id: r.task_id,
     tokens: r.tokens,
     refused: r.refused,
+    answer: opts.answerer === 'echo' ? undefined : String(r.answer ?? '').slice(0, 400),
     reason: r.reason,
     error: r.error,
     hits: r.hits_display,
+    llm: r.llm_usage ?? undefined,
   }));
   return result;
 }
@@ -433,6 +576,158 @@ export function runArm(arm, tasks, opts, ctx) {
 
 const fmt = (v, digits = 3) => (v === null || v === undefined ? '—' : typeof v === 'number' ? String(round(v, digits) ?? '—') : String(v));
 const mark = (row) => (row.refusal_task ? (row.correct_refusal ? '✓' : '✗') : `${row.recall_at_k ? 'R' : '-'}${row.match ? '✓' : '✗'}`);
+
+function answererLabel(opts) {
+  if (opts.answerer === 'llm') return `llm（真实模型：${opts.llm?.model ?? '—'}）`;
+  if (opts.answerer === 'first-hit') return 'first-hit（只回显 rank-1，非模型，零成本）';
+  return 'echo（回显全部注入上下文，非模型，零成本）';
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return String(url);
+  }
+}
+
+/* ────────────────────────── 多轮合并 ────────────────────────── */
+
+const ROUND_METRICS = [
+  'recall_at_5',
+  'correct_refusal_rate',
+  'refusal_calibration',
+  'answered_rate',
+  'match_rate',
+  'expect_hit_rate',
+  'hit_but_unused_rate',
+  'injected_tokens_mean',
+  'token_efficiency',
+];
+
+const meanOf = (values) => {
+  const nums = values.filter((v) => typeof v === 'number' && Number.isFinite(v));
+  return nums.length ? round(nums.reduce((a, v) => a + v, 0) / nums.length, 4) : null;
+};
+const ratio = (numerator, denominator) => (denominator === 0 ? null : round(numerator / denominator, 4));
+
+/**
+ * 多轮重复的合并口径（02 §4.7）：率取轮均值，逐题取多数票，token 取单题均值。
+ * 逐题的 unanimous 只作诊断——模型波动不该被当成检索指标，也不该被平均掉。
+ */
+export function mergeRounds(roundResults, arm) {
+  if (!roundResults.length) throw new Error('mergeRounds 需要至少一轮结果');
+  const merged = { ...roundResults[0], arm };
+  merged.rounds = roundResults.map((r, i) => ({
+    round: i + 1,
+    recall_at_5: r.recall_at_5,
+    correct_refusal_rate: r.correct_refusal_rate,
+    match_rate: r.match_rate,
+    injected_tokens_mean: r.injected_tokens_mean,
+    token_efficiency: r.token_efficiency,
+    llm: r.llm ? { calls: r.llm.calls, errors: r.llm.errors, cost_usd: r.llm.cost_usd } : null,
+  }));
+  for (const key of ROUND_METRICS) merged[key] = meanOf(roundResults.map((r) => r[key]));
+  merged.injected_tokens = round(meanOf(roundResults.map((r) => r.injected_tokens)) ?? 0, 0);
+
+  // 逐题：match/recall/correct_refusal 取多数票，token 取均值。
+  const taskIds = roundResults[0].rows.map((row) => row.task_id);
+  merged.rows = taskIds.map((id) => {
+    const rows = roundResults.map((r) => r.rows.find((x) => x.task_id === id)).filter(Boolean);
+    if (!rows.length) return { task_id: id, kind: 'unknown', refusal_task: false, match: false, recall_at_k: false, tokens: 0 };
+    const first = rows[0];
+    const majority = (fn) => rows.filter(fn).length * 2 > rows.length;
+    return {
+      ...first,
+      match: majority((r) => r.match),
+      recall_at_k: majority((r) => r.recall_at_k === true),
+      correct_refusal: first.refusal_task ? majority((r) => r.correct_refusal) : null,
+      tokens: round(rows.reduce((a, r) => a + (Number(r.tokens) || 0), 0) / rows.length, 2),
+    };
+  });
+  const answerable = merged.rows.filter((row) => !row.refusal_task);
+  const refusals = merged.rows.filter((row) => row.refusal_task);
+  merged.recall_hits = answerable.filter((row) => row.recall_at_k).length;
+  merged.refusal_correct = refusals.filter((row) => row.correct_refusal).length;
+  merged.task_unanimous_rate = merged.rows.length
+    ? round(
+        merged.rows.filter((row) =>
+          roundResults.every((r) => {
+            const x = r.rows.find((y) => y.task_id === row.task_id);
+            return x ? x.match === row.match : false;
+          }),
+        ).length / merged.rows.length,
+        4,
+      )
+    : null;
+
+  const kinds = [...new Set(merged.rows.map((row) => row.kind))];
+  merged.by_kind = {};
+  for (const kind of kinds) {
+    const rows = merged.rows.filter((row) => row.kind === kind);
+    const kindAnswerable = rows.filter((row) => !row.refusal_task);
+    const kindRefusals = rows.filter((row) => row.refusal_task);
+    merged.by_kind[kind] = {
+      tasks: rows.length,
+      answerable_tasks: kindAnswerable.length,
+      refusal_tasks: kindRefusals.length,
+      recall_at_5: ratio(kindAnswerable.filter((r) => r.recall_at_k).length, kindAnswerable.length),
+      correct_refusal_rate: ratio(kindRefusals.filter((r) => r.correct_refusal).length, kindRefusals.length),
+      match_rate: ratio(rows.filter((r) => r.match).length, rows.length),
+      hit_but_unused_rate: ratio(rows.filter((r) => r.expect_hit && !r.expect_used).length, rows.length),
+    };
+  }
+
+  merged.arm_diagnostics = {
+    errors: roundResults.reduce((a, r) => a + (r.arm_diagnostics?.errors ?? 0), 0),
+    successes: roundResults.reduce((a, r) => a + (r.arm_diagnostics?.successes ?? 0), 0),
+    tokens_from_cli: roundResults.reduce((a, r) => a + (r.arm_diagnostics?.tokens_from_cli ?? 0), 0),
+    tokens_estimated: roundResults.reduce((a, r) => a + (r.arm_diagnostics?.tokens_estimated ?? 0), 0),
+    library_hits: roundResults.reduce((a, r) => a + (r.arm_diagnostics?.library_hits ?? 0), 0),
+  };
+
+  if (roundResults.some((r) => r.llm)) {
+    const llm = { calls: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost_usd: 0, latency_ms_mean: null };
+    let latencyTotal = 0;
+    for (const r of roundResults) {
+      if (!r.llm) continue;
+      llm.calls += r.llm.calls;
+      llm.errors += r.llm.errors;
+      llm.prompt_tokens += r.llm.prompt_tokens;
+      llm.completion_tokens += r.llm.completion_tokens;
+      llm.total_tokens += r.llm.total_tokens;
+      llm.cost_usd += r.llm.cost_usd ?? 0;
+      latencyTotal += (r.llm.latency_ms_mean ?? 0) * r.llm.calls;
+    }
+    llm.cost_usd = round(llm.cost_usd, 6);
+    llm.latency_ms_mean = llm.calls ? round(latencyTotal / llm.calls, 1) : null;
+    merged.llm = llm;
+  }
+
+  // 逐轮明细留档（JSON 里能看到每轮答案），Markdown 只用上面的均值。
+  merged.runs = roundResults.flatMap((r, i) => (r.runs ?? []).map((x) => ({ ...x, round: i + 1 })));
+
+  const missing = Math.max(...roundResults.map((r) => r.verdict?.missing_tasks ?? 0));
+  const errors = merged.arm_diagnostics.errors;
+  const verdict = {
+    arm,
+    recall_at_5: merged.recall_at_5 === null ? null : merged.recall_at_5 >= THRESHOLDS.recallAt5,
+    correct_refusal_rate:
+      merged.correct_refusal_rate === null ? null : merged.correct_refusal_rate >= THRESHOLDS.correctRefusalRate,
+    injected_tokens:
+      merged.injected_tokens_mean === null ? null : merged.injected_tokens_mean <= THRESHOLDS.maxInjectedTokensPerQuery,
+    missing_tasks: missing,
+    errors,
+  };
+  verdict.pass =
+    verdict.recall_at_5 === true &&
+    verdict.correct_refusal_rate === true &&
+    verdict.injected_tokens === true &&
+    missing === 0 &&
+    errors === 0;
+  merged.verdict = verdict;
+  return merged;
+}
 
 export function renderMarkdown(report) {
   const { opts, results, meta } = report;
@@ -453,9 +748,11 @@ export function renderMarkdown(report) {
     );
   }
   out.push(`- legacy：${opts.legacyRepo}（库 ${opts.legacyStore}${meta.legacyStoreExists === false ? '，**不存在**' : ''}${meta.legacySameCorpus ? '，同一份虚构语料' : ''}）`);
-  out.push(`- 回答器：${opts.answerer}（none，非模型）；recall@${opts.k}（命中判定：gold 笔记进没进 top-${opts.k}）`);
+  out.push(`- 回答器：${answererLabel(opts)}；recall@${opts.k}（命中判定：gold 笔记进没进 top-${opts.k}）`);
+  if (opts.llm) out.push(`- 模型端点：${hostOf(opts.llm.baseUrl)}；温度 ${opts.llm.temperature}；max_tokens ${opts.llm.maxTokens}；轮次 ${opts.runs}（并发 ${opts.concurrency}）`);
+  else if (opts.runs > 1) out.push(`- 轮次：${opts.runs}（指标取均值）`);
   out.push(`- 臂：${arms.map((a) => `${a}（${ARM_META[a].label}）`).join(' / ')}`);
-  if (opts.dry) out.push('- **--dry 模式**：没有调用 CLI，new/legacy 两臂未跑；这张表只验证评分路径。');
+  if (opts.dry) out.push('- **--dry 模式**：没有调用 CLI/模型，new/legacy/oracle 未跑；这张表只验证评分路径。');
   if (meta.masked) out.push('- 库在仓库之外，报告里的笔记 id 已打码（note#N）；要保真用 --show-ids。');
   out.push('');
 
@@ -492,6 +789,52 @@ export function renderMarkdown(report) {
   }
   out.push('');
 
+  if (opts.answerer === 'llm') {
+    out.push('## 回答层（真实模型，三档对照）');
+    out.push('');
+    out.push('| 臂 | acc（match_rate） | 单题注入 token | API 调用 | 输入/输出 token | 成本 USD | 平均延迟 ms |');
+    out.push('| --- | --- | --- | --- | --- | --- | --- |');
+    for (const r of results) {
+      const l = r.llm;
+      out.push(
+        l
+          ? `| ${r.arm} | ${fmt(r.match_rate)} | ${fmt(r.injected_tokens_mean, 1)} | ${l.calls} | ${l.prompt_tokens}/${l.completion_tokens} | ${fmt(l.cost_usd, 4)} | ${fmt(l.latency_ms_mean, 0)} |`
+          : `| ${r.arm} | ${fmt(r.match_rate)} | ${fmt(r.injected_tokens_mean, 1)} | — | — | — | — |`,
+      );
+    }
+    out.push('');
+    const al = report.answerLevel;
+    out.push(`- negative_transfer：${fmt(al.negative_transfer)}（≤ ${THRESHOLDS.negativeTransfer}；正值=有害）`);
+    out.push(`- oracle_gap：${fmt(al.oracle_gap)}（参照，越小说明检索越接近 oracle_gold 上限）`);
+    out.push(`- answer token_efficiency：${fmt(al.answer_token_efficiency)}（≥ ${THRESHOLDS.answerTokenEfficiency}）`);
+    const ja = report.judgementAnswer;
+    out.push('');
+    for (const line of ja.lines) out.push(`- ${line}`);
+    out.push('');
+    out.push(`**结论：${ja.verdict}**`);
+    if (ja.blockers.length) {
+      out.push('');
+      out.push('回答层算不出来的原因：');
+      for (const b of ja.blockers) out.push(`- ${b}`);
+    }
+    out.push('');
+  }
+
+  if (opts.runs > 1) {
+    out.push('## 逐轮稳定性');
+    out.push('');
+    out.push('| 臂 | 轮 | recall@5 | correct_refusal | match_rate | 单题注入 token | 成本 USD |');
+    out.push('| --- | --- | --- | --- | --- | --- | --- |');
+    for (const r of results) {
+      for (const rd of r.rounds ?? []) {
+        out.push(
+          `| ${r.arm} | ${rd.round} | ${fmt(rd.recall_at_5)} | ${fmt(rd.correct_refusal_rate)} | ${fmt(rd.match_rate)} | ${fmt(rd.injected_tokens_mean, 1)} | ${fmt(rd.llm?.cost_usd ?? null, 4)} |`,
+        );
+      }
+    }
+    out.push('');
+  }
+
   out.push('## 按题型');
   out.push('');
   const kinds = [...new Set(results.flatMap((r) => Object.keys(r.by_kind)))];
@@ -522,6 +865,12 @@ export function renderMarkdown(report) {
 
   const notes = [];
   if (opts.answerer === 'echo') notes.push('回答器是 echo（回显全部注入上下文），所以 hit_but_unused_rate 结构性为 0；要看漏用信号用 --answerer first-hit。');
+  if (opts.answerer === 'llm') {
+    notes.push(`回答器是真实模型（${opts.llm?.model}，温度 ${opts.llm?.temperature}）：accuracy 的波动来自模型，不来自检索；${opts.runs} 轮取均值。`);
+    notes.push('成本口径：deepseek-flash 输入 $0.15/1M、输出 $0.60/1M（2026-10 非高峰价）；换模型/调价要同步改 bench/llm-answerer.mjs 的价格表。');
+    notes.push('real 与 oracle_gold 的差（oracle_gap）才是检索/注入的损失；negative_transfer 为正说明记忆净伤害。');
+    if (opts.runs < 3) notes.push('--runs < 3：波动未估计，只能当冒烟，不能当结论（02 §4.7 要求 ≥3 次）。');
+  }
   if (meta.legacyFallback) notes.push('legacy 臂走的是索引关键词兜底（旧仓库的桥没跑通），数字只作参照。');
   if (results.some((r) => r.arm === 'new' && r.arm_diagnostics.tokens_estimated > 0)) notes.push('new 臂有一部分 token 是估算的（CLI 没报 tokens），token_efficiency 只作参照。');
   if (!meta.cliPresent) notes.push('**bin/memory 还没落地**：new 臂现在跑不出数字，等 A 交付后必须重跑本报告。');
@@ -568,6 +917,43 @@ export function judgeNewArm(result, meta) {
   return { lines, blockers, verdict };
 }
 
+/**
+ * 回答层判定（判据 2 的 token_efficiency + 判据 3 的 negative_transfer）。
+ * 与判据 1 分开：判据 1 只看检索，回答层必须有真实模型 + closed_book/oracle_gold/real 三档才有意义。
+ * staleness 不在本跑分器里（由 bench/replay.mjs 的时间回放认定），这里不冒充。
+ */
+export function judgeAnswerLevel(report) {
+  const lines = [];
+  const blockers = [];
+  const { opts, results, answerLevel } = report;
+  const byArm = Object.fromEntries(results.map((r) => [r.arm, r]));
+  if (opts.answerer !== 'llm') blockers.push('回答层判定要 --answerer llm：echo/first-hit 的"准确率"不是模型答对率');
+  for (const arm of ['none', 'new', 'oracle']) if (!byArm[arm]) blockers.push(`缺 ${arm} 臂（closed_book / real / oracle_gold 三档要一起跑）`);
+  if (blockers.length) return { lines, blockers, verdict: '算不出来' };
+  const acc = answerLevel.accuracy;
+  const nt = answerLevel.negative_transfer;
+  const eff = answerLevel.answer_token_efficiency;
+  const gap = answerLevel.oracle_gap;
+  const mean = byArm.new.injected_tokens_mean;
+  lines.push(`答对率：closed_book ${fmt(acc.none)} / real ${fmt(acc.new)} / oracle_gold ${fmt(acc.oracle)}（${opts.runs} 轮均值，逐轮见下）`);
+  lines.push(
+    `negative_transfer = acc(closed_book) − acc(real) = ${fmt(nt)} → ${nt !== null && nt <= THRESHOLDS.negativeTransfer ? '达标' : '不达标'}（阈值 ≤ ${THRESHOLDS.negativeTransfer}，正值=记忆有害）`,
+  );
+  const effOk = eff !== null && eff >= THRESHOLDS.answerTokenEfficiency;
+  lines.push(
+    `answer token_efficiency = Δaccuracy ÷（注入千 token） = ${fmt(eff)} → ${effOk ? '达标' : '不达标'}（阈值 ≥ ${THRESHOLDS.answerTokenEfficiency}）`,
+  );
+  lines.push(`oracle_gap = acc(oracle_gold) − acc(real) = ${fmt(gap)}（参照：>0 说明检索/注入仍丢了本可答对的题）`);
+  lines.push(`单题注入 token 均值 ${fmt(mean, 1)}（判据 2 阈值 ≤ 545；判据 1 更严，≤500）`);
+  const ok = nt !== null && nt <= THRESHOLDS.negativeTransfer && effOk && mean !== null && mean <= 545;
+  lines.push(
+    ok
+      ? '结论：判据 2 的 token_efficiency、判据 3 的 negative_transfer 在本题集成立；staleness 仍由 bench/replay.mjs 认定。'
+      : '结论：有指标没达标，先看差距再改检索/注入/回答器；不要把未达标说成"参照"。',
+  );
+  return { lines, blockers, verdict: ok ? '判据 2/3（回答层）成立' : '判据 2/3（回答层）不成立' };
+}
+
 export function buildReport(opts, results, { tasks, library, noteCount, startedAt, masked, cliPresent, legacyFallback, dry, storeKind, preflight, legacySameCorpus, legacyStoreExists, cliArgsOverride }) {
   const kindCount = Object.entries(
     tasks.reduce((acc, t) => ({ ...acc, [t.kind]: (acc[t.kind] ?? 0) + 1 }), {}),
@@ -599,10 +985,18 @@ export function buildReport(opts, results, { tasks, library, noteCount, startedA
   const placeholder = scoreRun(tasks, [], { k: opts.k, arm: 'new', errors: 0 });
   placeholder.arm_diagnostics = { errors: 0, successes: 0, tokens_from_cli: 0, tokens_estimated: 0, library_hits: 0 };
   report.judgement = judgeNewArm(newResult ?? placeholder, { ...meta, noneRecall: noneResult?.recall_at_5 ?? null });
+  const byArm = Object.fromEntries(results.map((r) => [r.arm, r]));
+  report.answerLevel = {
+    accuracy: Object.fromEntries(results.map((r) => [r.arm, answerAccuracy(r)])),
+    negative_transfer: byArm.none && byArm.new ? negativeTransfer(byArm.none, byArm.new) : null,
+    oracle_gap: byArm.oracle && byArm.new ? oracleGap(byArm.oracle, byArm.new) : null,
+    answer_token_efficiency: byArm.new && byArm.none ? answerTokenEfficiency(byArm.new, byArm.none) : null,
+  };
+  report.judgementAnswer = judgeAnswerLevel(report);
   return report;
 }
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   let opts;
   try {
     opts = parseArgs(argv);
@@ -613,6 +1007,14 @@ export function main(argv = process.argv.slice(2)) {
   if (opts.help) {
     process.stdout.write(usage());
     return 0;
+  }
+  if (opts.answerer === 'llm') {
+    try {
+      opts.llm = resolveLlmConfig();
+    } catch (err) {
+      log(`模型配置错误：${err.message}`);
+      return 2;
+    }
   }
   const startedAt = new Date().toISOString();
   const set = loadTasks(path.resolve(opts.tasks));
@@ -670,7 +1072,16 @@ export function main(argv = process.argv.slice(2)) {
         continue;
       }
       log(`跑 ${arm} 臂（${set.tasks.length} 题）…`);
-      results.push(runArm(arm, set.tasks, opts, ctx));
+      if (opts.runs > 1 && arm !== 'legacy') {
+        const rounds = [];
+        for (let i = 1; i <= opts.runs; i += 1) {
+          log(`  第 ${i}/${opts.runs} 轮…`);
+          rounds.push(await runArm(arm, set.tasks, opts, ctx));
+        }
+        results.push(mergeRounds(rounds, arm));
+      } else {
+        results.push(await runArm(arm, set.tasks, opts, ctx));
+      }
     }
   } finally {
     cleanup();
@@ -715,7 +1126,8 @@ function runLegacyFallback(opts, tasks, ctx) {
     }
     const chunks = buildContext({ hits, store: ctx.store, maskIds: true, readNote: ctx.readNote, k: opts.k });
     const injected = chunks.map((c) => c.text).join('\n\n');
-    const { answer, refused } = answerFor(opts.answerer, { injected, chunks });
+    // legacy 兜底臂是检索层参照；回答器统一退回零成本的 echo（llm 三档不跑 legacy）。
+    const { answer, refused } = answerFor(opts.answerer === 'llm' ? 'echo' : opts.answerer, { injected, chunks });
     runs.push({ task_id: task.id, answer, injected, hits, tokens: estimateTokens(injected), refused });
   }
   const result = scoreRun(tasks, runs, { k: opts.k, arm: 'legacy', errors: runs.filter((r) => r.error).length });
@@ -736,8 +1148,13 @@ function serialize(report) {
     mode: report.meta.mode,
     started_at: report.meta.startedAt,
     thresholds: THRESHOLDS,
+    answerer: report.opts.answerer,
+    runs: report.opts.runs,
+    llm_model: report.opts.llm?.model ?? null,
     meta: report.meta,
     judgement: report.judgement,
+    judgement_answer: report.judgementAnswer,
+    answer_level: report.answerLevel,
     arms: report.results.map((r) => ({
       arm: r.arm,
       metrics: {
@@ -752,9 +1169,13 @@ function serialize(report) {
         injected_tokens: r.injected_tokens,
         injected_tokens_mean: r.injected_tokens_mean,
         token_efficiency: round(r.token_efficiency),
+        answer_accuracy: round(answerAccuracy(r)),
+        task_unanimous_rate: r.task_unanimous_rate ?? null,
       },
       by_kind: r.by_kind,
       diagnostics: r.arm_diagnostics,
+      llm: r.llm ?? null,
+      rounds: r.rounds ?? null,
       tasks: r.rows,
       runs: r.runs ?? [],
     })),
@@ -765,5 +1186,12 @@ const invokedDirectly = process.argv[1] && import.meta.url === new URL(`file://$
 if (invokedDirectly) {
   // 不用 process.exit(main())：stdout 接到管道时 exit 会截断还没 flush 的写入，
   // `--json | jq` 会拿到半截 JSON（实测 195KB 只出来 65KB）。设 exitCode 让事件循环自然排空。
-  process.exitCode = main();
+  main()
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((err) => {
+      log(`评测脚本内部错误：${err?.stack ?? err}`);
+      process.exitCode = 1;
+    });
 }
