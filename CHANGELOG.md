@@ -9,12 +9,13 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 它们都属于「判据说达标了、但真实库上不成立」的那一类，不修掉的话 M2 的判据 3
 （不腐烂、不害人）是在坏地基上盖楼。
 
-### 评测：56 题回答层补别名后重测，判据 2 仍不成立
+### 评测：回答层注入计量修正，判据 2 成立；top-2 更省
 
-- **做法**：用本机 `~/.dsh/.credentials.yaml` 的 key（只进环境，不写仓库）对当前 56 题（36 道可答：32 道有 `answer_aliases` + 4 道多跳/时间；20 道拒答，其中 4 道带 `negative_transfer_probe`）跑 `--arms none,new,oracle --answerer llm --runs 3 --concurrency 4`；报告 `bench/core-30-v1/runs/2026-10-17-answer-56.md`。
-- **实测**：acc none **0.357** / new **0.786** / oracle **0.887**（3 轮均值；new 三轮一致，oracle 0.875/0.875/0.911）；`negative_transfer = −0.429`（窄口径达标）；`oracle_gap = 0.101`；`answer_token_efficiency = 1.611`（< 2.0，**判据 2 不成立**）；`trap_fall_rate = 0/4`；三臂 444 次调用约 **$0.0204**。
-- **旧数字的位置**：52 题、补别名前的 0.744 / 1.408 只作历史下界；补别名与扩题后准确率 +4.2 点、效率 1.408→1.611，方向对但仍不够。零模型 echo 的 `trap_fall_rate` 仍是 1/4，与真模型回答层的 0/4 分开记。
-- **判据 2 的算术**：当前 Δaccuracy = 0.4286、注入均值 266 token；要到 2.0，要么均值 ≤214 token，要么准确率 ≥0.889。12 道错题 = 5 道检索没给（p03/c03/c04/c07/k05）+ 7 道 oracle 也错（k06 题集 bug；p02/p05/p07/p08/c01/k04 是别名缺口）。即使 7 道全判对，0.875 也只有 1.95，**继续加别名过不了判据 2，下一刀必须减注入或提检索**。
+- **修的问题**：`bench/run-eval.mjs` 把 CLI `search` 返回的 **top-8 候选预算**当成了实际注入成本，而 `buildContext` 只注入 top-5。旧报告 `2026-10-17-answer-56.md` 的 266 token / 1.611 因此是错误分母；同一批回答的实际注入是 166.2。
+- **做法**：`search` 增加 `--costs` 诊断（默认 JSON 契约不变），把每条命中的 `cost` 透出；`run-eval` 增加 `--inject-k`（与 recall 的 `--k` 解耦）与 `countInjectedTokens()`，按实际注入的 chunk 逐条求和。对当前 56 题（36 可答 + 20 拒答）用 deepseek-flash 跑 3 轮：top-5 报告 `bench/core-30-v1/runs/2026-10-18-answer-56-k5.md`，top-2 报告 `bench/core-30-v1/runs/2026-10-18-answer-56-k2.md`。
+- **top-5 实测**：acc none **0.357** / new **0.786** / oracle **0.893**（三轮 0.875/0.911/0.893）；`negative_transfer = −0.429`；`oracle_gap = 0.107`；实际注入 **166.2 token/题**，`answer_token_efficiency = 2.579`（≥ 2.0，**判据 2 成立**）；`trap_fall_rate = 0/4`；三臂 444 次调用约 **$0.0205**。
+- **top-2 裁剪**：new acc **0.792**（三轮 0.786/0.804/0.786）/ 注入 **70.3** / 效率 **6.182**，oracle 0.869，`oracle_gap = 0.077`，总成本约 **$0.0183**。注入少 57.7%，准确率只差 0.6 点（约 0.3 题），是更省的推荐运行点；默认值未改（`--inject-k` 不传仍等于 `--k`），要省成本需显式传。
+- **旧数字的位置**：52 题、补别名前的 0.744 / 1.408 只作历史下界；2026-10-17 的 56 题 0.786 / 1.611 因上述计量错误作废，旧报告顶部已加口径警告。12 道错题（5 道检索没给 + 7 道 oracle 也错，k06 是题集 bug）仍解释 `oracle_gap`，但不再是判据 2 的算术障碍。
 - **边界**：3 轮仍是同一天同一模型，不能当跨模型稳定性；陷阱分母只有 4，`trap_fall_rate=0` 不能写「判据 3 成立」；20% 人工抽检与 κ 仍未做；回答层不进 CI。
 
 ### 记忆回执：`recall` 现在能自证
@@ -57,7 +58,7 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 - **修的问题**：题集只有 `kind`（事实/偏好/纠错/流程/拒答）五类，多跳、时间推理、知识更新、陷阱题全挤在 `fact_recall` 里；`trap_fall_rate` 算不出来，判据 3 的陷阱项只能写「未测」。文档里的 `capability` 与 `negative_transfer_probe` 一直是目标 schema。
 - **做法**：`bench/scorer.mjs` 加 `CAPABILITIES` / `taskCapability()`（显式优先，旧题按 `kind` 回退）、`taskNegativeTransferProbe()`、`taskExpectAll()`；`scoreTask` 输出 `capability` / `trap_fall` / `expect_all`，`forbid` 与 `fall_patterns` 都算「用了错值」。题集扩到 **56 题**：新增 2 道多跳（Harborlight 正式/预览构建目录、Orchid 生产/预发端口）与 2 道时间题（Kestrel 自动同步/失败补跑、Orchid 生产/预发缓存 TTL），4 道陷阱题带 `negative_transfer_probe`（f01/f02/f04/f07）。`bench/run-eval.mjs` 按 `capability` 分表，指标加 `trap_fall_rate`。
 - **行为**：2026-10-17 实测（56 题 / 50 篇，`--same-corpus`）`new` 臂 `recall@5 = 0.8611`（31/36）、`correct_refusal_rate = 0.750`（15/20，**正好压线**）、`injected_tokens_mean = 266.0`、检索层 `token_efficiency = 2.081`；`multi_hop` 2/2、`temporal` 2/2 全中；`trap_tasks = 4`、`trap_falls = 1`、`trap_fall_rate = 0.25`（f01 答出预发端口 9443）。判据 1 仍成立，但拒答已无余量。
-- **边界**：拒答从 0.800 降到 0.750 不是检索退化，是补真实 `forbid` 后 r01 暴露（echo 上下文里出现 `toml`）；r03/r07/r11/r12 仍是假命中。`negative_transfer` / `multi_hop` 各只有 4/2 题，陷阱率分母只有 4，只能当方向；`temporal` 测时间点/时长对齐，不测 `as_of` 回放。106 条判分器对抗集仍只覆盖原有 52 题。回答层当时没有重测，判据 2 是「旧口径不成立、新口径未测」；后续已重测（1.611），判据 2 仍不成立，见本节顶部。
+- **边界**：拒答从 0.800 降到 0.750 不是检索退化，是补真实 `forbid` 后 r01 暴露（echo 上下文里出现 `toml`）；r03/r07/r11/r12 仍是假命中。`negative_transfer` / `multi_hop` 各只有 4/2 题，陷阱率分母只有 4，只能当方向；`temporal` 测时间点/时长对齐，不测 `as_of` 回放。106 条判分器对抗集仍只覆盖原有 52 题。回答层当时没有重测；后续修正注入计量并重测（top-5 2.579、top-2 6.182），判据 2 成立，见本节顶部。
 
 ### 索引：从一屏平铺改成**分层路由 + 清单**
 
@@ -130,7 +131,7 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 - **口径修正**：此前「判据 2 达标」的结论作废——2.037 是检索层代理。回答层 1.408 是严格逐字判分下的**下界**；
   oracle 8 道错题里 7 道是语义正确的同义改写被逐字 `expect` 判错，1 道（k06）是题面问「包管理器」而 `expect`
   写「pnpm-lock.yaml」的题集 bug。修判分口径（`answer_aliases` / 判分器对抗集）是下一刀，不靠改题面迁就模型。
-  （补记：2026-10-17 晚已完成，见本节顶部「评测：判分器先接住正确改述…」；回答层后续已重测，见「评测：56 题回答层补别名后重测」。）
+  （补记：2026-10-17 晚已完成，见本节顶部「评测：判分器先接住正确改述…」；回答层后续已修正计量并重测，见「评测：回答层注入计量修正，判据 2 成立；top-2 更省」。）
 - **没做**：`bench/replay.mjs` 的 168 次时间回放还没接模型（`staleness_rate` 仍由回放认定，三档不搬过去）；
   人工 κ 抽检未做；回答层不进 CI。
 

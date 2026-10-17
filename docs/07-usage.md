@@ -457,7 +457,7 @@ node bench/judge-adversarial.mjs                 # 判分器对抗集 106 条，
   `docs/08-eval-runbook.md §6.4`。
 - 题集 56 题已标 `capability`（六类），其中 4 道 `negative_transfer` 陷阱题带 `negative_transfer_probe`；
   `run-eval` 会按能力分表并报 `trap_fall_rate`。零模型 `echo` 口径当前 4 题里 1 题落入（0.25，压线），真模型回答层是 0/4；分母太小，只当方向。
-- 2026-10-17 补别名后用真实模型重测（56 题 / deepseek-flash / 3 轮）：acc closed_book **0.357** / real **0.786** / oracle **0.887**；`negative_transfer = −0.429`；回答层 `token_efficiency = 1.611 < 2.0`，**判据 2 仍不成立**。报告在 `bench/core-30-v1/runs/2026-10-17-answer-56.md`；旧 1.408 是补别名前的 52 题下界，不能当结论。
+- 2026-10-18 修正注入计量后用真实模型重测（56 题 / deepseek-flash / 3 轮，top-5）：acc closed_book **0.357** / real **0.786** / oracle **0.893**；`negative_transfer = −0.429`；实际注入 **166.2 token/题**，回答层 `token_efficiency = 2.579`，**判据 2 成立**。报告 `bench/core-30-v1/runs/2026-10-18-answer-56-k5.md`。`--inject-k 2` 裁到 top-2 后 real **0.792** / 注入 **70.3** / 效率 **6.182**，报告 `bench/core-30-v1/runs/2026-10-18-answer-56-k2.md`，是更省的运行点；默认仍 top-5。旧 1.611 是把 CLI top-8 候选预算当实际注入的计量错误，已作废；1.408 是补别名前 52 题下界。
 
 ## MCP（给 Agent 用）
 
