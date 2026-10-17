@@ -391,14 +391,20 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
       skipped,
       candidates: scored.length,
       thresholds,
+      // 覆盖率闸的实际门限：小语料会自动降到 `COVERAGE_SMALL_CORPUS_GATE`。
+      // 回执要能解释「为什么这条被挡」，就必须把这次真正生效的门限记下来，
+      // 而不是让读回执的人拿默认阈值去猜。
+      coverageGate: coverGate,
       scores: scored.map((s) => ({ id: s.id, score: round(s.score), relevance: round(s.relevance), coverage: round(s.coverage ?? 0) })),
       diagnostics: {
         thresholds,
+        coverageGate: coverGate,
         skipped,
         candidates: scored.length,
         eligible: 0,
         ignored: ignored.map((s) => ({
           id: s.id,
+          score: round(s.score),
           relevance: round(s.relevance),
           coverage: round(s.coverage ?? 0),
           // 被共现闸挡下来的条目把判据原样附上：审计要能回答
@@ -501,6 +507,7 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
     skipped,
     candidates: scored.length,
     thresholds,
+    coverageGate: coverGate,
     scores: scored.map((s) => ({
       id: s.id,
       score: round(s.score),
@@ -512,11 +519,14 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
     // 两个分支形状不一致的话调用方得写两套读法（而它一定会漏掉一套）。
     diagnostics: {
       thresholds,
+      coverageGate: coverGate,
       skipped,
       candidates: scored.length,
       eligible: eligible.length,
       ignored: ignored.map((s) => ({
         id: s.id,
+        // 解释层要区分「相关性不够」和「分数不够」，缺 score 就只能报 unknown。
+        score: round(s.score),
         relevance: round(s.relevance),
         coverage: round(s.coverage ?? 0),
         cooccurrence: s.cooc ? coocReport(s.cooc) : null,

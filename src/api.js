@@ -39,6 +39,8 @@ import { buildIndexPlan, fitRoute, readIndexTree, verifyRoutes, pointerLine, gro
 import { readNote, writeNoteAtomic, parseNoteLoose, safeNoteId, MAX_NOTE_CHARS, MAX_NOTE_TOKENS, MAX_NOTE_BYTES } from './store/note.js';
 import { ulid } from './util/ulid.js';
 import { recall, searchHits, DEFAULT_THRESHOLDS, DEFAULT_TOKENS } from './core/recall.js';
+import { buildRecallReceipt, explainReceipt, verifyReceipt } from './core/receipt.js';
+import { writeReceipt, readReceipt } from './store/receipt.js';
 import { estimateTokens } from './core/tokenize.js';
 import { finiteOr } from './util/text.js';
 import { remember as runRemember, candidateFromMarkdown, buildCandidate } from './gate/remember.js';
@@ -388,8 +390,36 @@ export function recallOptions(options = {}) {
  * `tabellio recall`（完整形状）。`§9` 的返回：`items` / `budget` / `why_not` / `nearest`。
  */
 export function recallQuery(ctx, query, options = {}) {
+  const normalized = recallOptions(options);
   const scan = ctx.scan();
-  const result = recall({ entries: scan.notes, query, options: recallOptions(options) });
+  const result = recall({ entries: scan.notes, query, options: normalized });
+
+  // 回执是**可选**的：默认 recall 仍然只读、也不多生成对象。只有显式
+  // --receipt / --save-receipt 时才 build；--save-receipt 才落 runs/。
+  let receipt = null;
+  let receiptPath = null;
+  let receiptError = null;
+  if (options.receipt || options.saveReceipt) {
+    receipt = buildRecallReceipt({
+      result,
+      entries: scan.notes,
+      store: ctx.store,
+      query,
+      options: normalized,
+      nowMs: normalized.nowMs,
+    });
+    if (options.saveReceipt) {
+      try {
+        ctx.ensure();
+        const saved = writeReceipt(ctx.store, receipt);
+        if (saved.ok) receiptPath = saved.path;
+        else receiptError = saved.error;
+      } catch (err) {
+        receiptError = { code: 'E_RECEIPT_WRITE', message: err?.message ?? String(err) };
+      }
+    }
+  }
+
   if (options.ledger) {
     ctx.ledger({
       kind: result.refused ? 'recall_refused' : 'recall',
@@ -399,11 +429,108 @@ export function recallQuery(ctx, query, options = {}) {
       refused: result.refused,
       reason: result.reason,
       dropped: result.dropped,
+      // 账本里只记 id，不复制整张回执；回执本体在 runs/ 里。
+      receipt_id: receipt?.receiptId ?? null,
     });
   }
-  return {
+  const out = {
     ...result,
     parseFailures: scan.failures.length,
+    store: ctx.store,
+    notes: scan.notes.length,
+  };
+  if (receipt) {
+    out.receipt = receipt;
+    if (receiptPath) out.receiptPath = receiptPath;
+    if (receiptError) out.receiptError = receiptError;
+  }
+  return out;
+}
+
+/**
+ * `tabellio verify`：核验一张已落盘/指定的回执是否仍与当前笔记一致。
+ *
+ * 三种状态分开报（tampered / drifted / verified），不把「回执被改」和
+ * 「笔记变了」混成同一个失败。
+ */
+export function verifyRecallReceipt(ctx, ref) {
+  const got = readReceipt(ctx.store, ref);
+  if (!got.ok) {
+    return {
+      ok: false,
+      status: 'unreadable',
+      receiptId: null,
+      path: got.error?.path ?? null,
+      error: got.error,
+    };
+  }
+  const scan = ctx.scan();
+  const verification = verifyReceipt(got.receipt, scan.notes);
+  return {
+    ...verification,
+    path: got.path,
+    store: ctx.store,
+    receiptStore: got.receipt.store ?? null,
+    storeMismatch: Boolean(got.receipt.store && got.receipt.store !== ctx.store),
+    query: got.receipt.query ?? '',
+    createdAt: got.receipt.createdAt ?? null,
+  };
+}
+
+/**
+ * `tabellio explain`：要么按一张回执解释，要么按查询现场生成一张**不落盘**的
+ * 回执再解释。两种模式返回同一套字段，调用方不用写两套读法。
+ */
+export function explainRecall(ctx, { query = null, receiptRef = null, options = {} } = {}) {
+  const hasQuery = typeof query === 'string' && query.trim().length > 0;
+  const hasReceipt = typeof receiptRef === 'string' && receiptRef.trim().length > 0;
+  if (hasQuery === hasReceipt) {
+    return {
+      ok: false,
+      status: 'invalid',
+      error: { code: 'E_EXPLAIN_INPUT', message: 'explain 需要且只需要 --query 或 --receipt 之一' },
+    };
+  }
+
+  if (hasReceipt) {
+    const got = readReceipt(ctx.store, receiptRef);
+    if (!got.ok) {
+      return { ok: false, status: 'unreadable', receiptId: null, path: got.error?.path ?? null, error: got.error };
+    }
+    const scan = ctx.scan();
+    const verification = verifyReceipt(got.receipt, scan.notes);
+    return {
+      ok: true,
+      status: 'ok',
+      mode: 'receipt',
+      receiptId: got.receipt.receiptId,
+      receiptPath: got.path,
+      createdAt: got.receipt.createdAt ?? null,
+      query: got.receipt.query ?? '',
+      decision: got.receipt.decision ?? null,
+      explanation: explainReceipt(got.receipt),
+      verification,
+      store: ctx.store,
+      notes: scan.notes.length,
+    };
+  }
+
+  const text = query.trim();
+  // 现场解释是只读的：force receipt 以便解释，但绝不落盘。
+  const result = recallQuery(ctx, text, { ...options, receipt: true, saveReceipt: false });
+  const scan = ctx.scan();
+  const verification = verifyReceipt(result.receipt, scan.notes);
+  return {
+    ok: true,
+    status: 'ok',
+    mode: 'query',
+    receiptId: result.receipt.receiptId,
+    receiptPath: null,
+    createdAt: result.receipt.createdAt ?? null,
+    query: text,
+    decision: result.receipt.decision ?? null,
+    explanation: explainReceipt(result.receipt),
+    verification,
     store: ctx.store,
     notes: scan.notes.length,
   };

@@ -24,6 +24,8 @@ import {
   remember,
   importFrom,
   recallQuery,
+  verifyRecallReceipt,
+  explainRecall,
   indexReport,
   defaultStorePath,
   INDEX_CAPS,
@@ -37,7 +39,7 @@ import { finiteOr } from '../src/util/text.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const VERSION = '0.1.1';
 
-export const USAGE = `tabellio — 显式记忆服务（M1）
+export const USAGE = `tabellio — 显式记忆服务（M1 + M2 读取回执）
 
 用法：
   tabellio status [--store DIR] [--rebuild-index] [--json]
@@ -48,7 +50,9 @@ export const USAGE = `tabellio — 显式记忆服务（M1）
   tabellio remember --file <path.md> [--dry] [--json]
                    [--kind k] [--trust t] [--scope s] [--tags a,b] [--id ULID]
   tabellio import --from <旧 Engramory 库目录> [--dry] [--json]
-  tabellio recall --query "<词>" [--budget-tokens N] [--json]     # §9 完整形状
+  tabellio recall --query "<词>" [--receipt|--save-receipt] [--budget-tokens N] [--json]
+  tabellio explain (--query "<词>" | --receipt <id|path>) [--json]
+  tabellio verify --receipt <id|path> [--json]
   tabellio help | --help | -h | --version
 
 全局：
@@ -56,7 +60,7 @@ export const USAGE = `tabellio — 显式记忆服务（M1）
   --json         机器可读输出（形状见 docs/07-usage.md）
   --ledger       把这次只读操作记进账本（默认不写）
 
-退出码：0 成功 / 1 判定拒绝 / 2 用法错误`;
+退出码：0 成功 / 1 判定拒绝 / 回执操作失败 / 2 用法错误`;
 
 /** 解析 argv（`--k v`、`--k=v`、`--flag`）。不认识的位置参数进 `_`。 */
 export function parseArgs(argv) {
@@ -95,6 +99,19 @@ function listArg(value) {
     .map((s) => s.trim())
     .filter(Boolean);
   return parts.length ? parts : undefined;
+}
+
+function recallOptionsFromArgs(args) {
+  return {
+    budgetTokens: numArg(args['budget-tokens'], undefined),
+    kinds: listArg(args.kinds),
+    trusts: listArg(args.trusts),
+    minRelevance: numArg(args['min-relevance'], undefined),
+    minCoverage: numArg(args['min-coverage'], undefined),
+    minScore: numArg(args['min-score'], undefined),
+    includeCore: args['no-core'] ? false : true,
+    ledger: Boolean(args.ledger),
+  };
 }
 
 function numArg(value, dflt) {
@@ -142,6 +159,52 @@ function humanRecall(r) {
   for (const it of r.items) lines.push(`  - ${it.title ?? it.id} [${it.id}] ${it.why ?? ''}`);
   for (const n of r.nearest ?? []) lines.push(`  · 候选：${n.id}（score ${n.score}）${n.why ?? ''}`);
   if (r.droppedCount) lines.push(`  （因预算丢掉 ${r.droppedCount} 条：${r.dropped.map((d) => d.reason).join(',')}）`);
+  if (r.receipt) {
+    lines.push(`回执：${r.receipt.receiptId}${r.receiptPath ? ` → ${r.receiptPath}` : '（未落盘）'}`);
+    if (r.receiptError) lines.push(`⚠️  回执未保存：${r.receiptError.code} ${r.receiptError.message}`);
+  }
+  return lines.join('\n');
+}
+
+function humanExplain(r) {
+  if (!r.ok) return `无法解释：${r.error?.code ?? r.status} ${r.error?.message ?? ''}`.trim();
+  const ex = r.explanation;
+  const head = r.decision?.refused
+    ? `拒答（${r.decision.reason}）；回执 ${r.receiptId}（${r.mode === 'query' ? '现场生成，未落盘' : r.receiptPath}）`
+    : `纳入 ${ex.summary.recalled} 条；回执 ${r.receiptId}（${r.mode === 'query' ? '现场生成，未落盘' : r.receiptPath}）`;
+  const lines = [head, `查询：${r.query}`];
+  for (const item of ex.recalled) {
+    const total = typeof item.score === 'object' && item.score ? item.score.total : item.score;
+    const shown = typeof total === 'number' ? total.toFixed(3) : (total ?? '');
+    lines.push(`  ✓ ${item.title || item.id} [${item.id}] via=${item.via} score=${shown} ${item.why ?? ''}`);
+  }
+  if (ex.notRecalled.length) {
+    lines.push(`未纳入 ${ex.summary.ignoredTotal} 条${ex.summary.ignoredTruncated ? '（回执只留前 100）' : ''}：`);
+    for (const item of ex.notRecalled.slice(0, 10)) lines.push(`  · ${item.id}  score=${item.score ?? '-'} rel=${item.relevance ?? '-'} cov=${item.coverage ?? '-'}  ${item.reason}`);
+    if (ex.notRecalled.length > 10) lines.push(`  … 还有 ${ex.notRecalled.length - 10} 条`);
+  }
+  if (ex.dropped.length) {
+    lines.push(`因预算丢弃 ${ex.summary.dropped} 条：`);
+    for (const item of ex.dropped.slice(0, 10)) lines.push(`  · ${item.title || item.id} [${item.id}] ${item.reason}${item.hard ? '（硬闸门）' : ''}`);
+  }
+  for (const item of ex.nearest) lines.push(`  · 最近候选：${item.id} score=${item.score} ${item.why ?? ''}`);
+  const v = r.verification;
+  lines.push(`核验：${v.status}${v.changed?.length ? `，正文/元数据漂移 ${v.changed.length} 条` : ''}${v.missing?.length ? `，缺失 ${v.missing.length} 条` : ''}`);
+  return lines.join('\n');
+}
+
+function humanVerify(r) {
+  if (r.status === 'unreadable') return `无法核验：${r.error?.code ?? 'E_RECEIPT'} ${r.error?.message ?? ''}`.trim();
+  const head = r.status === 'verified'
+    ? '✅ 回执核验通过（回执未被改，笔记正文与元数据一致）'
+    : r.status === 'tampered'
+      ? '❌ 回执被篡改（回执自身 hash 对不上）'
+      : `⚠️  回执与当前笔记不一致（${r.status}）`;
+  const lines = [head, `回执：${r.receiptId}`, `检查 ${r.checked} 条（纳入 ${r.itemsChecked} / 最近候选 ${r.nearestChecked}），一致 ${r.matched} 条`];
+  for (const item of r.changed ?? []) lines.push(`  ~ ${item.id}（${item.role}）：${item.fields.join(',')} 变了`);
+  for (const item of r.missing ?? []) lines.push(`  - ${item.id}（${item.role}）：已不在库里`);
+  for (const problem of r.problems ?? []) lines.push(`  ! ${problem.code}${problem.message ? `：${problem.message}` : ''}`);
+  if (r.storeMismatch) lines.push(`⚠️  回执记录的库路径与当前库不同：${r.receiptStore}`);
   return lines.join('\n');
 }
 
@@ -193,7 +256,7 @@ export async function main(argv, io = {}) {
     out.write(`${VERSION}\n`);
     return 0;
   }
-  if (!['status', 'index', 'search', 'read', 'remember', 'import', 'recall', 'paths'].includes(command)) {
+  if (!['status', 'index', 'search', 'read', 'remember', 'import', 'recall', 'explain', 'verify', 'paths'].includes(command)) {
     err.write(`未知命令：${command}\n\n${USAGE}\n`);
     return 2;
   }
@@ -257,17 +320,42 @@ export async function main(argv, io = {}) {
           return 2;
         }
         const r = recallQuery(ctx, query, {
-          budgetTokens: numArg(args['budget-tokens'], undefined),
-          kinds: listArg(args.kinds),
-          trusts: listArg(args.trusts),
-          minRelevance: numArg(args['min-relevance'], undefined),
-          minCoverage: numArg(args['min-coverage'], undefined),
-          minScore: numArg(args['min-score'], undefined),
-          includeCore: args['no-core'] ? false : true,
-          ledger: Boolean(args.ledger),
+          ...recallOptionsFromArgs(args),
+          // `--receipt` 只附带回执；`--save-receipt` 才落 runs/。两个都给时以落盘为准。
+          receipt: Boolean(args.receipt || args['save-receipt']),
+          saveReceipt: Boolean(args['save-receipt']),
         });
         emit(r, { json, human: humanRecall(r) });
-        return r.refused ? 1 : 0;
+        // 拒答是正常回答，但 --save-receipt 落盘失败是实打实的失败，不能退 0。
+        return r.refused || r.receiptError ? 1 : 0;
+      }
+      case 'explain': {
+        const query = args.query ?? args.q ?? args._.slice(1).join(' ');
+        const receiptRef = typeof args.receipt === 'string' ? args.receipt : null;
+        const hasQuery = Boolean(query && String(query).trim());
+        if (hasQuery === Boolean(receiptRef)) {
+          err.write('explain 需要且只需要 --query "<词>" 或 --receipt <id|path> 之一\n');
+          return 2;
+        }
+        const r = explainRecall(ctx, {
+          query: hasQuery ? String(query) : null,
+          receiptRef,
+          // explain 必须只读：即使调用方顺手带了 --ledger，也不写账本。
+          options: { ...recallOptionsFromArgs(args), ledger: false },
+        });
+        emit(r, { json, human: humanExplain(r) });
+        return r.ok ? 0 : 1;
+      }
+      case 'verify': {
+        const receiptRef = typeof args.receipt === 'string' ? args.receipt : (args._[1] ?? null);
+        if (!receiptRef) {
+          err.write('verify 需要 --receipt <id|path>\n');
+          return 2;
+        }
+        const r = verifyRecallReceipt(ctx, receiptRef);
+        emit(r, { json, human: humanVerify(r) });
+        // 只有 verified 才算成功；tampered / drifted / unreadable 都是 1。
+        return r.ok ? 0 : 1;
       }
       case 'read': {
         const id = args.id ?? args._[1];

@@ -1,6 +1,6 @@
 # 架构设计：tabellio
 
-- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）；M2 巩固与生命周期尚未实现。本文的目录、五原语 JSON、receipt / consolidate 是**目标架构**，不是现状；已实现模块见 §2.2。
+- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）。M2 已开工：**读取回执**（recall receipt + `explain` + `verify`）已实现；巩固 / 生命周期 / 写入回执 / `undo` 尚未实现。本文的目录、五原语 JSON、巩固 receipt / `consolidate` 是**目标架构**，不是现状；已实现模块见 §2.2。
 - 上游文档：`00-brief.md`（立项书）· `01-landscape-systems.md`（竞品与接口层）· `02-evaluation.md`（评测方法）· `03-hosts-and-interfaces.md`（宿主与接口）· `04-cost-model.md`（成本）· `05-agi-direction.md`（长期方向）
 - 基线：`~/yffto/dsh-engramory-recall`（第一条线，必须赢过它，而不是取代它）
 - 读者：出资方（看 §1 §8 §10 就够）与实现者（§2–§7 §9）
@@ -77,7 +77,7 @@ memory-service/
 ```
 notes/<id>.md        <!-- 一条事实一个 md 文件：真相源 -->
 index/               <!-- 全部是生成物，删掉能重建：ledger.jsonl（追加型事件日志）+ bm25/ vec/ entities.json -->
-runs/<run-id>.json   <!-- 每次巩固的 receipt（含 .diff.jsonl，可回放、可撤销） -->
+runs/<run-id>.json   <!-- recall receipt（已实现：不含正文，只有 hash）；巩固 receipt（目标：含 .diff.jsonl，可回放、可撤销） -->
 .engramory-recall.jsonl   <!-- 旧库账本：只读挂载当评测输入（02-evaluation.md §4.8） -->
 ```
 
@@ -566,7 +566,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 | M3 | 三宿主实机验证 + npm/MCP registry 分发 | 三宿主各有端到端录屏/日志（`00-brief.md §7`） | — |
 | M4 | 黄页/市场/文档站，第一个外部用户 | 外部用户装上并留下反馈（`00-brief.md §7`） | — |
 
-**现状（2026-10-17）**：M0 / M1 完成；M2 未开始；M3 只完成分发侧（npm + MCP registry），三宿主实机验证未做；M4 未开始。
+**现状（2026-10-17）**：M0 / M1 完成；M2 已开工（读取回执 + `explain` + `verify`，巩固/生命周期未做）；M3 只完成分发侧（npm + MCP registry），三宿主实机验证未做；M4 未开始。
 
 每期结束必须留下数字，没有数字的里程碑不算完成（`00-brief.md §7` 与 §8 风险表第一条）。
 
@@ -576,7 +576,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 
 五个操作，收敛到 5±2 个（`03-hosts-and-interfaces.md` 的结论）。默认只读；写操作带行为提示（`read-only` / `idempotent` / `destructive`，照抄 Basic Memory 的渐进式工具发现做法）。下面保留关键字段与全部返回形态（成功 / 幂等 / 拒绝 / 跳过 / 错误），实现者按此签名建类型。
 
-> **现状**：只实现了 `remember` / `recall`（CLI 与 MCP）；`consolidate` / `forget` / `explain` 尚未实现，下面的 JSON 是目标接口。
+> **现状**：`remember` / `recall` / `explain` / `verify` 已实现（CLI；MCP 仍只有 search/read/list/status/remember）。`explain` / `verify` 目前只服务 **recall 回执**：`explain` 接受 `--query` 或 `--receipt`，`verify` 只接受 `--receipt`，不接受 `id` / `turn_id`，也不返回 `ledger_events`。`consolidate` / `forget` 与巩固 receipt / `undo` 尚未实现，下面的 JSON 是目标接口。
 
 ```js
 // ── remember：写入。热路径，零 LLM 调用。幂等（同 scope 同内容返回已有 id）

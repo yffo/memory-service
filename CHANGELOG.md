@@ -9,6 +9,13 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 它们都属于「判据说达标了、但真实库上不成立」的那一类，不修掉的话 M2 的判据 3
 （不腐烂、不害人）是在坏地基上盖楼。
 
+### 记忆回执：`recall` 现在能自证
+
+- **修的问题**：`recall` 一直返回分数拆解、`budget.dropped` 与 `why`，但那次判断没有被留下来；事后问「为什么给了它 / 为什么没给」只能重跑，而库可能已经变了。`explain` / `verify` 在架构里一直是目标接口，实际没有。
+- **做法**：新增 `src/core/receipt.js`（canonical JSON + hash + build/verify/explain）与 `src/store/receipt.js`（原子写 `runs/`、拒绝覆盖、读 id 或路径）。`recall --receipt` 只附带回执，`--save-receipt` 落盘；新增 `explain`（`--query` 现场解释 / `--receipt` 读回执）与 `verify`（回执 hash + 笔记正文 hash + 元数据）。回执不含正文，每一条只记 `noteSha256`；整张回执的 `hash` 覆盖全部字段。
+- **行为**：`verify` 分 `verified` / `drifted`（库变了）/ `tampered`（回执被改）/ `invalid|unreadable`；只有 `verified` 退 0。`explain` 的未纳入原因固定为 `below_min_relevance` / `below_min_score` / `below_min_coverage` / `cooccurrence_missing` / `unknown`，不重跑检索、不调模型。
+- **边界**：hash 是**防误改**，不是签名——能写文件的人可以改完重算 hash；要防伪造得等签名/密钥。回执是**读取回执**，不含巩固 receipt / `undo`；回执含查询原文与库的绝对路径，贴出去前先看一眼。
+
 ### 索引：从一屏平铺改成**分层路由 + 清单**
 
 - **修的问题**：真实旧库导入 1321 篇后，200 行 / 25KB 的索引只列得下 **127 篇**

@@ -1,6 +1,6 @@
 # 07 · 用法
 
-`tabellio` 当前（M1）是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
+`tabellio` 当前（M1 + M2 读取回执）是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
 零运行时依赖：`node bin/memory` 直接就能跑，不需要 `npm install`。
 
 - 要求：Node ≥ 20.11（实测 Node 25.8）。
@@ -10,7 +10,7 @@
 ```bash
 git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
-node --test 'test/**/*.test.mjs'       # 全绿才继续（322 条）
+node --test 'test/**/*.test.mjs'       # 全绿才继续（343 条）
 ```
 
 ## 一条事实一个文件
@@ -31,9 +31,11 @@ tags: [preference, tooling]
 正文上限 **400 字 / 200 token** —— 超了闸门会拒，并且告诉你超了多少。
 超过一条事实该有的量，说明该拆成多条（`tabellio import` 会自动切）。
 
-## 七个命令
+## 九个命令
 
-`status` / `index` / `search` / `recall` / `read` / `remember` / `import`（另有 `paths` 查路径）。
+`status` / `index` / `search` / `recall` / `explain` / `verify` / `read` / `remember` / `import`（另有 `paths` 查路径）。
+
+`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。
 
 `search` 与 `recall` 的分工：前者给**指针**（pull，读哪条由调用方决定），后者一步给出
 **可直接进上下文**的正文（按 token 预算裁剪、带拒答）；两者都零模型调用。
@@ -250,7 +252,7 @@ $ node bin/memory import --from ~/memory/engramory --dry --json
 - 碎片（< 8 字的行）不送闸门（否则 `denied` 里全是本来就没打算要的东西），
   但**有账**：`fragmentsDropped` / `fragmentsChars`。
 
-### 7. `recall` —— 一步取回可用上下文（M2 新增）
+### 7. `recall` —— 一步取回可用上下文
 
 ```bash
 $ node bin/memory recall --query "索引上限是多少行" --budget-tokens 500
@@ -282,6 +284,67 @@ $ node bin/memory recall --query "索引上限是多少行" --budget-tokens 500 
   「是没召回，还是召回了被裁」。
 - 阈值可用 `--min-relevance` / `--min-score` / `--min-coverage` 覆盖；**调参是评测纪律问题**，
   默认值不允许在跑分集上动（见 `02-evaluation.md §6`）。
+
+#### 回执：这次判断能不能被复核
+
+`recall` 默认只返回结果；加 `--receipt` 会把这次的完整判断过程做成一张**回执**挂到返回值的 `receipt` 字段里（不写盘），加 `--save-receipt` 则同时原子写到 `<store>/runs/<receiptId>.json`（已存在同 id 时拒绝覆盖）。
+
+回执里**没有正文**，每一条只记 `noteSha256`（正文含标题的 sha256 前 16 位）、元数据、分数与 `why`；查询原文、阈值、`coverageGate`、拒答决定、预算裁掉了谁、被忽略的候选及原因都在。整张回执的 `hash` 覆盖除自己以外的全部字段。所以回执可以贴进 issue / 日志 / 交接件，不复制笔记正文，但能证明「当时库是这个样子、检索是这样判的」。
+
+> 回执里还有库的绝对路径（`verify` 用它提示「库不一致」）和查询原文；贴到 issue 前先看一眼。
+>
+> `hash` 是**防误改**，不是签名：能写这个文件的人可以改完重算 hash。要防伪造得等签名/密钥那一层。
+
+```bash
+$ node bin/memory recall --query "索引上限是多少行" --save-receipt --json
+{..., "receipt": {"schema":"tabellio.receipt/1","receiptId":"rcp_...", ...},
+ "receiptPath":"/path/to/store/runs/rcp_....json"}
+```
+
+回执是**读取回执**：它证明某次 recall 的输入与判断，不改库。巩固操作的 receipt（改前/改后 hash + diff + 可撤销）仍未实现。
+
+### 8. `explain` —— 为什么给了它 / 为什么没给
+
+两种用法，都只读：
+
+```bash
+node bin/memory explain --query "索引上限是多少行"        # 现场跑一次 recall，解释完就丢
+node bin/memory explain --receipt rcp_...                # 读已保存的回执，不重跑检索
+```
+
+`--query` 模式会现场做一次 recall（不落盘，账本也不写），返回 `mode:"query"`、`explanation` 与 `verification`；`--receipt` 模式返回 `mode:"receipt"`、该回执的解释与核验结果。`--json` 的 `explanation` 形状：
+
+- `summary`：纳入 / 未纳入 / 预算丢弃 / 最近候选 / 被忽略候选各多少条；
+- `recalled`：纳入的条目，带分数拆解与 `why`；
+- `notRecalled`：未纳入的候选，`reason` 是 `below_min_relevance` / `below_min_score` / `below_min_coverage` / `cooccurrence_missing` / `unknown` 之一；
+- `dropped`：进了候选但被 token 预算裁掉的条目与原因；
+- `nearest`：拒答时给人类看的最近候选（不是证据，不许自动进上下文）；
+- `skipped` / `coverageGate` / `thresholds`：这次判断用的闸门参数。
+
+`explain` 不调用模型，也不重新计算分数：它解释的是回执里已经记下的那次判断。若回执被改过，`verification.status` 会是 `tampered`；若笔记正文或元数据在回执之后变了，会是 `drifted`。
+
+### 9. `verify` —— 回执有没有被改、库有没有漂
+
+```bash
+node bin/memory verify --receipt rcp_...
+node bin/memory verify --receipt runs/rcp_....json --json
+```
+
+`verify` 做两层核对：
+
+1. **回执自身**：按 `hash` 重算，确认字段没被改过；
+2. **回执与当前库**：逐条比对 `noteSha256` 与元数据（`kind` / `trust` / `scope` / `status` / `valid_from` / `valid_to` / `superseded_by`）。
+
+`status` 有四种：
+
+| status | 含义 | 退出码 |
+|---|---|---|
+| `verified` | 回执未被改，引用到的笔记正文与元数据全部一致 | 0 |
+| `drifted` | 回执本身没被改，但库变了（笔记被改 / 元数据变了 / 笔记被删） | 1 |
+| `tampered` | 回执文件被改过，`hash` 对不上 | 1 |
+| `invalid` / `unreadable` | JSON 坏了 / schema 不认识 / 文件读不到 | 1 |
+
+`--json` 返回 `{ok,status,receiptId,checked,itemsChecked,nearestChecked,matched,changed[],missing[],problems[]}`。`changed[]` 里带 `fields` 与 `expected` / `actual`；`missing[]` 是回执引用了、但库里已经找不到的 id。`verify` 同 `explain` 一样不重跑检索、不调模型。
 
 ## MCP（给 Agent 用）
 
@@ -325,7 +388,7 @@ for l in sys.stdin:
   index/groups/<序号>-<组名>.md  # 生成物：清单层，一组一行指针（每文件 ≤ 400 行，超过分页不截断）
   index/stats.json           # 上次扫描的统计（读不完/解析不了的东西都在这）
   index/ledger.jsonl         # 追加型事件账本（写入/跳过/拒绝/索引闸门）
-  runs/                      # 固化（consolidate）的收据，M2 用
+  runs/                      # recall 回执（runs/<rcp_...>.json）；巩固 receipt 仍是 M2
 ```
 
 `index/` 全是 `notes/` 的纯函数：删掉它只损失时间，不损失事实。
@@ -345,10 +408,11 @@ id 前缀是人写文件时形成的天然主题，组数与组内条数都在�
 | 码 | 含义 |
 | --- | --- |
 | 0 | 成功（拒绝也是成功的回答 —— `search` 的 `refused` 和 `remember` 的 `deny` 都算） |
-| 1 | 判定拒绝 / 库不健康（`read` 找不到、`remember` deny、`index` 有笔记走不到或 `stale`） |
+| 1 | 判定拒绝 / 库不健康 / 回执操作失败（`read` 找不到、`remember` deny、`index` 有笔记走不到或 `stale`、`verify` 不是 `verified`、`recall --save-receipt` 落盘失败） |
 | 2 | 用法错误（缺参数、命令不认识） |
 
 `remember --json` 的 `ok` 与退出码一致：脚本里既可以读 JSON，也可以直接 `if`。
+`explain` 只要回执/查询能解析就退 0（漂移写在 `verification` 里）；参数互斥或缺失才是 2。`verify` 只有 `verified` 退 0，`drifted` / `tampered` / `unreadable` 一律 1 —— 这样 CI 里 `verify` 可以直接当断言用。
 `index` 是**唯一**「状态正常但退出码可能非 0」的命令：`ok:true` 说的是「这次查询本身
 成功了」，退出码说的是「索引健康吗」—— 这两件事分开表达是有意的，不然 CI 会把
 一个瞎掉的索引当绿的。
