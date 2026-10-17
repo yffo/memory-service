@@ -31,7 +31,7 @@ EVAL_LLM_API_KEY=... node bench/run-eval.mjs --arms none,new,oracle \
   --answerer llm --runs 3 --concurrency 4 --out bench/core-30-v1/runs/$(date +%F)-answer.md
 ```
 
-一次 56 题 × 3 臂 × 3 轮 ≈ 504 次调用，deepseek-flash 约 **$0.02 / 2 分钟**。
+一次 56 题 × 3 臂 × 3 轮最多 504 次调用；当前语料里 new 臂对 20 道拒答题不调模型，实际约 **444 次**，deepseek-flash 约 **$0.02 / 2 分钟**。
 
 ## 1. 跑之前要有什么
 
@@ -64,7 +64,7 @@ EVAL_LLM_API_KEY=... node bench/run-eval.mjs --arms none,new,oracle \
 | --- | --- | --- |
 | `--tasks <file>` | `bench/core-30-v1/tasks.json` | 换题集（同格式即可） |
 | `--library <dir>` | `bench/core-30-v1/library` | 换语料 |
-| `--cli <path>` / `--cli-args <str>` | `bin/memory` / 空 | 换被测 CLI、追加参数（CLI 改口径时对齐用） |
+| `--cli <path>` / `--cli-args <str>` | `bin/memory` / 空 | 换被测 CLI、追加参数（CLI 改口径时对齐用）；值可以以 `--` 开头，如 `--cli-args '--min-coverage 0.55'` |
 | `--store <dir>` / `--store-mode <mode>` | 临时副本 / `auto` | 库怎么告诉 CLI：`auto`＝同时给 `--store` 与 `MEMORY_STORE`；也可 `flag`/`env`/`plain` |
 | `--same-corpus` | 关 | legacy 臂读同一份虚构语料（同语料对照） |
 | `--legacy-repo` / `--legacy-store` | 旧仓库 / `~/memory/engramory` | 旧臂来源；旧仓库**只读**，别写 |

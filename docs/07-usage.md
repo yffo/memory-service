@@ -10,7 +10,7 @@
 ```bash
 git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
-node --test 'test/**/*.test.mjs'       # 全绿才继续（412 条）
+node --test 'test/**/*.test.mjs'       # 全绿才继续（420 条）
 ```
 
 ## 一条事实一个文件
@@ -20,6 +20,7 @@ node --test 'test/**/*.test.mjs'       # 全绿才继续（412 条）
 kind: semantic          # core | semantic | episodic | procedural
 trust: user_stated      # user_stated | system_derived | external
 tags: [preference, tooling]
+aliases: [acme-editor, 编辑器]  # 可选：作者给的同义说法，只参与身份核对
 ---
 
 # 编辑器偏好
@@ -27,7 +28,7 @@ tags: [preference, tooling]
 偏好用 acme-editor 写代码，缩进统一 2 空格。
 ```
 
-`kind` / `trust` / `tags` 都可以不写（默认 `semantic` / `user_stated` / 无标签）。
+`kind` / `trust` / `tags` / `aliases` 都可以不写（默认 `semantic` / `user_stated` / 无标签 / 无别名）。`aliases` 只参与身份核对（共现），**不是**检索的同义词扩展，不进 BM25 postings、不改打分。
 正文上限 **400 字 / 200 token** —— 超了闸门会拒，并且告诉你超了多少。
 超过一条事实该有的量，说明该拆成多条（`tabellio import` 会自动切）。
 

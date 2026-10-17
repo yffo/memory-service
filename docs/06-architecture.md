@@ -109,6 +109,7 @@ superseded_by: null
 confidence: 0.9
 verify_after: 2027-04-17              # 到点进体检队列，不自动删除
 tags: [preference, tooling]
+aliases: [别名一, 别名二]          # 可选；作者给的同义说法，只参与身份核对（共现），不进 postings、不参与打分
 ---
 
 用户要求：给 agent 用的记忆服务默认零 API 成本也能跑；语义检索是可选增强。

@@ -9,6 +9,13 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 它们都属于「判据说达标了、但真实库上不成立」的那一类，不修掉的话 M2 的判据 3
 （不腐烂、不害人）是在坏地基上盖楼。
 
+### 检索：`aliases` 不再被静默丢弃（仍只做身份核对）
+
+- **修的问题**：笔记 frontmatter 里的 `aliases` 一直在 schema 之外，`validateFrontmatter()` 直接把它丢掉，`toDocs()` 也没把它传给索引。于是 `docs/06` 声称 aliases 参与共现/身份核对，实际是死字段——这也是 c04 卡在 `cooccurrence_required_pair_missing` 的原因之一。
+- **做法**：`src/store/note.js` 把 `aliases` 收进 schema（支持 `[a, b]` 与 `a, b` 两种写法，空值不落盘），`NOTE_KEY_ORDER` 固定字段顺序，`src/core/recall.js` 的 `toDocs()` 透传 `aliases`。**只进 `identityTerms`，不进 postings、不改 BM25 打分**；没有把别名当同义词扩展，查询词项权重不变。
+- **效果**：c04 的 gold 候选共现已通过（其自身原因从 `cooccurrence_required_pair_missing` 变成 `below_min_coverage`），但 coverage 仍 **0.595 < 0.6**；整次查询仍拒答（reason 仍报 `cooccurrence_required_pair_missing`，由其他候选决定）。c03 0.587、c07 0.415、k05 0.521，也仍不过覆盖率闸。零模型 `recall@5` 保持 **0.861（31/36）**，5 道空答案一个没救回。把 `min-coverage` 降到 0.55 能多救 2 道，但 zero-model `correct_refusal` 0.75→0.55、false answers 5→9，不采用。
+- **边界**：aliases 只影响共现核对，不是检索同义词；不解决「自然改述导致覆盖率不足」。顺带修复 `bench/run-eval.mjs` 的 `parseArgs`：`--cli-args` 的值以 `--` 开头时不再被当成顶层参数校验。
+
 ### 评测：回答层注入计量修正，判据 2 成立；top-2 更省
 
 - **修的问题**：`bench/run-eval.mjs` 把 CLI `search` 返回的 **top-8 候选预算**当成了实际注入成本，而 `buildContext` 只注入 top-5。旧报告 `2026-10-17-answer-56.md` 的 266 token / 1.611 因此是错误分母；同一批回答的实际注入是 166.2。
