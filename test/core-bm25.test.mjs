@@ -54,6 +54,12 @@ test('buildIndex：空语料不炸、不产生 NaN', () => {
   assert.deepEqual(scoreDocs(index, '任何查询'), []);
 });
 
+test('buildIndex：aliases 只进 identityTerms，不进 postings、不改打分', () => {
+  const index = idx([doc('note-1', '标题', '正文', { aliases: ['uniqueterm'] })]);
+  assert.ok(index.metas[0].identityTerms.includes('uniqueterm'));
+  assert.equal(index.postings.has('uniqueterm'), false, '身份词项不许进倒排，否则就是改打分');
+});
+
 test('scoreDocs：完全无关的查询得 0 分且**不进结果**（不是得个很小的分）', () => {
   const index = idx([doc('a', '构建命令', '用 pnpm 构建')]);
   assert.deepEqual(scoreDocs(index, '量子色动力学'), []);

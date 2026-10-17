@@ -168,6 +168,13 @@ export function validateFrontmatter(data, { id, strictId = true } = {}) {
     superseded_by: data.superseded_by ?? null,
     verify_after: data.verify_after ?? null,
     tags: Array.isArray(data.tags) ? data.tags.filter((t) => typeof t === 'string') : [],
+    // 别名是作者显式给的同义说法。库里既有 `[a, b]` 也有 `a, b` 两种写法，
+    // 都收；它只参与身份核对（共现），不进 postings、不参与打分。
+    aliases: Array.isArray(data.aliases)
+      ? data.aliases.filter((t) => typeof t === 'string')
+      : typeof data.aliases === 'string'
+        ? data.aliases.split(',').map((t) => t.trim()).filter(Boolean)
+        : [],
     subject: data.subject ?? null,
     predicate: data.predicate ?? null,
     provenance: {
@@ -273,6 +280,7 @@ export function renderNote(note, body) {
     verify_after: note.verify_after ?? null,
     tags: note.tags ?? [],
   };
+  if (Array.isArray(note.aliases) && note.aliases.length > 0) data.aliases = note.aliases;
   if (note.status && note.status !== 'active') data.status = note.status;
   if (note.subject) data.subject = note.subject;
   if (note.predicate) data.predicate = note.predicate;

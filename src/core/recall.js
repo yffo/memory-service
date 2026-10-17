@@ -146,6 +146,9 @@ function toDocs(entries) {
         title: s.title,
         body: s.body,
         tags: note.tags ?? [],
+        // aliases 是作者显式给的同义说法；不传进来，身份核对（共现）就看不到它。
+        // 它只进 identityTerms，不进 postings、不参与打分，也不改 entry 的对外形状。
+        aliases: note.aliases ?? [],
         kind: note.kind,
         trust: note.trust,
       });

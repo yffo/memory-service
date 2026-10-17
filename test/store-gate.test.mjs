@@ -72,11 +72,25 @@ test('parseNote：好笔记全字段都在，title 取第一个 H1、body 不含
   assert.equal(r.note.trust, 'user_stated');
   assert.equal(r.note.scope, 'user');
   assert.deepEqual(r.note.tags, ['convention', 'build']);
+  assert.deepEqual(r.note.aliases, [], '没写 aliases 时默认空数组');
   assert.equal(r.note.provenance.written_by, 'cli:remember');
   assert.equal(r.title, 'acme-widget 的构建命令');
   assert.ok(!r.body.includes('---'), 'body 里不该残留 frontmatter 分隔线');
   assert.ok(r.body.includes('pnpm run build'));
   assert.equal(r.hasFrontmatter, true);
+});
+
+test('parseNote：aliases 支持行内数组与逗号串，往返不丢', () => {
+  for (const line of ['aliases: [构建, 打包]', 'aliases: 构建, 打包']) {
+    const text = GOOD.replace('tags: [convention, build]', `tags: [convention, build]\n${line}`);
+    const r = parseNote(text, { id: '01M5NOTE0000000000000000AA' });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(r.note.aliases, ['构建', '打包']);
+    const again = parseNote(renderNote(r.note, r.body), { id: r.note.id });
+    assert.equal(again.ok, true, JSON.stringify(again.errors));
+    assert.deepEqual(again.note.aliases, ['构建', '打包']);
+    assert.ok(!renderNote({ ...r.note, aliases: [] }, r.body).includes('aliases:'), '空别名不落盘');
+  }
 });
 
 test('parseNote：没有 frontmatter 时不崩，按「没有元数据」报出来', () => {

@@ -79,6 +79,29 @@ test('正常命中：问构建设备命令能拿到 build-cmd，且带完整 sco
   assert.equal(r.items[0].via, 'pull');
 });
 
+test('recall：aliases 参与身份核对 —— 正文没写实体名也能召回', () => {
+  const entries = [
+    entry('other', 'Orchid 的配置文件在 config/orchid.toml。'),
+    entry('fixture-reset', '测试夹具乱了就跑 pnpm fixtures:reset --seed 42，重置后失败用例可复现。', {
+      title: '测试夹具的重置',
+      note: { aliases: ['Orchid'] },
+    }),
+    entry('filler-1', '番茄浇水与土壤酸碱度测量方法，见园艺手册第七章。'),
+    entry('filler-2', '代理节点用 hysteria2，监听 8443 端口，走 UDP。'),
+    entry('filler-3', '部署三步：先构建，再同步到 staging，最后跑冒烟脚本。'),
+  ];
+  const query = 'Orchid 的测试夹具乱了怎么重置？';
+  const r = recall({ entries, query, options: { nowMs: NOW } });
+  assert.equal(r.refused, false);
+  assert.equal(r.items[0].id, 'fixture-reset');
+  const without = recall({
+    entries: entries.map((e) => (e.id === 'fixture-reset' ? { ...e, note: { ...e.note, aliases: [] } } : e)),
+    query,
+    options: { nowMs: NOW },
+  });
+  assert.equal(without.refused, true, '去掉 aliases 后共现核对应挡住这条召回，证明别名是承重的');
+});
+
 test('命中结果形状：id/title/content/kind/trust/score/source 一个都不能少', () => {
   const item = recallOf('构建命令').items[0];
   // 注意字段名是 `content`（§9 `recall` 的形状）。冻结的 CLI 契约里叫 `body`，

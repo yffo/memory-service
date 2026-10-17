@@ -283,6 +283,7 @@ export const NOTE_KEY_ORDER = Object.freeze([
   'confidence',
   'verify_after',
   'tags',
+  'aliases',
   'subject',
   'predicate',
   'legacy',
