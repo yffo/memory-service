@@ -239,8 +239,17 @@ export function mulberry32(seed) {
   };
 }
 
-function isoDay(ms) {
-  return new Date(ms).toISOString().slice(0, 10);
+/**
+ * 合成时钟的**精确时刻**（带 `Z`），写 `valid_from` / `valid_to` 用它。
+ *
+ * 为什么不用 date-only：`parseTime` 把 `2026-01-05` 解析成**本机时区的正午**，
+ * 而回放的日界是 `T0_MS` 的 09:00Z。于是同一份时间轴，在 UTC+8 上「笔记当天就有效」，
+ * 在 UTC 上要等到 12:00Z 才有效 —— 09:00Z 的查询看不到它，整批召回被日期过滤掉
+ * （实测 TZ=UTC 时 168 次会话塌成 0 次，CI 直接红）。事件本身是精确到小时的，
+ * 落盘也该是精确到小时的时刻，而不是一个要靠时区猜的日期。
+ */
+function isoInstant(ms) {
+  return new Date(ms).toISOString();
 }
 
 /**
@@ -403,7 +412,7 @@ export function runReplay(opts = {}) {
       id,
       {
         title: `${service}：${template}`,
-        valid_from: isoDay(dayMs),
+        valid_from: isoInstant(dayMs),
         supersedes: prev ? [prev.id] : [],
         valid_to: null,
         scope: `project:${service.toLowerCase()}`,
@@ -416,7 +425,7 @@ export function runReplay(opts = {}) {
       // （`archive-*` 那些笔记在 `core-30-v1/library` 里也是两处都写）。
       const old = store.get(prev.id);
       old.note.superseded_by = id;
-      old.note.valid_to = isoDay(dayMs);
+      old.note.valid_to = isoInstant(dayMs);
       old.note.status = 'active'; // 显式字段不写 superseded：由 superseded_by/valid_to 推
       notes.get(prev.id).supersededOnDay = day;
       // `--traps`：在库里多留一条**没有取代标记的旧值副本**（陷阱）。
@@ -437,7 +446,7 @@ export function runReplay(opts = {}) {
             trapId,
             {
               title: `${service}：${template}（旧版）`,
-              valid_from: isoDay(dayMs),
+              valid_from: isoInstant(dayMs),
               supersedes: [],
               valid_to: null,
               scope: `project:${service.toLowerCase()}`,
@@ -476,7 +485,7 @@ export function runReplay(opts = {}) {
     const tpl = FACT_TEMPLATES[template];
     const entry = makeEntry(
       id,
-      { title: `${service}：${template}`, valid_from: isoDay(dayMs), supersedes: [], valid_to: null, scope: `project:${service.toLowerCase()}` },
+      { title: `${service}：${template}`, valid_from: isoInstant(dayMs), supersedes: [], valid_to: null, scope: `project:${service.toLowerCase()}` },
       [...sentenceOf(service, template, version), ...(tpl.fillers ?? [])],
       dayMs,
     );
