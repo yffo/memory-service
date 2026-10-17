@@ -10,7 +10,7 @@
 ```bash
 git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
-node --test 'test/**/*.test.mjs'       # 全绿才继续（397 条）
+node --test 'test/**/*.test.mjs'       # 全绿才继续（412 条）
 ```
 
 ## 一条事实一个文件
@@ -35,7 +35,7 @@ tags: [preference, tooling]
 
 `status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `import`（另有 `paths` 查路径）。
 
-`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**唯一的「改」入口**：默认只出计划，`--apply` 才动元数据，`--undo` 可撤销。
+`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**唯一的「改」入口**：默认只出计划，`--apply` 才动元数据，`--undo` 可撤销；`--merge` / `--summarize` / `--promote` 目前只出**内容类提案**，不写库。
 
 `search` 与 `recall` 的分工：前者给**指针**（pull，读哪条由调用方决定），后者一步给出
 **可直接进上下文**的正文（按 token 预算裁剪、带拒答）；两者都零模型调用。
@@ -348,7 +348,7 @@ node bin/memory verify --receipt runs/rcp_....json --json
 
 ### 10. `consolidate` —— 巩固：默认只出计划，改了账，能撤销
 
-巩固是**唯一的「改」入口**，但热路径永远不调用它。当前实现两种操作，**都只动元数据**：
+巩固是**唯一的「改」入口**，但热路径永远不调用它。当前实现两种**元数据**操作，正文一个字不改；另有三种内容类操作（merge / summarize / promote）只到提案层，见本节末尾。
 
 - `invalidate`：B 的 frontmatter 里有 `supersedes: [A]`，A 还 `active`、没有 `valid_to`、没有 `superseded_by`、
   且在 now 之前已生效 → 把 A 的 `valid_to` 写成当前时间、`superseded_by` 写成 B 的 id。**正文一个字不改**；
@@ -405,8 +405,42 @@ invalidate 与 archive 共用这个上限，一起算；超过就整单中止，
 archive 的 undo 只把 `status` 恢复成 `active`；它本来就没写过 `valid_to` / `superseded_by`，
 所以不需要（也不应该）动这两个字段。
 
-**还没做**：`merge` / `summarize` / `promote`、replay、forget、写入回执、
-后台自动巩固、`diff.jsonl`。当前实现只碰元数据，不新增/压缩事实。
+#### 内容类提案：`--merge` / `--summarize` / `--promote`
+
+这三种操作会新增或压缩事实，所以执行层还没开。当前只做**显式源 id 的提案**：读库、出草稿，
+**不写任何文件**——没有 run 文件、没有回执、没有候选落盘。源必须由人点名，不做自动发现。
+
+```bash
+node bin/memory consolidate --merge <id>,<id>          # 至少 2 条；同 scope、同 kind
+node bin/memory consolidate --summarize <id>           # 恰好 1 条；正文至少 200 字
+node bin/memory consolidate --promote <id>,<id>,<id>   # 至少 3 条；同一 scope，valid_from 跨至少 2 个日期
+node bin/memory consolidate --merge <id>,<id> --json   # 提案 JSON，默认就是 dry-run
+```
+
+- **merge**：把各源正文按段落去重后拼接，标题是 `# 合并提案：...`，末尾注释带源 id；
+  目标路径是 `notes/<新 id>.md`。
+- **summarize**：按段落取首句（每句最多 160 字），标题是 `# 摘要提案：...`；
+  目标路径是 `notes/<新 id>.md`。如果源本来就是一句一段，草稿不会更短，会报 `draft_not_shorter`。
+- **promote**：产出「候选规则」脚手架（`## 观察` + `## 待人工归纳`），**不是规则**；
+  目标路径是 `notes/candidates/<新 id>.md`，默认检索面不会包含它。
+
+三种目标都带 `status: draft`、`requires_review: true`、`apply_supported: false`；merge / summarize 的
+`supersedes` 指回源 id，promote 的 `supersedes` 为空。任一源缺失、解析失败、非 `active`、已有
+`valid_to` / `superseded_by`，或在 now 尚无效，整单 `source_invalid`，不会静默丢掉坏源。
+
+`--json` 成功返回：
+`{ok:true,status:"proposed",proposal_id,mode,dry_run:true,apply_supported:false,would_write:false,target_id,source_ids,sources,skipped,target,warnings,stats,next_action}`；
+拒绝返回 `{ok:false,status:"rejected",reason,...}`。`stats` 里有源/目标的字数与 token、预计省下多少、
+`estimated_write_ops` 与 `estimated_change_ratio`；`warnings` 会报源之间重叠过低、草稿超过 400 字、
+草稿没变短、预计改动率超过 5% 等。
+
+**边界**：`--apply` 对内容类操作直接退 2（明说「执行层未实现」）；它不能和 `--archive` / `--undo` /
+其他内容模式同用，也不接受 `--max-change-ratio` / `--scope` / `--kinds`。当前没有自动发现、
+没有 LLM 摘要、没有真正写 note、没有归档源，也没有内容类回执。
+
+**还没做**：`merge` / `summarize` / `promote` 的**执行层**（真正写新 note、归档源、写内容类回执）、
+replay、forget、写入回执、后台自动巩固、`diff.jsonl`。已实现的写操作只碰元数据；
+内容类只出提案，不新增/压缩事实。
 
 ## 评测（开发用，可零模型）
 

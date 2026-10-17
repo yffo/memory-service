@@ -27,6 +27,7 @@ import {
   verifyRecallReceipt,
   explainRecall,
   consolidate,
+  proposeConsolidation,
   undoConsolidation,
   indexReport,
   defaultStorePath,
@@ -57,6 +58,9 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio verify --receipt <id|path> [--json]
   tabellio consolidate [--dry-run|--apply] [--max-change-ratio F] [--scope S] [--kinds a,b]
                     [--archive <id[,id]>]... [--json]
+  tabellio consolidate --merge <id[,id]>... [--json]       # 只出提案，不落盘
+  tabellio consolidate --summarize <id> [--json]            # 只出提案，不落盘
+  tabellio consolidate --promote <id[,id]>... [--json]      # 候选到 notes/candidates/，仍只出提案
   tabellio consolidate --undo <run|path> [--json]
   tabellio help | --help | -h | --version
 
@@ -120,12 +124,13 @@ function recallOptionsFromArgs(args) {
 }
 
 /** 收集可重复的 `--archive`；逗号分隔与重复出现都接受。 */
-function archiveArgValues(argv, args) {
+function flagArgValues(argv, args, name) {
   const raw = [];
+  const flag = `--${name}`;
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--') break;
-    if (token === '--archive') {
+    if (token === flag) {
       const next = argv[i + 1];
       if (next !== undefined && !next.startsWith('--')) {
         raw.push(next);
@@ -133,13 +138,13 @@ function archiveArgValues(argv, args) {
       } else {
         raw.push(true);
       }
-    } else if (token.startsWith('--archive=')) {
-      raw.push(token.slice('--archive='.length));
+    } else if (token.startsWith(`${flag}=`)) {
+      raw.push(token.slice(flag.length + 1));
     }
   }
   if (raw.length === 0) {
-    if (args.archive === undefined) return { provided: false, invalid: false, values: [] };
-    raw.push(args.archive);
+    if (args[name] === undefined) return { provided: false, invalid: false, values: [] };
+    raw.push(args[name]);
   }
   if (raw.some((item) => item === true || String(item).trim() === '')) return { provided: true, invalid: true, values: [] };
   const values = [];
@@ -153,6 +158,10 @@ function archiveArgValues(argv, args) {
     }
   }
   return { provided: true, invalid: false, values };
+}
+
+function archiveArgValues(argv, args) {
+  return flagArgValues(argv, args, 'archive');
 }
 
 function numArg(value, dflt) {
@@ -246,6 +255,34 @@ function humanVerify(r) {
   for (const item of r.missing ?? []) lines.push(`  - ${item.id}（${item.role}）：已不在库里`);
   for (const problem of r.problems ?? []) lines.push(`  ! ${problem.code}${problem.message ? `：${problem.message}` : ''}`);
   if (r.storeMismatch) lines.push(`⚠️  回执记录的库路径与当前库不同：${r.receiptStore}`);
+  return lines.join('\n');
+}
+
+function humanProposal(r) {
+  if (!r.ok) {
+    const head = `提案被拒（${r.reason}）：没有写任何文件`;
+    const lines = [head];
+    if (r.mode) lines.push(`模式：${r.mode}`);
+    for (const s of r.skipped ?? []) lines.push(`  · 跳过 ${s.id}：${s.reason}`);
+    return lines.join('\n');
+  }
+  const s = r.stats;
+  const lines = [
+    `[提案] ${r.mode_label}：${s.sources} 条源 → 1 条目标（dry-run，未写库）`,
+    `提案：${r.proposal_id}`,
+    `目标：${r.target.path}（status=draft，需人工确认）`,
+    `草稿：${s.target_chars} 字 / ${s.target_tokens} token；源：${s.source_chars} 字 / ${s.source_tokens} token`,
+    `预计：${s.saved_tokens >= 0 ? '省' : '多'} ${Math.abs(s.saved_tokens)} token（源 ${s.source_chars} 字 → 目标 ${s.target_chars} 字），预计写 ${s.estimated_write_ops} 次`,
+    '来源：',
+  ];
+  for (const source of r.sources) {
+    lines.push(`  - [${source.id}] ${source.title}（${source.kind}/${source.scope}，${source.chars} 字）`);
+  }
+  for (const warning of r.warnings ?? []) lines.push(`  ⚠️  ${warning.message}`);
+  lines.push('--- 草稿预览 ---');
+  lines.push(r.target.body.trimEnd());
+  lines.push('--- 预览结束 ---');
+  lines.push(`下一步：${r.next_action}`);
   return lines.join('\n');
 }
 
@@ -443,6 +480,35 @@ export async function main(argv, io = {}) {
         return r.ok ? 0 : 1;
       }
       case 'consolidate': {
+        const contentModes = ['merge', 'summarize', 'promote'].map((name) => ({ name, ...flagArgValues(argv, args, name) }));
+        const selectedModes = contentModes.filter((m) => m.provided);
+        if (selectedModes.length > 0) {
+          const archiveProbe = archiveArgValues(argv, args);
+          if (selectedModes.some((m) => m.invalid)) {
+            err.write(`consolidate --${selectedModes.find((m) => m.invalid).name} 需要源 id（可逗号分隔，也可重复）\n`);
+            return 2;
+          }
+          if (selectedModes.length > 1) {
+            err.write('consolidate --merge / --summarize / --promote 一次只能选一个\n');
+            return 2;
+          }
+          if (archiveProbe.provided || args.undo !== undefined) {
+            err.write('内容类提案不能和 --archive / --undo 同时用\n');
+            return 2;
+          }
+          if (args.apply) {
+            err.write('内容类操作目前只出提案，--apply 尚未实现；不会写任何文件\n');
+            return 2;
+          }
+          if (args['max-change-ratio'] !== undefined || args.scope !== undefined || args.kinds !== undefined) {
+            err.write('内容类提案不接受 --max-change-ratio / --scope / --kinds（这些是元数据巩固的参数）\n');
+            return 2;
+          }
+          const chosen = selectedModes[0];
+          const r = proposeConsolidation(ctx, { mode: chosen.name, ids: chosen.values });
+          emit(r, { json, human: humanProposal(r) });
+          return r.ok ? 0 : 1;
+        }
         const archive = archiveArgValues(argv, args);
         if (archive.invalid) {
           err.write('consolidate --archive 需要 <id>（可逗号分隔，也可重复 --archive）\n');

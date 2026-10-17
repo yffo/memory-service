@@ -49,6 +49,7 @@ import {
   CONSOLIDATE_HASH_LEN,
 } from './core/consolidate.js';
 import { writeRunPlan, writeRunReceipt, readRunReceipt, writeUndoRecord, readUndoRecord } from './store/consolidate.js';
+import { planContentConsolidation } from './core/propose.js';
 import { writeReceipt, readReceipt } from './store/receipt.js';
 import { estimateTokens } from './core/tokenize.js';
 import { finiteOr, sha256 } from './util/text.js';
@@ -737,6 +738,23 @@ function restoreApplied(store, applied) {
 function undoRecordHash(record) {
   const { hash: _ignored, ...unsigned } = record ?? {};
   return sha256(canonicalJson(unsigned), CONSOLIDATE_HASH_LEN);
+}
+
+/**
+ * `tabellio consolidate --merge/--summarize/--promote`：内容类巩固的**提案层**。
+ *
+ * 只读扫描结果、只生成草稿，不写任何文件；apply 在执行层实现前一律拒绝。
+ * 因此这里没有 ensure()、没有原子写、也没有 run 文件。
+ */
+export function proposeConsolidation(ctx, options = {}) {
+  const scan = ctx.scan();
+  const plan = planContentConsolidation({
+    entries: scan.notes,
+    mode: options.mode,
+    ids: options.ids,
+    nowMs: options.nowMs,
+  });
+  return { ...plan, store: ctx.store };
 }
 
 /**

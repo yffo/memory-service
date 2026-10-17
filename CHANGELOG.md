@@ -28,7 +28,14 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 - **修的问题**：此前只有 `invalidate` 能关闭一条记录，但它要求先有一个「胜出方」；想表达「这条不再进默认检索面，但不是被谁取代」没有操作。若让 archive 顺手写 `valid_to`，等于伪造一个不存在的关闭原因，`as_of` 也会把「归档」误读成「失效」。
 - **做法**：`src/core/consolidate.js` 增加 `CONSOLIDATE_OPERATIONS`（`invalidate` / `archive`）与 archive 分支；`planConsolidation` 接受 `archiveIds`（数组或逗号分隔字符串，去重）。只归档仍 `active`、无 `valid_to`、无 `superseded_by`、在 now 有效的记录，`after.status = 'archived'`，`valid_to` / `superseded_by` 保持为空，正文 hash 前后一致。API 透传 `archive` / `archiveIds`；CLI 新增可重复的 `--archive <id[,id]>`，默认仍是 dry-run，且不能和 `--undo` 同用。计划 / 回执 / undo 三类文件与 5% 保险丝全部复用；同一条同时被 invalidate 点名时 invalidate 优先，archive 报 `already_planned`。
 - **行为**：`--apply` 只把 `status` 改成 `archived`，默认检索面与当前 `as_of` 路径都会排除它（这一点与 invalidate「`as_of` 仍可查」不同）；`--undo` 只把 `status` 恢复成 `active`。回执 stats 增加 `invalidate` / `archive` 条数；core / API / CLI 各自补了规划、落地与参数边界的测试。
-- **边界**：archive 必须由人显式点名，不是自动衰减，也没有「到期自动归档」；因为不写 `valid_to`，它不提供历史关闭点，只能 `--undo` 或按 id 读回。`merge` / `summarize` / `promote`、replay、`diff.jsonl`、写入回执与后台自动巩固仍未做。
+- **边界**：archive 必须由人显式点名，不是自动衰减，也没有「到期自动归档」；因为不写 `valid_to`，它不提供历史关闭点，只能 `--undo` 或按 id 读回。`merge` / `summarize` / `promote` 的执行层（提案层见下一节）、replay、`diff.jsonl`、写入回执与后台自动巩固仍未做。
+
+### 巩固：内容类操作先只出提案，不动库
+
+- **修的问题**：`merge` / `summarize` / `promote` 一直只有架构里的目标接口。它们会新增或压缩事实，直接自动执行等于让程序替人决定「什么该合并、什么该提升」；而真实语料里又没有可自动发现的重复对（50 篇里 4-gram 重叠 >0.15 的笔记对为 0），先做自动发现只会产出一堆假候选。
+- **做法**：新增纯决策模块 `src/core/propose.js`（`planContentConsolidation`，schema `tabellio.consolidate.proposal/1`）：由人显式给源 id，分别生成合并稿、抽取式摘要或候选规则脚手架；目标 note 只在返回对象里，路径是 `notes/<新 id>.md` 或 `notes/candidates/<新 id>.md`。`src/api.js` 加 `proposeConsolidation`（只读扫描、不 ensure、不写 run）；`bin/memory consolidate --merge/--summarize/--promote` 接入，默认就是提案。
+- **行为**：merge 至少 2 条且同 scope、同 kind，按段落去重拼接；summarize 恰好 1 条且正文 ≥200 字，按段落取首句，草稿不更短时如实报 `draft_not_shorter`；promote 至少 3 条、同 scope、`valid_from` 跨至少 2 个日期，只产 `## 观察` + `## 待人工归纳` 脚手架。三种目标都是 `status:draft`、`requires_review:true`、`apply_supported:false`；任一源缺失/解析失败/非 active/已失效/已被取代/尚未生效，整单 `source_invalid`，不静默丢源。`--apply` 对内容类操作退 2，并明确「执行层未实现」。
+- **边界**：没有自动发现、没有 LLM 摘要、没有真正写 note、没有归档源；因为不写库，也没有内容类 receipt 与 `--undo`。提案里的 `estimated_change_ratio` 只报警告，不触发 5% 熔断（熔断属于执行层）。summarize 是抽取式，不会替人改写或新增事实；promote 的「规则」仍需人工归纳。
 
 ### 评测：判分器先接住正确改述，再被 106 条对抗答案打一遍
 
