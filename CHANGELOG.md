@@ -14,7 +14,14 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 - **修的问题**：`recall` 一直返回分数拆解、`budget.dropped` 与 `why`，但那次判断没有被留下来；事后问「为什么给了它 / 为什么没给」只能重跑，而库可能已经变了。`explain` / `verify` 在架构里一直是目标接口，实际没有。
 - **做法**：新增 `src/core/receipt.js`（canonical JSON + hash + build/verify/explain）与 `src/store/receipt.js`（原子写 `runs/`、拒绝覆盖、读 id 或路径）。`recall --receipt` 只附带回执，`--save-receipt` 落盘；新增 `explain`（`--query` 现场解释 / `--receipt` 读回执）与 `verify`（回执 hash + 笔记正文 hash + 元数据）。回执不含正文，每一条只记 `noteSha256`；整张回执的 `hash` 覆盖全部字段。
 - **行为**：`verify` 分 `verified` / `drifted`（库变了）/ `tampered`（回执被改）/ `invalid|unreadable`；只有 `verified` 退 0。`explain` 的未纳入原因固定为 `below_min_relevance` / `below_min_score` / `below_min_coverage` / `cooccurrence_missing` / `unknown`，不重跑检索、不调模型。
-- **边界**：hash 是**防误改**，不是签名——能写文件的人可以改完重算 hash；要防伪造得等签名/密钥。回执是**读取回执**，不含巩固 receipt / `undo`；回执含查询原文与库的绝对路径，贴出去前先看一眼。
+- **边界**：hash 是**防误改**，不是签名——能写文件的人可以改完重算 hash；要防伪造得等签名/密钥。`recall` 回执是**读取回执**，不含巩固操作（巩固回执与 `undo` 见下一节）；回执含查询原文与库的绝对路径，贴出去前先看一眼。
+
+### 巩固：第一刀只动元数据，且可撤销
+
+- **修的问题**：架构里的 `consolidate` + receipt + undo 一直是目标接口；库里 `superseded_by` 有值，但旧记录的 `valid_to` 没人写，检索仍把两条都当有效，历史 `as_of` 也没有关闭点。
+- **做法**：新增 `src/core/consolidate.js`（纯决策 `planConsolidation`、回执 build/hash/integrity、5% 熔断）、`src/store/consolidate.js`（`runs/<run>.plan.json` / `.json` / `.undo.json` 原子写、拒绝覆盖）、`src/api.js` 的 `consolidate` / `undoConsolidation`、`bin/memory consolidate`。当前只实现 `invalidate`：B 显式 `supersedes` A，且 A 仍 `active`、无 `valid_to` / `superseded_by` 时，写 A 的 `valid_to` + `superseded_by`；正文逐字节不动。`merge` / `summarize` / `promote` / `archive` 未实现。
+- **行为**：默认 dry-run，不落盘、不改库；`--apply` 先写计划再改，**回执写不进去就回滚**；`--undo` 先全量预检，任何一条冲突就整单拒绝，二次撤销是 `already_undone`。保险丝 `allowed = max(1, floor(扫描 × 0.05))`，超限整单中止、一条不动。CLI 退出码：成功 0，`aborted` / `conflict` / `tampered` / `partial` 1，用法错 2。
+- **边界**：巩固回执不含正文，只存前后元数据、正文 sha256 与整份文件 hash；hash 仍是**防误改**不是签名。undo 只恢复元数据；apply 之后正文被人改过会整单 `conflict`。replay、`diff.jsonl`、写入回执、后台自动巩固未做。
 
 ### 索引：从一屏平铺改成**分层路由 + 清单**
 

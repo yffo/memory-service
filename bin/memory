@@ -26,6 +26,8 @@ import {
   recallQuery,
   verifyRecallReceipt,
   explainRecall,
+  consolidate,
+  undoConsolidation,
   indexReport,
   defaultStorePath,
   INDEX_CAPS,
@@ -39,7 +41,7 @@ import { finiteOr } from '../src/util/text.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const VERSION = '0.1.1';
 
-export const USAGE = `tabellio — 显式记忆服务（M1 + M2 读取回执）
+export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 / 巩固 / 撤销）
 
 用法：
   tabellio status [--store DIR] [--rebuild-index] [--json]
@@ -53,6 +55,8 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2 读取回执）
   tabellio recall --query "<词>" [--receipt|--save-receipt] [--budget-tokens N] [--json]
   tabellio explain (--query "<词>" | --receipt <id|path>) [--json]
   tabellio verify --receipt <id|path> [--json]
+  tabellio consolidate [--dry-run|--apply] [--max-change-ratio F] [--scope S] [--kinds a,b] [--json]
+  tabellio consolidate --undo <run|path> [--json]
   tabellio help | --help | -h | --version
 
 全局：
@@ -60,7 +64,7 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2 读取回执）
   --json         机器可读输出（形状见 docs/07-usage.md）
   --ledger       把这次只读操作记进账本（默认不写）
 
-退出码：0 成功 / 1 判定拒绝 / 回执操作失败 / 2 用法错误`;
+退出码：0 成功 / 1 判定拒绝或回执、巩固失败 / 2 用法错误`;
 
 /** 解析 argv（`--k v`、`--k=v`、`--flag`）。不认识的位置参数进 `_`。 */
 export function parseArgs(argv) {
@@ -208,6 +212,47 @@ function humanVerify(r) {
   return lines.join('\n');
 }
 
+function humanConsolidate(r) {
+  if (r.status === 'aborted') {
+    const lines = [`巩固中止（${r.reason}）：计划 ${r.operations?.length ?? 0} 条，未改任何笔记`];
+    if (r.run_id) lines.push(`run：${r.run_id}`);
+    if (r.plan_path) lines.push(`计划：${r.plan_path}`);
+    if (r.rolled_back !== undefined) lines.push(`回滚：${r.rolled_back ? '已回滚' : '回滚失败（需要人工检查）'}`);
+    if (r.error?.message) lines.push(`错误：${r.error.code ?? ''} ${r.error.message}`);
+    return lines.join('\n');
+  }
+  const dry = r.dry_run !== false;
+  const head = dry
+    ? `[dry-run] 计划 ${r.operations.length} 条（扫描 ${r.stats.scanned} 条，允许改动 ${r.stats.allowed} 条，改动率 ${(r.stats.change_ratio * 100).toFixed(1)}%）`
+    : `已应用 ${r.applied} 条，跳过 ${r.skipped} 条（扫描 ${r.stats.scanned} 条，改动率 ${(r.stats.change_ratio * 100).toFixed(1)}%）`;
+  const lines = [head, `run：${r.run_id}`];
+  for (const op of r.operations) lines.push(`  - invalidate ${op.id} → ${op.superseded_by}（valid_to=${(op.valid_to ?? '').slice(0, 19)}）`);
+  for (const s of (r.skipped_detail ?? []).slice(0, 20)) {
+    if (typeof s === 'object') lines.push(`  · 跳过 ${s.id}：${s.reason}`);
+  }
+  if (r.plan_path) lines.push(`计划：${r.plan_path}`);
+  if (r.receipt_path) lines.push(`回执：${r.receipt_path}（可 ` + 'consolidate --undo' + ` 撤销）`);
+  return lines.join('\n');
+}
+
+function humanUndo(r) {
+  if (r.status === 'conflict') {
+    const lines = ['撤销被拒（整单冲突，未改任何笔记）', `run：${r.run_id}`];
+    for (const c of r.conflicts ?? []) lines.push(`  - ${c.id}：${c.reason}`);
+    return lines.join('\n');
+  }
+  if (r.status === 'tampered') {
+    return [`撤销被拒：巩固回执被篡改`, `run：${r.run_id}`, ...(r.problems ?? []).map((p) => `  ! ${p.code}${p.message ? `：${p.message}` : ''}`)].join('\n');
+  }
+  if (!r.ok) return `撤销失败（${r.status}）：${r.error?.code ?? ''} ${r.error?.message ?? ''}`.trim();
+  const head = r.status === 'already_undone'
+    ? '这次巩固已经撤销过，没有需要恢复的笔记'
+    : `已撤销：恢复 ${r.restored} 条，跳过 ${r.skipped} 条`;
+  const lines = [head, `run：${r.run_id}`];
+  if (r.undo_path) lines.push(`撤销记录：${r.undo_path}`);
+  return lines.join('\n');
+}
+
 function humanIndex(r) {
   const head = r.exists
     ? `索引：${r.lines} 行 / ${r.bytes} 字节（上限 ${r.caps.lines} 行 / ${r.caps.bytes} 字节）  |  层级 ${r.levels}（路由 + 清单）`
@@ -256,7 +301,7 @@ export async function main(argv, io = {}) {
     out.write(`${VERSION}\n`);
     return 0;
   }
-  if (!['status', 'index', 'search', 'read', 'remember', 'import', 'recall', 'explain', 'verify', 'paths'].includes(command)) {
+  if (!['status', 'index', 'search', 'read', 'remember', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths'].includes(command)) {
     err.write(`未知命令：${command}\n\n${USAGE}\n`);
     return 2;
   }
@@ -355,6 +400,44 @@ export async function main(argv, io = {}) {
         const r = verifyRecallReceipt(ctx, receiptRef);
         emit(r, { json, human: humanVerify(r) });
         // 只有 verified 才算成功；tampered / drifted / unreadable 都是 1。
+        return r.ok ? 0 : 1;
+      }
+      case 'consolidate': {
+        const undoRef = typeof args.undo === 'string' ? args.undo : null;
+        if (args.undo !== undefined) {
+          if (!undoRef) {
+            err.write('consolidate --undo 需要 <run_id|path>\n');
+            return 2;
+          }
+          if (args.apply || args['dry-run']) {
+            err.write('consolidate --undo 不能和 --apply/--dry-run 同时用\n');
+            return 2;
+          }
+          const r = undoConsolidation(ctx, undoRef);
+          emit(r, { json, human: humanUndo(r) });
+          return r.ok ? 0 : 1;
+        }
+        if (args.apply && args['dry-run']) {
+          err.write('consolidate 的 --apply 和 --dry-run 只能选一个\n');
+          return 2;
+        }
+        const apply = Boolean(args.apply);
+        let maxChangeRatio = 0.05;
+        if (args['max-change-ratio'] !== undefined) {
+          const n = numArg(args['max-change-ratio'], NaN);
+          if (!Number.isFinite(n) || n < 0 || n > 1) {
+            err.write('consolidate --max-change-ratio 需要 0 到 1 之间的数（默认 0.05）\n');
+            return 2;
+          }
+          maxChangeRatio = n;
+        }
+        const r = consolidate(ctx, {
+          apply,
+          maxChangeRatio,
+          scope: args.scope,
+          kinds: listArg(args.kinds),
+        });
+        emit(r, { json, human: humanConsolidate(r) });
         return r.ok ? 0 : 1;
       }
       case 'read': {

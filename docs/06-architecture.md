@@ -1,6 +1,6 @@
 # 架构设计：tabellio
 
-- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）。M2 已开工：**读取回执**（recall receipt + `explain` + `verify`）已实现；巩固 / 生命周期 / 写入回执 / `undo` 尚未实现。本文的目录、五原语 JSON、巩固 receipt / `consolidate` 是**目标架构**，不是现状；已实现模块见 §2.2。
+- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）。M2 已开工：**读取回执**（recall receipt + `explain` + `verify`）与**显式巩固**（`consolidate` 的 `invalidate` + 巩固回执 + `undo`）已实现；合并/摘要/提升、生命周期、写入回执、replay、后台自动巩固未实现。本文的目录、五原语 JSON、巩固 operation 表是**目标架构**，不是现状；已实现模块见 §2.2。
 - 上游文档：`00-brief.md`（立项书）· `01-landscape-systems.md`（竞品与接口层）· `02-evaluation.md`（评测方法）· `03-hosts-and-interfaces.md`（宿主与接口）· `04-cost-model.md`（成本）· `05-agi-direction.md`（长期方向）
 - 基线：`~/yffto/dsh-engramory-recall`（第一条线，必须赢过它，而不是取代它）
 - 读者：出资方（看 §1 §8 §10 就够）与实现者（§2–§7 §9）
@@ -11,7 +11,7 @@
 
 ## 1. 一句话定位与边界
 
-**tabellio 是一个跨宿主的本地长期记忆服务**（目标形态）：一份纯文本事实库 + 一个 MCP 服务 + 一个空闲期巩固进程（巩固进程尚未实现）；任何 CLI / IDE / 自研 agent 通过 MCP 工具按需读写它，拿到的是带来源、带有效期、带信任等级的记忆内容。
+**tabellio 是一个跨宿主的本地长期记忆服务**（目标形态）：一份纯文本事实库 + 一个 MCP 服务 + 一个空闲期巩固进程（后台自动巩固尚未实现；显式 `consolidate` 已可用）；任何 CLI / IDE / 自研 agent 通过 MCP 工具按需读写它，拿到的是带来源、带有效期、带信任等级的记忆内容。
 
 三个词各自落到实处。**跨宿主**：唯一一等接口是 MCP，DSH 插件与 CLI 都只是壳；靠「读同一批文件 + 同一套工具语义」保持一致，不靠同步。**服务而不是插件**：插件可以只服务一个宿主、可以深挖那个宿主的私有能力；服务要在 11 个宿主里至少 3 个上跑通同一套语义（宿主清单见 `03-hosts-and-interfaces.md`）。**本地长期**：默认零 API 成本、纯文本落盘、`cat` 得出、git 管得住、随时带走。
 
@@ -197,13 +197,17 @@ index/groups/<nnn>-<组名>.md 清单层：一组一行指针（每文件 ≤ 40
 
 热路径**不做**：不改旧记录、不做冲突消解、不合并、不摘要、不调模型。三条独立证据指向同一结论（mem0 2026-04 起单次 LLM 调用只 ADD；Letta 把整理放 sleep-time；dsh-mneme 冲突冻结进人工队列），见 `01-landscape-systems.md`。
 
-### 4.2 空闲期巩固（唯一的「改」入口；M2 计划，尚未实现）
+### 4.2 空闲期巩固（唯一的「改」入口；M2 已开工，当前只有 `invalidate`）
 
-触发：显式 `consolidate`、空闲期后台、或每晚一次（可关）。巩固分两步，**决策与执行分离**：
+> **现状（2026-10-17）**：先落地 `invalidate` 一种操作。`dry_run` 是默认值：只出计划，不落盘、不改库。
+> `apply` 先写 `runs/<run>.plan.json`，再逐条改目标笔记的 `valid_to` / `superseded_by`（正文逐字节不动），最后写 `runs/<run>.json`；回执写不进去就回滚已改字段。`consolidate --undo <run>` 先全量预检再恢复元数据，写 `runs/<run>.undo.json`。
+> `merge` / `summarize` / `promote` / `archive`、`diff.jsonl`、replay、`forget`、后台自动巩固**都还没实现**；下面的 operation 表是目标，只有 `invalidate` 行有实现。
+
+触发：显式 `consolidate`（已实现）；空闲期后台或每晚一次（未实现，可关）。巩固分两步，**决策与执行分离**：
 
 ```
-consolidate(dry_run=true)  → 产出 operations[]（纯决策，写 runs/<id>.plan.json）
-consolidate(apply=true)    → 逐条执行 + 每条一个 receipt（runs/<id>.json + diff.jsonl）
+consolidate(dry_run=true)  → 产出 operations[]（纯决策，不落盘）
+consolidate(apply=true)    → 写 runs/<id>.plan.json → 逐条执行 → 写 runs/<id>.json
 ```
 
 operation 类型与护栏：
@@ -212,17 +216,17 @@ operation 类型与护栏：
 |---|---|---|
 | `merge` | N 条同类 → 1 条，原记录 `archived` + `derived_from` 指回 | 原文永不出库；合并结果正文里必须能追到源 id |
 | `summarize` | 长记录 → 摘要，摘要进新 note，原文降为 `archived` | 摘要必须带 `source_ref`；只允许压缩，不允许新增事实 |
-| `invalidate` | 冲突胜出方 → 旧记录 `valid_to=now` | **只写时间戳，不改旧记录正文**（Graphiti 式失效而非删除） |
+| `invalidate` ✅ | 冲突胜出方 → 旧记录 `valid_to=now` + `superseded_by=胜出方` | **只写元数据，不改旧记录正文**（Graphiti 式失效而非删除）；当前唯一的实现 |
 | `promote` | 同类事实 ≥ N 条且覆盖 ≥ M 个时间点 → 候选规则 | **只产候选**，落 `notes/candidates/`，要人确认才进主库 |
 | `archive` | 满足 §3.2 条件的记录移出检索面 | 不删除；可一条命令恢复 |
 
 **护栏（写进代码，不靠模型自觉）**：
 
-1. **巩固绝不能悄悄改事实**：任何操作必须留下 receipt，receipt 里含操作前后的正文 hash（sha256）与 diff；没有 receipt 的写入被视为 bug。
-2. **可回放**：`consolidate --replay runs/<id>.json` 能在库的副本上重放出同一结果；跑不出同一结果即视为不可信，撤销该 run。
-3. **可撤销**：`consolidate --undo runs/<id>` 把该 run 的所有操作逆序回退（因为我们从不物理删除，撤销总是可能的）。
+1. **巩固绝不能悄悄改事实**：任何操作必须留下 receipt，receipt 里含操作前后的元数据、正文 hash（sha256）与字段 diff；没有 receipt 的写入被视为 bug。当前 `invalidate` 的回执已满足这条；`diff.jsonl` 未实现。
+2. **可回放**（未实现）：`consolidate --replay runs/<id>.json` 能在库的副本上重放出同一结果；跑不出同一结果即视为不可信，撤销该 run。
+3. **可撤销** ✅：`consolidate --undo <run>` 把该 run 的所有操作逆序回退；先全量预检，任何一条冲突就整单拒绝，不做部分撤销。因为我们从不物理删除，撤销总是可能的。
 4. **原文优先**：检索命中一条被 `summarize` 覆盖的记录时，默认返回摘要 + 原文链接；用户要原文时永远取得到。
-5. **一次 run 的改动量上限**（默认不超过库的 5%，可配），超限中止并要求人工确认——这是防「一次巩固把库改烂」的保险丝。
+5. **一次 run 的改动量上限** ✅：`allowed = max(1, floor(扫描条数 × max_change_ratio))`，默认 0.05；超限整单中止、一条不动。小库至少允许 1 条，否则 10 条库上 `floor(0.5)=0` 永远熔断。
 
 **代价**：决策/执行分离 + receipt 让巩固代码量至少翻倍，且「原文永不删除」会让库持续变大。**什么时候该换**：如果库年增长 >50 万条或单次巩固 >10 分钟，说明文件粒度太细，该引入「合卷」（多个相关事实合并为一个文件、内部再分级），但**不放弃 receipt 与可撤销**——那两条是审计性，不可谈判。
 
@@ -566,7 +570,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 | M3 | 三宿主实机验证 + npm/MCP registry 分发 | 三宿主各有端到端录屏/日志（`00-brief.md §7`） | — |
 | M4 | 黄页/市场/文档站，第一个外部用户 | 外部用户装上并留下反馈（`00-brief.md §7`） | — |
 
-**现状（2026-10-17）**：M0 / M1 完成；M2 已开工（读取回执 + `explain` + `verify`，巩固/生命周期未做）；M3 只完成分发侧（npm + MCP registry），三宿主实机验证未做；M4 未开始。
+**现状（2026-10-17）**：M0 / M1 完成；M2 已开工（读取回执 + `explain` + `verify` + 显式巩固 `consolidate`（仅 `invalidate`）+ `undo`；合并/摘要/提升、生命周期、后台自动巩固未做）；M3 只完成分发侧（npm + MCP registry），三宿主实机验证未做；M4 未开始。
 
 每期结束必须留下数字，没有数字的里程碑不算完成（`00-brief.md §7` 与 §8 风险表第一条）。
 
@@ -576,7 +580,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 
 五个操作，收敛到 5±2 个（`03-hosts-and-interfaces.md` 的结论）。默认只读；写操作带行为提示（`read-only` / `idempotent` / `destructive`，照抄 Basic Memory 的渐进式工具发现做法）。下面保留关键字段与全部返回形态（成功 / 幂等 / 拒绝 / 跳过 / 错误），实现者按此签名建类型。
 
-> **现状**：`remember` / `recall` / `explain` / `verify` 已实现（CLI；MCP 仍只有 search/read/list/status/remember）。`explain` / `verify` 目前只服务 **recall 回执**：`explain` 接受 `--query` 或 `--receipt`，`verify` 只接受 `--receipt`，不接受 `id` / `turn_id`，也不返回 `ledger_events`。`consolidate` / `forget` 与巩固 receipt / `undo` 尚未实现，下面的 JSON 是目标接口。
+> **现状**：`remember` / `recall` / `explain` / `verify` / `consolidate`（仅 `invalidate`）/ `undo` 已实现（CLI；MCP 仍只有 search/read/list/status/remember）。`explain` / `verify` 目前只服务 **recall 回执**：`explain` 接受 `--query` 或 `--receipt`，`verify` 只接受 `--receipt`，不接受 `id` / `turn_id`，也不返回 `ledger_events`。`forget`、写入回执、replay、merge/summarize/promote/archive 尚未实现；下面的 JSON 是目标接口，`consolidate` 的实际返回以其后标注为准。
 
 ```js
 // ── remember：写入。热路径，零 LLM 调用。幂等（同 scope 同内容返回已有 id）
@@ -623,25 +627,34 @@ recall({
 // → 拒绝
 { ok: false, status: "denied", reason: "scope_forbidden" | "budget_below_minimum" }
 
-// ── consolidate：整理。显式、可选、可预算。绝不在热路径被调用。
+// ── consolidate：整理。显式、可选。绝不在热路径被调用。
+// 当前只实现 invalidate：B.supersedes 含 A，且 A active、无 valid_to、无 superseded_by
+// → 写 A.valid_to=now + A.superseded_by=B；正文一个字不改，as_of 仍可查。
 consolidate({
-  scope?,
-  dry_run = true,               // 默认 true：先出计划给人看，要动数据必须显式 apply
-  budget_tokens?,               // 本次巩固允许烧多少 token（默认 0 = 纯确定性规则，不调模型）
-  kinds?, max_change_ratio = 0.05   // 保险丝：单次 run 的改动量上限
+  scope?, kinds?,               // 过滤扫描面
+  apply = false,                // CLI 默认 dry-run；API 用 apply:true 才写
+  max_change_ratio = 0.05       // allowed = max(1, floor(scanned × ratio))
 })
-// → 计划（dry_run）
-{ ok: true, status: "planned", run_id, operations: [
-    { op: "merge" | "summarize" | "invalidate" | "promote" | "archive",
-      targets: [id...], produces?: id, rationale, est_tokens } ],
-  stats: { scanned, planned, est_tokens } }
-// → 已执行
-{ ok: true, status: "applied", run_id, receipt_path: "runs/<run-id>.json",
-  applied: n, skipped: n, reversible: true }
-// → 主动中止（保险丝）
-{ ok: false, status: "aborted", reason: "change_ratio_exceeded" | "receipt_write_failed"
-                                        | "budget_exceeded" }
-// 配套：consolidate.replay(run_id) / consolidate.undo(run_id)
+// → 计划（dry-run：不落盘、不改库）
+{ ok: true, status: "planned", run_id, dry_run: true,
+  operations: [{ op: "invalidate", id, superseded_by, valid_to, rationale,
+                 before: { status, valid_to, superseded_by, body_sha256 },
+                 after:  { status, valid_to, superseded_by, body_sha256 },
+                 est_tokens: 0 }],
+  skipped: [{ id, reason }],
+  stats: { scanned, planned, allowed, change_ratio, est_tokens } }
+// → 已执行（写 runs/<run>.plan.json + runs/<run>.json）
+{ ok: true, status: "applied", run_id, plan_path, receipt_path,
+  applied: n, skipped: n, reversible: true, operations, receipt,
+  stats: { scanned, planned, allowed, change_ratio, est_tokens, applied, skipped, failed } }
+// → 主动中止（保险丝 / 回执写失败；receipt 失败会回滚已改字段）
+{ ok: false, status: "aborted",
+  reason: "change_ratio_exceeded" | "plan_write_failed" | "receipt_write_failed" }
+// → 撤销（CLI: consolidate --undo <run>；先全量预检，冲突整单拒绝）
+{ ok: true, status: "undone" | "already_undone", run_id, receipt_path, undo_path,
+  restored: n, skipped: n }
+{ ok: false, status: "conflict" | "tampered" | "partial" | "unreadable", ... }
+// 目标但未实现：merge / summarize / promote / archive、replay、diff.jsonl、budget_tokens
 
 // ── forget：遗忘。两级，默认软。
 forget({ id?, query?, scope?,

@@ -36,13 +36,22 @@ import {
   resolveStore,
 } from './store/vault.js';
 import { buildIndexPlan, fitRoute, readIndexTree, verifyRoutes, pointerLine, groupKeyOf } from './store/index-tree.js';
-import { readNote, writeNoteAtomic, parseNoteLoose, safeNoteId, MAX_NOTE_CHARS, MAX_NOTE_TOKENS, MAX_NOTE_BYTES } from './store/note.js';
+import { readNote, writeNoteAtomic, parseNoteLoose, safeNoteId, renderNote, MAX_NOTE_CHARS, MAX_NOTE_TOKENS, MAX_NOTE_BYTES } from './store/note.js';
 import { ulid } from './util/ulid.js';
 import { recall, searchHits, DEFAULT_THRESHOLDS, DEFAULT_TOKENS } from './core/recall.js';
-import { buildRecallReceipt, explainReceipt, verifyReceipt } from './core/receipt.js';
+import { buildRecallReceipt, explainReceipt, verifyReceipt, canonicalJson } from './core/receipt.js';
+import {
+  planConsolidation,
+  buildConsolidateReceipt,
+  sameFields,
+  receiptIntegrity,
+  CONSOLIDATE_UNDO_SCHEMA,
+  CONSOLIDATE_HASH_LEN,
+} from './core/consolidate.js';
+import { writeRunPlan, writeRunReceipt, readRunReceipt, writeUndoRecord, readUndoRecord } from './store/consolidate.js';
 import { writeReceipt, readReceipt } from './store/receipt.js';
 import { estimateTokens } from './core/tokenize.js';
-import { finiteOr } from './util/text.js';
+import { finiteOr, sha256 } from './util/text.js';
 import { remember as runRemember, candidateFromMarkdown, buildCandidate } from './gate/remember.js';
 import { planImport, applyImport } from './import/engramory.js';
 import { evaluateIndexWrite } from './gate/gate.js';
@@ -682,6 +691,292 @@ export function remember(ctx, input = {}, options = {}) {
   // dry-run 不落盘，也就没什么可失效的（但代价极低，顺手做掉更不容易忘）。
   if (result.ok && !dry) invalidateStore(store);
   return result;
+}
+
+function metaOf(note) {
+  return {
+    status: note?.status ?? 'active',
+    valid_to: note?.valid_to ?? null,
+    superseded_by: note?.superseded_by ?? null,
+  };
+}
+
+function bodySha(entry) {
+  return sha256(String(entry?.body ?? ''), 16);
+}
+
+function restoreApplied(store, applied) {
+  const restored = [];
+  const failed = [];
+  for (const op of [...applied].reverse()) {
+    const fresh = readNote(store, op.id);
+    if (!fresh.ok) {
+      failed.push({ id: op.id, reason: 'read_failed', error: fresh.errors?.[0] ?? null });
+      continue;
+    }
+    if (bodySha(fresh) !== op.after.body_sha256) {
+      failed.push({ id: op.id, reason: 'body_changed' });
+      continue;
+    }
+    if (!sameFields(metaOf(fresh.note), op.after)) {
+      failed.push({ id: op.id, reason: 'fields_changed' });
+      continue;
+    }
+    const updated = { ...fresh.note, ...metaOf(op.before) };
+    const text = renderNote(updated, fresh.body);
+    const written = writeNoteAtomic(store, op.id, text);
+    if (!written.ok) {
+      failed.push({ id: op.id, reason: 'write_failed', error: written.error });
+      continue;
+    }
+    restored.push(op.id);
+  }
+  return { ok: failed.length === 0, restored: restored.reverse(), failed };
+}
+
+function undoRecordHash(record) {
+  const { hash: _ignored, ...unsigned } = record ?? {};
+  return sha256(canonicalJson(unsigned), CONSOLIDATE_HASH_LEN);
+}
+
+/**
+ * `tabellio consolidate`：M2 第一刀的巩固。
+ *
+ * 默认 dry-run，只产出计划，不改任何笔记。`--apply` 才落盘：
+ *   1. 先写 `runs/<run>.plan.json`（决策留痕）；
+ *   2. 逐条执行 `invalidate`（只改 valid_to / superseded_by，正文不动）；
+ *   3. 写巩固回执；回执写失败则回滚已改的笔记，绝不留下「改了但没账」的状态。
+ *
+ * 5% 改动上限是保险丝，不是配额：超限时连 apply 也不做，返回 aborted 计划。
+ */
+export function consolidate(ctx, options = {}) {
+  const apply = options.apply === true || options.dryRun === false;
+  const nowMs = options.nowMs ?? clockNow();
+  const scan = ctx.scan();
+  const plan = planConsolidation({
+    entries: scan.notes,
+    nowMs,
+    maxChangeRatio: options.maxChangeRatio,
+    scope: options.scope,
+    kinds: options.kinds,
+    runId: options.runId,
+  });
+  const { runId, ...planRest } = plan;
+  if (!plan.ok) return { ...planRest, run_id: runId, dry_run: !apply, applied: 0 };
+  if (!apply) return { ...planRest, run_id: runId, dry_run: true, applied: 0 };
+
+  ctx.ensure();
+  const planSaved = writeRunPlan(ctx.store, plan);
+  if (!planSaved.ok) {
+    return {
+      ok: false,
+      status: 'aborted',
+      reason: 'plan_write_failed',
+      run_id: plan.runId,
+      operations: plan.operations,
+      error: planSaved.error,
+    };
+  }
+
+  const applied = [];
+  const skipped = [...(plan.skipped ?? [])];
+  for (const op of plan.operations) {
+    const fresh = readNote(ctx.store, op.id);
+    if (!fresh.ok) {
+      skipped.push({ id: op.id, reason: 'read_failed', error: fresh.errors?.[0] ?? null });
+      continue;
+    }
+    if (bodySha(fresh) !== op.before.body_sha256) {
+      skipped.push({ id: op.id, reason: 'body_changed' });
+      continue;
+    }
+    if (!sameFields(metaOf(fresh.note), op.before)) {
+      skipped.push({ id: op.id, reason: 'fields_changed' });
+      continue;
+    }
+    const updated = { ...fresh.note, ...metaOf(op.after) };
+    const text = renderNote(updated, fresh.body);
+    const written = writeNoteAtomic(ctx.store, op.id, text);
+    if (!written.ok) {
+      skipped.push({ id: op.id, reason: 'write_failed', error: written.error });
+      continue;
+    }
+    applied.push({
+      ...op,
+      before_text_sha256: sha256(fresh.text, 16),
+      after_text_sha256: sha256(text, 16),
+      path: written.path,
+    });
+  }
+
+  const receipt = buildConsolidateReceipt({ plan, store: ctx.store, applied, skipped, nowMs });
+  const receiptSaved = writeRunReceipt(ctx.store, receipt);
+  if (!receiptSaved.ok) {
+    // 没有回执的写入是 bug（§4.2 护栏 1）。回执写不进去，就把已经改掉的
+    // 元数据恢复原样；恢复也失败时必须如实报 partial，不能假装成功。
+    const rollback = restoreApplied(ctx.store, applied);
+    invalidateStore(ctx.store);
+    return {
+      ok: false,
+      status: 'aborted',
+      reason: 'receipt_write_failed',
+      run_id: plan.runId,
+      plan_path: planSaved.path,
+      dry_run: false,
+      stats: { ...plan.stats, applied: 0, skipped: skipped.length, failed: 0 },
+      error: receiptSaved.error,
+      rolled_back: rollback.ok,
+      rollback,
+      applied: 0,
+    };
+  }
+  invalidateStore(ctx.store);
+  return {
+    ok: true,
+    status: 'applied',
+    run_id: plan.runId,
+    plan_path: planSaved.path,
+    receipt_path: receiptSaved.path,
+    dry_run: false,
+    stats: { ...plan.stats, applied: applied.length, skipped: skipped.length, failed: 0 },
+    applied: applied.length,
+    skipped: skipped.length,
+    skipped_detail: skipped,
+    reversible: true,
+    operations: applied,
+    receipt,
+  };
+}
+
+/**
+ * `tabellio consolidate --undo <run>`：撤销一次巩固。
+ *
+ * 先全量预检、再动手：只要有一条笔记的当前状态不是回执里的 after，就整单拒绝，
+ * 不做「能撤几条撤几条」的部分撤销。撤销本身也只恢复元数据，正文不动。
+ */
+export function undoConsolidation(ctx, ref, options = {}) {
+  const got = readRunReceipt(ctx.store, ref);
+  if (!got.ok) {
+    return { ok: false, status: 'unreadable', run_id: null, error: got.error };
+  }
+  const receipt = got.receipt;
+  const integrity = got.integrity ?? receiptIntegrity(receipt);
+  if (!integrity.ok) {
+    return {
+      ok: false,
+      status: 'tampered',
+      run_id: receipt.runId,
+      receipt_path: got.path,
+      problems: integrity.problems,
+    };
+  }
+
+  const prior = readUndoRecord(ctx.store, receipt.runId);
+  if (prior.ok) {
+    return {
+      ok: true,
+      status: 'already_undone',
+      run_id: receipt.runId,
+      receipt_path: got.path,
+      undo_path: prior.path,
+      restored: 0,
+      skipped: (receipt.operations ?? []).length,
+    };
+  }
+
+  const restorable = [];
+  const skipped = [];
+  const conflicts = [];
+  for (const op of [...(receipt.operations ?? [])].reverse()) {
+    const fresh = readNote(ctx.store, op.id);
+    if (!fresh.ok) {
+      conflicts.push({ id: op.id, reason: 'missing' });
+      continue;
+    }
+    const current = metaOf(fresh.note);
+    if (bodySha(fresh) !== op.after.body_sha256) {
+      conflicts.push({ id: op.id, reason: 'body_changed' });
+      continue;
+    }
+    if (sameFields(current, op.before)) {
+      skipped.push({ id: op.id, reason: 'already_restored' });
+      continue;
+    }
+    if (!sameFields(current, op.after)) {
+      conflicts.push({ id: op.id, reason: 'fields_changed', expected: op.after, actual: current });
+      continue;
+    }
+    restorable.push({ op, fresh });
+  }
+
+  if (conflicts.length > 0) {
+    return {
+      ok: false,
+      status: 'conflict',
+      run_id: receipt.runId,
+      receipt_path: got.path,
+      conflicts,
+      restored: 0,
+    };
+  }
+
+  const restored = [];
+  const failed = [];
+  for (const { op, fresh } of restorable) {
+    const updated = { ...fresh.note, ...metaOf(op.before) };
+    const text = renderNote(updated, fresh.body);
+    const written = writeNoteAtomic(ctx.store, op.id, text);
+    if (!written.ok) {
+      failed.push({ id: op.id, reason: 'write_failed', error: written.error });
+      continue;
+    }
+    restored.push(op.id);
+  }
+
+  if (failed.length > 0) {
+    invalidateStore(ctx.store);
+    return {
+      ok: false,
+      status: 'partial',
+      run_id: receipt.runId,
+      receipt_path: got.path,
+      restored,
+      failed,
+    };
+  }
+
+  const record = {
+    schema: CONSOLIDATE_UNDO_SCHEMA,
+    runId: receipt.runId,
+    createdAt: isoLocal(options.nowMs ?? clockNow()),
+    store: ctx.store,
+    receipt_hash: receipt.hash,
+    restored,
+    skipped,
+  };
+  record.hash = undoRecordHash(record);
+  const saved = writeUndoRecord(ctx.store, record);
+  invalidateStore(ctx.store);
+  if (!saved.ok) {
+    return {
+      ok: false,
+      status: 'undo_record_write_failed',
+      run_id: receipt.runId,
+      receipt_path: got.path,
+      restored,
+      error: saved.error,
+    };
+  }
+  return {
+    ok: true,
+    status: restored.length > 0 ? 'undone' : 'already_undone',
+    run_id: receipt.runId,
+    receipt_path: got.path,
+    undo_path: saved.path,
+    restored: restored.length,
+    skipped: skipped.length,
+    operations: restored,
+  };
 }
 
 /** 库的初始化（`tabellio status` 会顺手做，不单独暴露命令）。 */

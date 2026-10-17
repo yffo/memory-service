@@ -1,6 +1,6 @@
 # 07 · 用法
 
-`tabellio` 当前（M1 + M2 读取回执）是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
+`tabellio` 当前（M1 + M2：读取回执 / 巩固 / 撤销）是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
 零运行时依赖：`node bin/memory` 直接就能跑，不需要 `npm install`。
 
 - 要求：Node ≥ 20.11（实测 Node 25.8）。
@@ -10,7 +10,7 @@
 ```bash
 git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
-node --test 'test/**/*.test.mjs'       # 全绿才继续（343 条）
+node --test 'test/**/*.test.mjs'       # 全绿才继续（371 条）
 ```
 
 ## 一条事实一个文件
@@ -31,11 +31,11 @@ tags: [preference, tooling]
 正文上限 **400 字 / 200 token** —— 超了闸门会拒，并且告诉你超了多少。
 超过一条事实该有的量，说明该拆成多条（`tabellio import` 会自动切）。
 
-## 九个命令
+## 十个命令
 
-`status` / `index` / `search` / `recall` / `explain` / `verify` / `read` / `remember` / `import`（另有 `paths` 查路径）。
+`status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `import`（另有 `paths` 查路径）。
 
-`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。
+`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**唯一的「改」入口**：默认只出计划，`--apply` 才动元数据，`--undo` 可撤销。
 
 `search` 与 `recall` 的分工：前者给**指针**（pull，读哪条由调用方决定），后者一步给出
 **可直接进上下文**的正文（按 token 预算裁剪、带拒答）；两者都零模型调用。
@@ -301,7 +301,7 @@ $ node bin/memory recall --query "索引上限是多少行" --save-receipt --jso
  "receiptPath":"/path/to/store/runs/rcp_....json"}
 ```
 
-回执是**读取回执**：它证明某次 recall 的输入与判断，不改库。巩固操作的 receipt（改前/改后 hash + diff + 可撤销）仍未实现。
+回执是**读取回执**：它证明某次 recall 的输入与判断，不改库。巩固操作的 receipt 见下一节：`--apply` 落 `runs/<run>.json`，`--undo` 落 `.undo.json`。
 
 ### 8. `explain` —— 为什么给了它 / 为什么没给
 
@@ -346,6 +346,52 @@ node bin/memory verify --receipt runs/rcp_....json --json
 
 `--json` 返回 `{ok,status,receiptId,checked,itemsChecked,nearestChecked,matched,changed[],missing[],problems[]}`。`changed[]` 里带 `fields` 与 `expected` / `actual`；`missing[]` 是回执引用了、但库里已经找不到的 id。`verify` 同 `explain` 一样不重跑检索、不调模型。
 
+### 10. `consolidate` —— 巩固：默认只出计划，改了账，能撤销
+
+巩固是**唯一的「改」入口**，但热路径永远不调用它。当前只实现一种操作 `invalidate`：
+B 的 frontmatter 里有 `supersedes: [A]`，A 还 `active`、没有 `valid_to`、没有 `superseded_by`、
+且在 now 之前已生效 → 把 A 的 `valid_to` 写成当前时间、`superseded_by` 写成 B 的 id。**正文一个字不改**；
+历史 `as_of` 查询仍能查到 A，所以既可追溯也可撤销。
+
+```bash
+node bin/memory consolidate                       # 默认 dry-run：只打计划，不写文件、不改库
+node bin/memory consolidate --json                # 计划 JSON
+node bin/memory consolidate --apply               # 真改：先写计划，再改元数据，最后写回执
+node bin/memory consolidate --apply --max-change-ratio 0.1
+node bin/memory consolidate --scope project:... --kinds semantic,procedural
+node bin/memory consolidate --undo run_...        # 撤销某个 run
+```
+
+**5% 保险丝**：`allowed = max(1, floor(扫描条数 × max_change_ratio))`，默认 0.05。
+超过就整单中止，一条都不动（小库至少允许 1 条，否则 10 条库上永远改不动）。
+`--dry-run` 与 `--apply` 互斥；`--undo` 也不能和它们同用。
+
+`--json` 的主要字段：
+
+- dry-run / aborted：`{ok,status,run_id,dry_run,operations[],skipped[],stats:{scanned,planned,allowed,change_ratio,est_tokens},options}`；
+- apply 成功：`{ok,status:"applied",run_id,plan_path,receipt_path,applied,skipped,reversible:true,operations[],receipt,stats}`；
+- 保险丝中止：`{ok:false,status:"aborted",reason:"change_ratio_exceeded"|"plan_write_failed"|"receipt_write_failed",...}`；
+  `receipt_write_failed` 会把已经改掉的元数据回滚，并报 `rolled_back`。
+
+每次 `--apply` 在 `runs/` 下留两个文件：`<run>.plan.json`（决策）与 `<run>.json`（巩固回执，
+含前后元数据与正文 hash，**不含正文**）；撤销成功后再多一个 `<run>.undo.json`。
+回执写不进去时本次 apply 视为失败并回滚 —— 「改了但没账」是不允许的状态。
+
+`--undo` 先全量预检再动手：只要有一条笔记的正文 hash 对不上，或当前字段既不是回执里的 `before`
+也不是 `after`，就整单拒绝，不做部分撤销。状态：
+
+| status | 含义 | 退出码 |
+|---|---|---|
+| `undone` | 全部恢复，并写撤销记录 | 0 |
+| `already_undone` | 之前撤过，本次什么都不做 | 0 |
+| `conflict` | 库在 apply 之后又被改过，整单不恢复 | 1 |
+| `tampered` | 回执被改过，拒绝执行 | 1 |
+| `partial` / `undo_record_write_failed` | 恢复中途写失败，如实报已恢复的条目 | 1 |
+| `unreadable` | run 找不到 / JSON 坏 / schema 不认识 | 1 |
+
+**还没做**：`merge` / `summarize` / `promote` / `archive`、replay、forget、写入回执、
+后台自动巩固、`diff.jsonl`。现在这一刀只碰元数据，不新增/压缩事实。
+
 ## MCP（给 Agent 用）
 
 ```bash
@@ -388,7 +434,7 @@ for l in sys.stdin:
   index/groups/<序号>-<组名>.md  # 生成物：清单层，一组一行指针（每文件 ≤ 400 行，超过分页不截断）
   index/stats.json           # 上次扫描的统计（读不完/解析不了的东西都在这）
   index/ledger.jsonl         # 追加型事件账本（写入/跳过/拒绝/索引闸门）
-  runs/                      # recall 回执（runs/<rcp_...>.json）；巩固 receipt 仍是 M2
+  runs/                      # recall 回执 runs/rcp_....json；巩固 run 的 .plan.json / .json / .undo.json
 ```
 
 `index/` 全是 `notes/` 的纯函数：删掉它只损失时间，不损失事实。
@@ -408,7 +454,7 @@ id 前缀是人写文件时形成的天然主题，组数与组内条数都在�
 | 码 | 含义 |
 | --- | --- |
 | 0 | 成功（拒绝也是成功的回答 —— `search` 的 `refused` 和 `remember` 的 `deny` 都算） |
-| 1 | 判定拒绝 / 库不健康 / 回执操作失败（`read` 找不到、`remember` deny、`index` 有笔记走不到或 `stale`、`verify` 不是 `verified`、`recall --save-receipt` 落盘失败） |
+| 1 | 判定拒绝 / 库不健康 / 回执或巩固失败（`read` 找不到、`remember` deny、`index` 有笔记走不到或 `stale`、`verify` 不是 `verified`、`recall --save-receipt` 落盘失败、`consolidate` 中止或 `undo` 冲突/被篡改） |
 | 2 | 用法错误（缺参数、命令不认识） |
 
 `remember --json` 的 `ok` 与退出码一致：脚本里既可以读 JSON，也可以直接 `if`。
