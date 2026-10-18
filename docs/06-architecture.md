@@ -1,6 +1,6 @@
 # 架构设计：tabellio
 
-- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）。M2 已开工：**读取回执**（recall receipt + `explain` + `verify`）与**显式巩固**（`consolidate` 的 `invalidate` / `archive` + 巩固回执 + `undo`）已实现；三种内容类操作（`merge` / `summarize` / `promote`）的**提案层**（dry-run，不落盘）已实现；Claude Code `SessionEnd` 钩子（默认不装、只写候选）与 `SessionStart` 待批准提示（`--session-start`，只读候选数）已实现；MCP 读工具已补预算感知的 `recall`。执行层、自动衰减、写入回执、replay、后台自动巩固未实现。本文的目录、五原语 JSON、巩固 operation 表是**目标架构**，不是现状；已实现模块见 §2.2。
+- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）。M2 已开工：**读取回执**（recall receipt + `explain` + `verify`）与**显式巩固**（`consolidate` 的 `invalidate` / `archive` + 巩固回执 + `undo`）已实现；三种内容类操作（`merge` / `summarize` / `promote`）的**提案层与执行层**（默认 dry-run，`--apply` 写目标/关源，内容类回执 + `undo`）已实现；Claude Code `SessionEnd` 钩子（默认不装、只写候选）与 `SessionStart` 待批准提示（`--session-start`，只读候选数）已实现；MCP 读工具已补预算感知的 `recall`。自动衰减、写入回执、replay、后台自动巩固未实现。本文的目录、五原语 JSON、巩固 operation 表是**目标架构**，不是现状；已实现模块见 §2.2。
 - 上游文档：`00-brief.md`（立项书）· `01-landscape-systems.md`（竞品与接口层）· `02-evaluation.md`（评测方法）· `03-hosts-and-interfaces.md`（宿主与接口）· `04-cost-model.md`（成本）· `05-agi-direction.md`（长期方向）
 - 基线：`~/yffto/dsh-engramory-recall`（第一条线，必须赢过它，而不是取代它）
 - 读者：出资方（看 §1 §8 §10 就够）与实现者（§2–§7 §9）
@@ -198,12 +198,12 @@ index/groups/<nnn>-<组名>.md 清单层：一组一行指针（每文件 ≤ 40
 
 热路径**不做**：不改旧记录、不做冲突消解、不合并、不摘要、不调模型。三条独立证据指向同一结论（mem0 2026-04 起单次 LLM 调用只 ADD；Letta 把整理放 sleep-time；dsh-mneme 冲突冻结进人工队列），见 `01-landscape-systems.md`。
 
-### 4.2 空闲期巩固（唯一的「改」入口；M2 已开工，当前有 `invalidate` / `archive` 与内容类提案层）
+### 4.2 空闲期巩固（唯一的「改」入口；M2：`invalidate` / `archive` + 内容类 apply/undo 已实现）
 
-> **现状（2026-10-17）**：落地两种只动元数据的操作：`invalidate` 与 `archive`。`dry_run` 是默认值：只出计划，不落盘、不改库。
+> **现状（2026-10-18）**：落地两种只动元数据的操作：`invalidate` 与 `archive`；三种内容类操作（`merge` / `summarize` / `promote`）也已补执行层。`dry_run` 是默认值：只出计划，不落盘、不改库。
 > `apply` 先写 `runs/<run>.plan.json`，再逐条改目标笔记：invalidate 写 `valid_to` / `superseded_by`；archive 只把 `status` 改成 `archived`（**不写** `valid_to` / `superseded_by`）。正文逐字节不动，最后写 `runs/<run>.json`；回执写不进去就回滚已改字段。`consolidate --undo <run>` 先全量预检再恢复元数据，写 `runs/<run>.undo.json`。
 > archive 必须由人显式点名，不是自动衰减；默认检索面（含当前 `as_of` 路径）会排除 `archived`，而 invalidate 的旧记录仍可按 `as_of` 查到。
-> `merge` / `summarize` / `promote` 只做到**提案层**：由人显式点名源 id，生成合并稿 / 抽取式摘要 / 候选规则脚手架，`dry_run:true`、`apply_supported:false`、`would_write:false`，不写 run、不写 note、不写 candidates。执行层、自动衰减、`diff.jsonl`、replay、`forget`、后台自动巩固**都还没实现**。
+> `merge` / `summarize` / `promote` 由人显式点名源 id，默认仍只出提案（`dry_run:true`、`apply_supported:true`、`would_write:false`）；`--apply` 后：merge / summarize 写一条 `active` 目标、把源改成 `valid_to` + `superseded_by`（正文不动），promote 只写 `notes/candidates/` 草稿、不关源。内容类 run 写 `runs/<run>.plan.json`、`runs/<run>.json`（schema `tabellio.consolidate.content/1`，只存 hash 不存正文）与可选的 `.undo.json`；`--undo` 预检目标全文 hash 与每个源的字段/正文 hash，通过后恢复源字段再删目标。`promote` 的候选仍需 `inbox` 批准。自动衰减、`diff.jsonl`、replay、`forget`、后台自动巩固**仍未实现**。
 
 触发：显式 `consolidate`（已实现）；空闲期后台或每晚一次（未实现，可关）。巩固分两步，**决策与执行分离**：
 
@@ -216,22 +216,22 @@ operation 类型与护栏：
 
 | operation | 动作 | 护栏 |
 |---|---|---|
-| `merge` 🟡 | N 条同类 → 1 条，原记录 `archived` + `derived_from` 指回 | 原文永不出库；合并结果正文里必须能追到源 id。当前只出提案草稿，不执行 |
-| `summarize` 🟡 | 长记录 → 摘要，摘要进新 note，原文降为 `archived` | 摘要必须带 `source_ref`；只允许压缩，不允许新增事实。当前只出抽取式提案 |
+| `merge` ✅ | N 条同类 → 1 条 active 目标；源写 `valid_to` + `superseded_by` | 原文永不出库；目标正文末尾注释带源 id；`--undo` 恢复源字段并删目标 |
+| `summarize` ✅ | 长记录 → 抽取式摘要，摘要进新 note；源写 `valid_to` + `superseded_by` | 只做抽取式首句，不调 LLM、不新增事实；`--undo` 同 merge |
 | `invalidate` ✅ | 冲突胜出方 → 旧记录 `valid_to=now` + `superseded_by=胜出方` | **只写元数据，不改旧记录正文**（Graphiti 式失效而非删除）；`as_of` 仍可查 |
-| `promote` 🟡 | 同类事实 ≥ N 条且覆盖 ≥ M 个时间点 → 候选规则 | **只产候选**，落 `notes/candidates/`，要人确认才进主库。当前提案草稿已在内存里指向该路径 |
+| `promote` ✅ | 同类事实 ≥ N 条且覆盖 ≥ M 个时间点 → 候选规则脚手架 | **只产候选**，落 `notes/candidates/`，不关闭源；要人 `inbox` 确认才进主库 |
 | `archive` ✅ | 显式点名仍 `active`、时间有效的记录 → `status=archived` | 不删除，不写 `valid_to` / `superseded_by`；默认检索面（含 `as_of`）排除；`undo` 只恢复 `status` |
 
-> 🟡 = **只有提案层**，没有执行层。提案读库、出草稿，但不写 `runs/`、不写 `notes/`、不写 `notes/candidates/`；
-> 因此它没有 receipt（没写东西就没有账），也不能 `--undo`。执行层落地时，receipt / 撤销 / 原文链接必须按下面护栏补齐。
+> 三种内容类操作都先出提案，`--apply` 才写；执行后一定有 receipt，撤销走同一个 `--undo`。
+> 仍没有自动发现、定时触发或自动批准；`promote` 的候选批准权在 `inbox`。
 
 **护栏（写进代码，不靠模型自觉）**：
 
-1. **巩固绝不能悄悄改事实**：任何写入都必须留下 receipt，receipt 里含操作前后的元数据、正文 hash（sha256）与字段 diff；没有 receipt 的写入被视为 bug。当前 `invalidate` / `archive` 的回执已满足这条；内容类提案不写库，所以没有 receipt——执行层实现时必须补。`diff.jsonl` 未实现。
+1. **巩固绝不能悄悄改事实**：任何写入都必须留下 receipt，receipt 里含操作前后的元数据、正文 hash（sha256）与字段 diff；没有 receipt 的写入被视为 bug。当前 `invalidate` / `archive` 用元数据回执，内容类用 `tabellio.consolidate.content/1` 回执（目标全文 hash + 每个源的正文 hash 与前后字段，不存正文）。`diff.jsonl` 仍未实现。
 2. **可回放**（未实现）：`consolidate --replay runs/<id>.json` 能在库的副本上重放出同一结果；跑不出同一结果即视为不可信，撤销该 run。
-3. **可撤销** ✅：`consolidate --undo <run>` 把该 run 的所有操作逆序回退；先全量预检，任何一条冲突就整单拒绝，不做部分撤销。因为我们从不物理删除，撤销总是可能的。
-4. **原文优先**：检索命中一条被 `summarize` 覆盖的记录时，默认返回摘要 + 原文链接；用户要原文时永远取得到。
-5. **一次 run 的改动量上限** ✅：`allowed = max(1, floor(扫描条数 × max_change_ratio))`，默认 0.05；超限整单中止、一条不动。小库至少允许 1 条，否则 10 条库上 `floor(0.5)=0` 永远熔断。
+3. **可撤销** ✅：`consolidate --undo <run>` 把该 run 的所有操作逆序回退；先全量预检，任何一条冲突就整单拒绝，不做部分撤销。源笔记从不物理删除；内容类 run 新建的目标在撤销时会被删除（它是这次 run 的产物，不是原文）。
+4. **原文优先**：检索命中一条被 `summarize` 覆盖的记录时，理想形态是默认返回摘要 + 原文链接；当前靠 `superseded_by` / `valid_to` 与 `as_of` 追到源，检索结果里的 `source_ref` 回链**尚未实现**。
+5. **一次 run 的改动量上限** ✅：元数据操作按 `allowed = max(1, floor(扫描条数 × max_change_ratio))` 算，默认 0.05；内容类按「动到多少条现有笔记」算（merge = 源数，summarize = 1，promote = 0），不按写文件次数算。超限整单中止、一条不动。小库可用 `--max-change-ratio 1` 显式放开。
 
 **代价**：决策/执行分离 + receipt 让巩固代码量至少翻倍，且「原文永不删除」会让库持续变大。**什么时候该换**：如果库年增长 >50 万条或单次巩固 >10 分钟，说明文件粒度太细，该引入「合卷」（多个相关事实合并为一个文件、内部再分级），但**不放弃 receipt 与可撤销**——那两条是审计性，不可谈判。
 
@@ -579,7 +579,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 | M3 | 三宿主实机验证 + npm/MCP registry 分发 | 三宿主各有端到端录屏/日志（`00-brief.md §7`） | — |
 | M4 | 黄页/市场/文档站，第一个外部用户 | 外部用户装上并留下反馈（`00-brief.md §7`） | — |
 
-**现状（2026-10-18）**：M0 / M1 完成；M2 已开工（读取回执 + `explain` + `verify` + 显式巩固 `consolidate`（`invalidate` / `archive`）+ `undo`；`merge` / `summarize` / `promote` 的提案层已做，执行层、自动衰减、后台自动巩固未做；`setup` + `capture` / `inbox` 上手闭环已做；Claude Code `SessionEnd` 钩子已做，默认不装、只抓用户显式线索、只写候选；`--session-start` 可在会话开始只读提示待批准候选数）；M3 分发侧完成（npm + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐；M4 未开始。
+**现状（2026-10-18）**：M0 / M1 完成；M2 已开工（读取回执 + `explain` + `verify` + 显式巩固 `consolidate`（`invalidate` / `archive`）+ `undo`；`merge` / `summarize` / `promote` 的提案层与执行层（`--apply` + 内容类回执 + `undo`）已做，自动衰减、后台自动巩固未做；`setup` + `capture` / `inbox` 上手闭环已做；Claude Code `SessionEnd` 钩子已做，默认不装、只抓用户显式线索、只写候选；`--session-start` 可在会话开始只读提示待批准候选数）；M3 分发侧完成（npm + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐；M4 未开始。
 
 每期结束必须留下数字，没有数字的里程碑不算完成（`00-brief.md §7` 与 §8 风险表第一条）。
 
@@ -589,7 +589,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 
 五个操作，收敛到 5±2 个（`03-hosts-and-interfaces.md` 的结论）。默认只读；写操作带行为提示（`read-only` / `idempotent` / `destructive`，照抄 Basic Memory 的渐进式工具发现做法）。下面保留关键字段与全部返回形态（成功 / 幂等 / 拒绝 / 跳过 / 错误），实现者按此签名建类型。
 
-> **现状**：`remember` / `recall` / `explain` / `verify` / `consolidate`（`invalidate` / `archive`）/ `undo` 已实现（CLI；MCP 工具面为 recall/search/read/list/status，加 `--allow-write` 后多 `remember` 与 `capture`，后者只写候选）。`recall` 在 MCP 侧是只读的预算感知读接口：文本结果给正文，`structuredContent` 只给元数据（不重复正文），拒答不是错误。`explain` / `verify` 目前只服务 **recall 回执**：`explain` 接受 `--query` 或 `--receipt`，`verify` 只接受 `--receipt`，不接受 `id` / `turn_id`，也不返回 `ledger_events`。`consolidate --merge/--summarize/--promote` 只有**提案层**：出草稿、不落盘、`--apply` 退 2。`forget`、写入回执、replay、内容类执行层尚未实现；下面的 JSON 是目标接口，`consolidate` 的实际返回以其后标注为准。
+> **现状**：`remember` / `recall` / `explain` / `verify` / `consolidate`（`invalidate` / `archive`）/ `undo` 已实现（CLI；MCP 工具面为 recall/search/read/list/status，加 `--allow-write` 后多 `remember` 与 `capture`，后者只写候选）。`recall` 在 MCP 侧是只读的预算感知读接口：文本结果给正文，`structuredContent` 只给元数据（不重复正文），拒答不是错误。`explain` / `verify` 目前只服务 **recall 回执**：`explain` 接受 `--query` 或 `--receipt`，`verify` 只接受 `--receipt`，不接受 `id` / `turn_id`，也不返回 `ledger_events`。`consolidate --merge/--summarize/--promote` 默认只出**提案**，`--apply` 会写目标、merge/summarize 关闭源，并写内容类回执；`--undo` 对内容类 run 做全量预检后恢复源并删除目标。`forget`、写入回执、replay 仍未实现；下面的 JSON 是目标接口，`consolidate` 的实际返回以其后标注为准。
 
 ```js
 // ── remember：写入。热路径，零 LLM 调用。幂等（同 scope 同内容返回已有 id）
@@ -637,7 +637,7 @@ recall({
 { ok: false, status: "denied", reason: "scope_forbidden" | "budget_below_minimum" }
 
 // ── consolidate：整理。显式、可选。绝不在热路径被调用。
-// 当前实现两种只动元数据的操作（另有内容类提案层，见本段末尾）：
+// 当前实现两种只动元数据的操作（另有内容类提案与执行层，见本段末尾）：
 // invalidate：B.supersedes 含 A，且 A active、无 valid_to、无 superseded_by
 //   → 写 A.valid_to=now + A.superseded_by=B；正文一字不改，as_of 仍可查。
 // archive：显式 archiveIds 点名，且 A active、无 valid_to、无 superseded_by、now 有效
@@ -669,11 +669,11 @@ consolidate({
   restored: n, skipped: n }
 { ok: false, status: "conflict" | "tampered" | "partial" | "unreadable", ... }
 // ── 内容类提案（CLI: consolidate --merge/--summarize/--promote --json）
-// 只读扫描 + 纯草稿；不写 runs/、notes/、notes/candidates/，因此没有 receipt / undo。
+// 默认只读扫描 + 纯草稿；不写 runs/、notes/、notes/candidates/。
 // 目标路径：merge/summarize → notes/<新 id>.md；promote → notes/candidates/<新 id>.md。
-{ ok: true, status: "proposed", proposal_id: "prop_...",
+{ ok: true, status: "proposed", proposal_id: "prop_...", run_id: "run_...",
   mode: "merge" | "summarize" | "promote",
-  dry_run: true, apply_supported: false, would_write: false,
+  dry_run: true, apply_supported: true, would_write: false,
   source_ids: [id...], sources: [ { id, title, chars, tokens, body_sha256 } ],
   target: { id, path, status: "draft", scope, kind, trust,
             draft_kind: "deduped_concat" | "extractive" | "scaffold",
@@ -681,12 +681,29 @@ consolidate({
   warnings: [ { code, message } ],
   stats: { scanned, sources, source_chars, source_tokens, target_chars, target_tokens,
            saved_chars, saved_tokens, saved_ratio, estimated_write_ops,
-           estimated_change_ratio, distinct_days },
-  next_action: "人工审阅提案；执行层未实现，当前不会写任何文件。" }
+           touched_sources, estimated_change_ratio, distinct_days },
+  next_action: "人工审阅后加 --apply 执行；执行会写目标笔记，merge/summarize 还会关闭源。" }
 { ok: false, status: "rejected", reason: "invalid_mode" | "missing_sources" | "source_invalid"
   | "scope_mismatch" | "kind_mismatch" | "source_too_short" | "not_enough_time_points"
-  | "target_id_exists" | ..., dry_run: true, apply_supported: false, would_write: false, ... }
-// 目标但未实现：内容类执行层、replay、diff.jsonl、budget_tokens
+  | "target_id_exists" | ..., dry_run: true, apply_supported: true, would_write: false, ... }
+
+// ── 内容类执行（CLI: consolidate --merge/--summarize/--promote --apply --json）
+// 先重算提案并预检；目标 active（promote 为候选 draft）；merge/summarize 关闭源（valid_to + superseded_by）。
+{ ok: true, status: "applied", run_id: "run_...", plan_path, receipt_path,
+  mode: "merge" | "summarize" | "promote",
+  target: { id, path, bucket: "notes" | "candidates", status: "active" | "draft", chars, tokens },
+  sources: [id...], stats, applied: n, reversible: true, receipt }
+{ ok: false, status: "aborted",
+  reason: "change_ratio_exceeded" | "target_exists" | "source_changed"
+        | "plan_write_failed" | "target_write_failed" | "source_write_failed" | "receipt_write_failed",
+  rolled_back?: boolean, ... }
+// ── 内容类撤销（CLI: consolidate --undo <run>）
+// 预检目标全文 hash + 每个源的正文 hash/字段；通过后恢复源字段，再删目标。
+{ ok: true, status: "undone" | "already_undone", run_id, receipt_path, undo_path,
+  restored: n, skipped: n, target_deleted: boolean }
+{ ok: false, status: "conflict" | "tampered" | "wrong_schema" | "partial" | "unreadable", ... }
+
+// 目标但未实现：replay、diff.jsonl、budget_tokens、forget
 
 // ── forget：遗忘。两级，默认软。
 forget({ id?, query?, scope?,

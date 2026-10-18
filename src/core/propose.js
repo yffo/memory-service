@@ -164,6 +164,21 @@ function promoteDraft(sources, ids) {
   ].join('\n');
 }
 
+/**
+ * 把「提案稿」换成「执行稿」：去掉提案口吻的标题/尾注，避免一条已入库的笔记
+ * 在正文里自称「提案草稿，未写入库」。只做确定的文字替换，不新增事实。
+ */
+export function materializeContentDraft(mode, draft) {
+  const text = String(draft ?? '');
+  if (mode === 'promote') {
+    return text.replace('这是脚手架，不是规则，未写入库。', '这是候选脚手架，尚未批准入库。');
+  }
+  return text
+    .replace(/^# 合并提案：/m, '# 合并：')
+    .replace(/^# 摘要提案：/m, '# 摘要：')
+    .replace('；提案草稿，未写入库。 -->', '；已由内容类巩固写入。 -->');
+}
+
 function sourceView(entry) {
   const note = entry.note ?? {};
   return {
@@ -372,9 +387,12 @@ export function planContentConsolidation({
   }
 
   const estimatedWriteOps = mode === 'merge' ? sourceIds.length + 1 : mode === 'summarize' ? 2 : 1;
-  const changeRatio = stats.scanned > 0 ? round(estimatedWriteOps / stats.scanned) : 0;
+  // 5% 保险丝算的是「动到多少条**现有**笔记」，不是写文件次数：merge 新建一条目标是
+  // 新增，不是改动；真正关闭的是源。promote 不关闭任何源，改动率就是 0。
+  const touchedSources = mode === 'promote' ? 0 : sourceIds.length;
+  const changeRatio = stats.scanned > 0 ? round(touchedSources / stats.scanned) : 0;
   if (changeRatio > 0.05) {
-    warnings.push({ code: 'would_exceed_change_ratio', message: `预计写 ${estimatedWriteOps} 次，扫描 ${stats.scanned} 条，改动率 ${(changeRatio * 100).toFixed(1)}% 超过 5% 保险丝；执行层默认会拒绝整单。` });
+    warnings.push({ code: 'would_exceed_change_ratio', message: `预计关闭/改动 ${touchedSources} 条现有笔记（扫描 ${stats.scanned} 条，改动率 ${(changeRatio * 100).toFixed(1)}%）超过 5% 保险丝；执行层默认会拒绝整单。` });
   }
 
   let target = targetId;
@@ -441,7 +459,7 @@ export function planContentConsolidation({
     mode_label: MODE_LABEL[mode],
     created_at: isoLocal(nowMs),
     dry_run: true,
-    apply_supported: false,
+    apply_supported: true,
     would_write: false,
     target_id: target,
     source_ids: sourceIds,
@@ -460,6 +478,7 @@ export function planContentConsolidation({
       saved_tokens: savedTokens,
       saved_ratio: sourceChars > 0 ? round(savedChars / sourceChars) : 0,
       estimated_write_ops: estimatedWriteOps,
+      touched_sources: touchedSources,
       estimated_change_ratio: changeRatio,
       distinct_days: distinctDays,
       max_draft_chars: maxDraftChars,
@@ -467,6 +486,6 @@ export function planContentConsolidation({
       min_promote_sources: minPromoteSources,
       min_promote_days: minPromoteDays,
     },
-    next_action: '人工审阅提案；执行层未实现，当前不会写任何文件。',
+    next_action: '人工审阅后加 --apply 执行；执行会写目标笔记，merge/summarize 还会关闭源。',
   };
 }

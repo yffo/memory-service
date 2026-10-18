@@ -36,7 +36,7 @@ aliases: [acme-editor, 编辑器]  # 可选：作者给的同义说法，只参�
 
 `setup` / `status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `capture` / `inbox` / `hook` / `import`（另有 `paths` 查路径）。
 
-`setup` 只写宿主的 MCP 配置，不碰记忆库；`hook` 把 Claude Code 的会话结束事件接到候选箱（默认不装）；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改元数据的入口**：默认只出计划，`--apply` 才动元数据，`--undo` 可撤销；`--merge` / `--summarize` / `--promote` 目前只出**内容类提案**，不写库。
+`setup` 只写宿主的 MCP 配置，不碰记忆库；`hook` 把 Claude Code 的会话结束事件接到候选箱（默认不装）；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改库的入口**：默认只出计划，`--apply` 才动；元数据操作只改字段，内容类操作会写目标并关闭源，两者都能 `--undo`。`--merge` / `--summarize` / `--promote` 默认只出**内容类提案**，`--apply` 才执行。
 
 `search` 与 `recall` 的分工：前者给**指针**（pull，读哪条由调用方决定），后者一步给出
 **可直接进上下文**的正文（按 token 预算裁剪、带拒答）；两者都零模型调用。
@@ -349,7 +349,7 @@ node bin/memory verify --receipt runs/rcp_....json --json
 
 ### 10. `consolidate` —— 巩固：默认只出计划，改了账，能撤销
 
-巩固是**唯一的「改」入口**，但热路径永远不调用它。当前实现两种**元数据**操作，正文一个字不改；另有三种内容类操作（merge / summarize / promote）只到提案层，见本节末尾。
+巩固是**唯一的「改」入口**，但热路径永远不调用它。当前实现两种**元数据**操作，正文一个字不改；另有三种内容类操作（merge / summarize / promote）：默认只出提案，`--apply` 才写目标（merge / summarize 还会关闭源），见本节末尾。
 
 - `invalidate`：B 的 frontmatter 里有 `supersedes: [A]`，A 还 `active`、没有 `valid_to`、没有 `superseded_by`、
   且在 now 之前已生效 → 把 A 的 `valid_to` 写成当前时间、`superseded_by` 写成 B 的 id。**正文一个字不改**；
@@ -406,42 +406,72 @@ invalidate 与 archive 共用这个上限，一起算；超过就整单中止，
 archive 的 undo 只把 `status` 恢复成 `active`；它本来就没写过 `valid_to` / `superseded_by`，
 所以不需要（也不应该）动这两个字段。
 
-#### 内容类提案：`--merge` / `--summarize` / `--promote`
+#### 内容类执行层：`--merge` / `--summarize` / `--promote` + `--apply`
 
-这三种操作会新增或压缩事实，所以执行层还没开。当前只做**显式源 id 的提案**：读库、出草稿，
-**不写任何文件**——没有 run 文件、没有回执、没有候选落盘。源必须由人点名，不做自动发现。
+这三种操作会新增或压缩事实，所以默认仍只出**显式源 id 的提案**：读库、出草稿，不写任何文件。
+人审阅后加 `--apply` 才落盘。源必须由人点名，没有自动发现。
 
 ```bash
-node bin/memory consolidate --merge <id>,<id>          # 至少 2 条；同 scope、同 kind
+node bin/memory consolidate --merge <id>,<id>          # 至少 2 条；同 scope、同 kind；默认 dry-run
 node bin/memory consolidate --summarize <id>           # 恰好 1 条；正文至少 200 字
 node bin/memory consolidate --promote <id>,<id>,<id>   # 至少 3 条；同一 scope，valid_from 跨至少 2 个日期
-node bin/memory consolidate --merge <id>,<id> --json   # 提案 JSON，默认就是 dry-run
+node bin/memory consolidate --merge <id>,<id> --apply  # 执行：写目标 + 关闭源 + 写内容回执
+node bin/memory consolidate --merge <id>,<id> --apply --max-change-ratio 1
+node bin/memory consolidate --undo run_...             # 内容类 run 也用同一个入口撤销
 ```
 
-- **merge**：把各源正文按段落去重后拼接，标题是 `# 合并提案：...`，末尾注释带源 id；
-  目标路径是 `notes/<新 id>.md`。
-- **summarize**：按段落取首句（每句最多 160 字），标题是 `# 摘要提案：...`；
-  目标路径是 `notes/<新 id>.md`。如果源本来就是一句一段，草稿不会更短，会报 `draft_not_shorter`。
+- **merge**：把各源正文按段落去重后拼接，目标标题是 `# 合并：...`；目标 `status:active`、
+  `requires_review:false`，`supersedes` 指回源 id。
+- **summarize**：按段落取首句（每句最多 160 字），目标标题是 `# 摘要：...`；同样直接落成
+  `active`。如果源本来就是一句一段，草稿不会更短，会报 `draft_not_shorter`。
 - **promote**：产出「候选规则」脚手架（`## 观察` + `## 待人工归纳`），**不是规则**；
-  目标路径是 `notes/candidates/<新 id>.md`，默认检索面不会包含它。
+  只写 `notes/candidates/<新 id>.md`（`status:draft`、`requires_review:true`），
+  **不关闭源**，批准仍走 `inbox --accept`。
 
-三种目标都带 `status: draft`、`requires_review: true`、`apply_supported: false`；merge / summarize 的
-`supersedes` 指回源 id，promote 的 `supersedes` 为空。任一源缺失、解析失败、非 `active`、已有
-`valid_to` / `superseded_by`，或在 now 尚无效，整单 `source_invalid`，不会静默丢掉坏源。
+merge / summarize 执行后，源笔记只改两个字段：`valid_to` 写成当前时间、`superseded_by` 写成目标 id；
+**正文一个字不改**，历史 `as_of` 仍能查到源。promote 不动源，只新增一条候选。
+任一源缺失、解析失败、非 `active`、已有 `valid_to` / `superseded_by`，或在 now 尚无效，整单
+`source_invalid`，不会静默丢掉坏源。
 
-`--json` 成功返回：
-`{ok:true,status:"proposed",proposal_id,mode,dry_run:true,apply_supported:false,would_write:false,target_id,source_ids,sources,skipped,target,warnings,stats,next_action}`；
-拒绝返回 `{ok:false,status:"rejected",reason,...}`。`stats` 里有源/目标的字数与 token、预计省下多少、
-`estimated_write_ops` 与 `estimated_change_ratio`；`warnings` 会报源之间重叠过低、草稿超过 400 字、
-草稿没变短、预计改动率超过 5% 等。
+**5% 保险丝按「动到多少条现有笔记」算，不按写文件次数算**：merge 的 `touched_sources` = 源数，
+summarize = 1，promote = 0；`estimated_write_ops` 另算（merge 源数+1、summarize 2、promote 1）。
+否则两条库上 merge 写三个文件会被算成 150%，永远过不了默认上限。超过上限整单
+`change_ratio_exceeded`，一条都不写；小库用 `--max-change-ratio 1` 显式放开。
 
-**边界**：`--apply` 对内容类操作直接退 2（明说「执行层未实现」）；它不能和 `--archive` / `--undo` /
-其他内容模式同用，也不接受 `--max-change-ratio` / `--scope` / `--kinds`。当前没有自动发现、
-没有 LLM 摘要、没有真正写 note、没有归档源，也没有内容类回执。
+dry-run 的 `--json` 返回：
+`{ok:true,status:"proposed",proposal_id,run_id,mode,dry_run:true,apply_supported:true,would_write:false,target_id,source_ids,sources,skipped,target,warnings,stats,next_action}`。
+`target.body` 仍带「提案」字样，因为还没写。apply 成功返回：
+`{ok:true,status:"applied",run_id,plan_path,receipt_path,target:{id,path,bucket,status,chars,tokens},sources,stats,applied,reversible:true,receipt}`。
+拒绝 / 中止返回 `{ok:false,status:"rejected"|"aborted",reason,...}`；apply 的 reason 可能是
+`change_ratio_exceeded`、`target_exists`、`source_changed`、`plan_write_failed`、
+`target_write_failed`、`source_write_failed`（会回滚目标与已改源）、`receipt_write_failed`（回滚）。
+改动率超限时 `dry_run:false`，但**不写任何文件**。
 
-**还没做**：`merge` / `summarize` / `promote` 的**执行层**（真正写新 note、归档源、写内容类回执）、
-replay、forget、写入回执、后台自动巩固、`diff.jsonl`。已实现的写操作只碰元数据；
-内容类只出提案，不新增/压缩事实。
+内容类 run 在 `runs/` 下留三个可能文件：`<run>.plan.json`（schema
+`tabellio.consolidate.content.plan/1`）、`<run>.json`（schema `tabellio.consolidate.content/1`）、
+`<run>.undo.json`（撤销记录）。回执不存正文，只存目标正文 hash、目标文件 hash、源正文 hash 与
+源字段前后值；hash 是防误改，不是签名。
+
+`--undo` 对内容类 run **先全量预检再动手**，与元数据 undo 同一入口：
+
+- 目标全文 hash 必须等于回执里的 `target.text_sha256`，否则 `target_changed`；目标已不在则
+  `target_missing`。
+- 每个源正文 hash 必须是回执里的值，且当前字段必须等于回执的 `after`（或已经是 `before`，
+  视为 `already_restored`）；任一冲突整单拒绝，不做部分撤销。
+- 预检通过后，先把源字段恢复成 `before`，再删除目标。顺序是刻意的：即使删除失败，也不会出现
+  「目标没了、源还关着」。
+
+内容类 undo 的状态与元数据 undo 相同（`undone` / `already_undone` / `conflict` / `tampered` /
+`partial` / `unreadable`），区别是 `undone` 还会 `target_deleted:true`。
+
+**边界**：`--apply` 不能和 `--archive` / `--undo` / 其他内容模式同用；仍不接受
+`--scope` / `--kinds`。没有自动发现、没有 LLM 摘要（merge 是去重拼接、summarize 是抽取式首句、
+promote 是脚手架）。promote 的候选一旦被 `inbox --accept` 批准，候选文件会移到
+`notes/candidates/decided/` 并生成一条正式 note；此时内容回执指向的候选 id 已不在候选目录，
+再 `--undo` 会按 `target_missing` 拒绝。回执 hash 不是签名，能写库的人仍可改文件与回执。
+
+**还没做**：replay、forget、写入回执、后台自动巩固、`diff.jsonl`；
+内容类操作也没有自动触发，必须由人点名源 id。
 
 ### 11. `setup` —— 一条命令给宿主写 MCP 配置
 

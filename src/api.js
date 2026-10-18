@@ -15,7 +15,7 @@
  * 需要审计的宿主（gateway）显式打开即可，`§6.1` 要求的是「事件存在且口径一致」，
  * 不是「每次读都必须落盘」。
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import {
   paths,
   ensureStore,
@@ -45,6 +45,7 @@ import {
   renderNote,
   candidatePath,
   writeCandidateAtomic,
+  notePath,
   moveCandidate,
   MAX_NOTE_CHARS,
   MAX_NOTE_TOKENS,
@@ -61,8 +62,9 @@ import {
   CONSOLIDATE_UNDO_SCHEMA,
   CONSOLIDATE_HASH_LEN,
 } from './core/consolidate.js';
-import { writeRunPlan, writeRunReceipt, readRunReceipt, writeUndoRecord, readUndoRecord } from './store/consolidate.js';
-import { planContentConsolidation } from './core/propose.js';
+import { writeRunPlan, writeRunReceipt, readRunReceipt, readAnyRunReceipt, writeContentRunPlan, writeContentRunReceipt, writeUndoRecord, readUndoRecord } from './store/consolidate.js';
+import { planContentConsolidation, materializeContentDraft } from './core/propose.js';
+import { buildContentReceipt, contentReceiptIntegrity, CONTENT_RECEIPT_SCHEMA } from './core/content-receipt.js';
 import { writeReceipt, readReceipt } from './store/receipt.js';
 import { estimateTokens } from './core/tokenize.js';
 import { finiteOr, sha256 } from './util/text.js';
@@ -1018,6 +1020,245 @@ export function proposeConsolidation(ctx, options = {}) {
   return { ...plan, store: ctx.store };
 }
 
+
+/**
+ * `tabellio consolidate --merge/--summarize/--promote --apply`：内容类巩固的**执行层**。
+ *
+ * 执行前先把提案完整重算一遍（同一份 scan、同一份输入），然后：
+ *   1. 预检每条源仍是 active、正文 hash 未变；
+ *   2. 写 `runs/<run>.plan.json`（决策留痕）；
+ *   3. 写目标笔记（merge/summarize 为 active；promote 只写 candidate 草稿）；
+ *   4. merge/summarize 把源标成 `valid_to` + `superseded_by`，正文不动；
+ *   5. 写内容类回执；任何一步失败都回滚目标与已改的源。
+ *
+ * promote 不关闭源：候选规则还没被批准，源事实仍然有效。
+ */
+export function applyContentConsolidation(ctx, options = {}) {
+  const apply = options.apply === true;
+  const nowMs = options.nowMs ?? clockNow();
+  const plan = planContentConsolidation({
+    entries: ctx.scan().notes,
+    mode: options.mode,
+    ids: options.ids,
+    nowMs,
+    targetId: options.targetId ?? null,
+  });
+  const runId = options.runId ?? `run_${ulid(nowMs)}`;
+  if (!plan.ok) return { ...plan, run_id: runId, dry_run: !apply, applied: 0 };
+  if (!apply) {
+    return {
+      ...plan,
+      run_id: runId,
+      dry_run: true,
+      apply_supported: true,
+      applied: 0,
+      next_action: '人工审阅后加 --apply 执行；执行会写目标笔记，merge/summarize 还会关闭源。',
+    };
+  }
+
+  const maxChangeRatio = Number(options.maxChangeRatio ?? 0.05);
+  if (plan.stats.estimated_change_ratio > maxChangeRatio) {
+    return {
+      ...plan,
+      ok: false,
+      status: 'aborted',
+      reason: 'change_ratio_exceeded',
+      run_id: runId,
+      dry_run: false,
+      applied: 0,
+      message: `预计改动 ${plan.stats.touched_sources} 条现有笔记（写 ${plan.stats.estimated_write_ops} 个文件），改动率 ${(plan.stats.estimated_change_ratio * 100).toFixed(1)}% 超过 ${Math.round(maxChangeRatio * 100)}% 保险丝；本次不写任何文件。`,
+    };
+  }
+
+  const isCandidate = plan.mode === 'promote';
+  const targetPath = isCandidate ? candidatePath(ctx.store, plan.target_id) : notePath(ctx.store, plan.target_id);
+  if (existsSync(targetPath)) {
+    return {
+      ...plan,
+      ok: false,
+      status: 'aborted',
+      reason: 'target_exists',
+      run_id: runId,
+      dry_run: false,
+      applied: 0,
+      target_path: targetPath,
+      message: '目标 id 已有文件；拒绝对既有笔记做内容覆盖。',
+    };
+  }
+
+  // 预检：任何源在提案之后被改过，整单拒绝，不做「能写几条写几条」。
+  const sources = [];
+  for (const view of plan.sources) {
+    const fresh = readNote(ctx.store, view.id);
+    if (!fresh.ok) {
+      return { ...plan, ok: false, status: 'aborted', reason: 'source_changed', run_id: runId, dry_run: false, applied: 0, source_id: view.id, detail: 'source_unreadable' };
+    }
+    if (sha256(fresh.body, 32) !== view.body_sha256) {
+      return { ...plan, ok: false, status: 'aborted', reason: 'source_changed', run_id: runId, dry_run: false, applied: 0, source_id: view.id, detail: 'body_changed' };
+    }
+    if (fresh.note.status !== 'active' || fresh.note.superseded_by || fresh.note.valid_to) {
+      return { ...plan, ok: false, status: 'aborted', reason: 'source_changed', run_id: runId, dry_run: false, applied: 0, source_id: view.id, detail: 'fields_changed' };
+    }
+    sources.push({ view, fresh, before: metaOf(fresh.note) });
+  }
+
+  const draft = materializeContentDraft(plan.mode, plan.target.body);
+  const target = {
+    ...plan.target,
+    status: isCandidate ? 'draft' : 'active',
+    requires_review: isCandidate,
+    apply_supported: false,
+    body: draft,
+    body_sha256: sha256(draft, 32),
+    chars: [...draft].length,
+    tokens: estimateTokens(draft),
+    provenance: {
+      ...plan.target.provenance,
+      written_by: `consolidator:${plan.mode}`,
+    },
+  };
+  const targetText = renderNote(target, draft);
+  const targetTextSha = sha256(targetText, 32);
+  const targetBucket = isCandidate ? 'candidates' : 'notes';
+  const targetRelative = isCandidate ? `notes/candidates/${target.id}.md` : `notes/${target.id}.md`;
+
+  ctx.ensure();
+  const planSaved = writeContentRunPlan(ctx.store, {
+    ...plan,
+    runId,
+    dry_run: false,
+    target: { ...target, body: undefined },
+    options: { max_change_ratio: maxChangeRatio },
+  });
+  if (!planSaved.ok) {
+    return { ...plan, ok: false, status: 'aborted', reason: 'plan_write_failed', run_id: runId, dry_run: false, applied: 0, error: planSaved.error };
+  }
+
+  const targetWritten = isCandidate
+    ? writeCandidateAtomic(ctx.store, target.id, targetText)
+    : writeNoteAtomic(ctx.store, target.id, targetText);
+  if (!targetWritten.ok) {
+    return {
+      ...plan,
+      ok: false,
+      status: 'aborted',
+      reason: 'target_write_failed',
+      run_id: runId,
+      plan_path: planSaved.path,
+      dry_run: false,
+      applied: 0,
+      error: targetWritten.error,
+    };
+  }
+
+  const appliedSources = [];
+  let failure = null;
+  if (!isCandidate) {
+    for (const { view, fresh, before } of sources) {
+      const after = { ...before, valid_to: isoLocal(nowMs), superseded_by: target.id };
+      const updated = { ...fresh.note, ...after };
+      const text = renderNote(updated, fresh.body);
+      const written = writeNoteAtomic(ctx.store, view.id, text);
+      if (!written.ok) {
+        failure = { id: view.id, reason: 'write_failed', error: written.error };
+        break;
+      }
+      appliedSources.push({
+        id: view.id,
+        before,
+        after: { ...after, body_sha256: sha256(fresh.body, 16) },
+        body_sha256: sha256(fresh.body, 16),
+        before_text_sha256: sha256(fresh.text, 16),
+        after_text_sha256: sha256(text, 16),
+      });
+    }
+  }
+
+  const rollbackContent = () => {
+    const restored = restoreApplied(ctx.store, appliedSources);
+    let deleted = false;
+    try {
+      unlinkSync(targetWritten.path);
+      deleted = true;
+    } catch {
+      /* 目标本来就没写成功时也会走到这里 */
+    }
+    invalidateStore(ctx.store);
+    return { ...restored, target_deleted: deleted };
+  };
+
+  if (failure) {
+    const rollback = rollbackContent();
+    return {
+      ...plan,
+      ok: false,
+      status: 'aborted',
+      reason: 'source_write_failed',
+      run_id: runId,
+      plan_path: planSaved.path,
+      dry_run: false,
+      applied: 0,
+      failure,
+      rolled_back: rollback.ok && rollback.target_deleted,
+      rollback,
+    };
+  }
+
+  const receipt = buildContentReceipt({
+    plan: { ...plan, runId, options: { max_change_ratio: maxChangeRatio } },
+    store: ctx.store,
+    target: {
+      ...target,
+      path: targetRelative,
+      bucket: targetBucket,
+      text_sha256: targetTextSha,
+    },
+    sources: appliedSources,
+    nowMs,
+  });
+  const receiptSaved = writeContentRunReceipt(ctx.store, receipt);
+  if (!receiptSaved.ok) {
+    const rollback = rollbackContent();
+    return {
+      ...plan,
+      ok: false,
+      status: 'aborted',
+      reason: 'receipt_write_failed',
+      run_id: runId,
+      plan_path: planSaved.path,
+      dry_run: false,
+      applied: 0,
+      error: receiptSaved.error,
+      rolled_back: rollback.ok && rollback.target_deleted,
+      rollback,
+    };
+  }
+
+  invalidateStore(ctx.store);
+  return {
+    ok: true,
+    status: 'applied',
+    mode: plan.mode,
+    run_id: runId,
+    plan_path: planSaved.path,
+    receipt_path: receiptSaved.path,
+    dry_run: false,
+    target: {
+      id: target.id,
+      path: targetRelative,
+      bucket: targetBucket,
+      status: target.status,
+      chars: target.chars,
+      tokens: target.tokens,
+    },
+    sources: appliedSources.map((op) => op.id),
+    stats: { ...plan.stats, applied: 1 + appliedSources.length, skipped: 0, failed: 0 },
+    applied: 1 + appliedSources.length,
+    reversible: true,
+    receipt,
+  };
+}
+
 /**
  * `tabellio consolidate`：M2 的显式巩固。
  *
@@ -1256,6 +1497,162 @@ export function undoConsolidation(ctx, ref, options = {}) {
     restored: restored.length,
     skipped: skipped.length,
     operations: restored,
+  };
+}
+
+
+/**
+ * 撤销一次内容类巩固：先全量预检，再恢复源元数据，最后删除目标笔记。
+ *
+ * 与元数据撤销一样，只要有一条笔记的当前状态不是回执里的 after，就整单拒绝。
+ * 目标文件用**全文 hash** 校验，避免用户改过目标正文后撤销把改动一起删掉。
+ */
+export function undoContentConsolidation(ctx, ref, options = {}) {
+  const got = readAnyRunReceipt(ctx.store, ref);
+  if (!got.ok) {
+    return { ok: false, status: 'unreadable', run_id: null, error: got.error };
+  }
+  if (got.schema !== CONTENT_RECEIPT_SCHEMA) {
+    return { ok: false, status: 'wrong_schema', run_id: got.receipt?.runId ?? null, schema: got.schema };
+  }
+  const receipt = got.receipt;
+  const integrity = got.integrity ?? contentReceiptIntegrity(receipt);
+  if (!integrity.ok) {
+    return { ok: false, status: 'tampered', run_id: receipt.runId, receipt_path: got.path, problems: integrity.problems };
+  }
+
+  const prior = readUndoRecord(ctx.store, receipt.runId);
+  if (prior.ok) {
+    return {
+      ok: true,
+      status: 'already_undone',
+      run_id: receipt.runId,
+      receipt_path: got.path,
+      undo_path: prior.path,
+      restored: 0,
+      skipped: (receipt.operations ?? []).length,
+      target_deleted: false,
+    };
+  }
+
+  const targetPath =
+    receipt.target?.bucket === 'candidates'
+      ? candidatePath(ctx.store, receipt.target.id)
+      : notePath(ctx.store, receipt.target.id);
+  const conflicts = [];
+  const skipped = [];
+  const restorable = [];
+
+  let targetText = null;
+  try {
+    targetText = readFileSync(targetPath, 'utf8');
+  } catch {
+    conflicts.push({ id: receipt.target?.id, reason: 'target_missing', path: targetPath });
+  }
+  if (targetText !== null && sha256(targetText, 32) !== receipt.target?.text_sha256) {
+    conflicts.push({ id: receipt.target?.id, reason: 'target_changed' });
+  }
+
+  for (const op of [...(receipt.operations ?? [])].reverse()) {
+    if (op.op !== 'invalidate_source') continue;
+    const fresh = readNote(ctx.store, op.id);
+    if (!fresh.ok) {
+      conflicts.push({ id: op.id, reason: 'missing' });
+      continue;
+    }
+    if (sha256(fresh.body, 16) !== op.body_sha256) {
+      conflicts.push({ id: op.id, reason: 'body_changed' });
+      continue;
+    }
+    const current = metaOf(fresh.note);
+    if (sameFields(current, op.before)) {
+      skipped.push({ id: op.id, reason: 'already_restored' });
+      continue;
+    }
+    if (!sameFields(current, op.after)) {
+      conflicts.push({ id: op.id, reason: 'fields_changed', expected: op.after, actual: current });
+      continue;
+    }
+    restorable.push(op);
+  }
+
+  if (conflicts.length > 0) {
+    return {
+      ok: false,
+      status: 'conflict',
+      run_id: receipt.runId,
+      receipt_path: got.path,
+      conflicts,
+      restored: 0,
+      target_deleted: false,
+    };
+  }
+
+  const restored = restoreApplied(ctx.store, restorable);
+  if (!restored.ok) {
+    invalidateStore(ctx.store);
+    return {
+      ok: false,
+      status: 'partial',
+      run_id: receipt.runId,
+      receipt_path: got.path,
+      restored: restored.restored,
+      failed: restored.failed,
+      target_deleted: false,
+    };
+  }
+
+  // 源已经恢复，最后才删目标：这样即使删除失败，也不会出现「目标没了、源还关着」。
+  let targetDeleted = false;
+  try {
+    unlinkSync(targetPath);
+    targetDeleted = true;
+  } catch (err) {
+    invalidateStore(ctx.store);
+    return {
+      ok: false,
+      status: 'partial',
+      run_id: receipt.runId,
+      receipt_path: got.path,
+      restored: restored.restored,
+      failed: [{ id: receipt.target?.id, reason: 'target_delete_failed', error: String(err?.message ?? err) }],
+      target_deleted: false,
+    };
+  }
+
+  const record = {
+    schema: CONSOLIDATE_UNDO_SCHEMA,
+    runId: receipt.runId,
+    createdAt: isoLocal(options.nowMs ?? clockNow()),
+    store: ctx.store,
+    receipt_hash: receipt.hash,
+    restored: restored.restored,
+    skipped,
+    target_deleted: targetDeleted,
+  };
+  record.hash = undoRecordHash(record);
+  const saved = writeUndoRecord(ctx.store, record);
+  invalidateStore(ctx.store);
+  if (!saved.ok) {
+    return {
+      ok: false,
+      status: 'undo_record_write_failed',
+      run_id: receipt.runId,
+      receipt_path: got.path,
+      restored: restored.restored,
+      target_deleted: targetDeleted,
+      error: saved.error,
+    };
+  }
+  return {
+    ok: true,
+    status: restored.restored.length > 0 || targetDeleted ? 'undone' : 'already_undone',
+    run_id: receipt.runId,
+    receipt_path: got.path,
+    undo_path: saved.path,
+    restored: restored.restored.length,
+    skipped: skipped.length,
+    target_deleted: targetDeleted,
   };
 }
 

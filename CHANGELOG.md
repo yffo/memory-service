@@ -3,6 +3,15 @@
 只记**看得见的行为变化**与**改了的口径**，不记「测试通过数」这类会腐烂的状态
 （要读状态就去跑 `node --test` 与 `node bench/run-eval.mjs`）。
 
+## 未发布
+
+### 巩固：内容类 merge / summarize / promote 可 `--apply`，回执与撤销成对
+
+- **修的问题**：内容类操作此前只到提案层：人看完草稿还得手动复制成新 note、手动给源写 `valid_to`，或者干脆放弃。架构里「没有 receipt 的写入是 bug」「内容类必须有撤销」两条都空着；`docs/06` 的 §4.2 也因此把执行层标成未实现。
+- **做法**：新增 `src/core/content-receipt.js` 与 `src/api.js` 的 `applyContentConsolidation` / `undoContentConsolidation`。默认仍是 dry-run；`--apply` 后按模式执行：merge / summarize 写一条 `active` 目标，再把源写成 `valid_to` + `superseded_by`（**正文不改**）；promote 只写 `notes/candidates/` 的 `draft`，**不关闭源**，批准仍走 `inbox`。内容类 run 写 `runs/<run>.plan.json`、`runs/<run>.json`（schema `tabellio.consolidate.content/1`，只存目标与源的 hash、不存正文）与 `.undo.json`。`--undo` 先预检目标全文 hash 和每个源的正文 hash/字段，任一冲突整单拒绝；通过后先恢复源字段、再删除目标。
+- **行为**：`consolidate --merge/--summarize/--promote` 现在接受 `--apply` 与 `--max-change-ratio`；默认 5% 保险丝对内容类按「动到多少条现有笔记」算（merge = 源数，summarize = 1，promote = 0），不按写文件次数算，否则两条库上 merge 会被算成 150%。dry-run 的 `apply_supported` 变为 `true`，并带 `run_id` 与「加 --apply 执行」的 `next_action`；apply 成功返回目标、源、回执路径；中止原因包括 `change_ratio_exceeded`、`target_exists`、`source_changed`、写失败与 `receipt_write_failed`（后两者会回滚）。`--undo` 对内容类 run 返回 `target_deleted:true`。
+- **边界**：仍不接受 `--scope` / `--kinds`，不能和 `--archive` / `--undo` / 其他内容模式同用；没有自动发现、没有 LLM 摘要（merge 是去重拼接、summarize 是抽取式首句、promote 是脚手架）。回执 hash 是防误改，不是签名；promote 的候选被 `inbox --accept` 批准后，内容回执指向的候选 id 已不在候选目录，再 undo 会按 `target_missing` 拒绝。写入回执、replay、`diff.jsonl`、后台自动巩固仍未做。
+
 ## 0.1.3（2026-10-18）
 
 0.1.2 发布后 smoke test 发现包内自报版本仍是 0.1.1；0.1.3 只修这个问题，功能面与 0.1.2 相同。

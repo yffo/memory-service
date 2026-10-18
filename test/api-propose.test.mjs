@@ -6,11 +6,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { tempDir, rm } from './helpers.mjs';
-import { openStore, remember, proposeConsolidation } from '../src/api.js';
+import { openStore, remember, read, proposeConsolidation, applyContentConsolidation, undoContentConsolidation, listCandidates } from '../src/api.js';
 
 function snapshot(dir) {
   const out = {};
@@ -44,6 +44,92 @@ function seedPair(prefix = 'memory-api-propose-') {
   return { dir, ctx, a: a.id, b: b.id };
 }
 
+
+test('API applyContentConsolidation：merge 写目标、关源、回执可撤销', () => {
+  const { dir, ctx, a, b } = seedPair('memory-api-content-apply-');
+  try {
+    const r = applyContentConsolidation(ctx, { mode: 'merge', ids: [a, b], apply: true, maxChangeRatio: 1 });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(r.status, 'applied');
+    assert.equal(r.target.status, 'active');
+    assert.equal(r.receipt.schema, 'tabellio.consolidate.content/1');
+    assert.equal(r.receipt.target.id, r.target.id);
+    const target = read(ctx, r.target.id);
+    assert.equal(target.ok, true);
+    assert.match(target.body, /^# 合并：/);
+    assert.doesNotMatch(target.body, /提案草稿，未写入库/);
+    const aAfter = read(ctx, a);
+    assert.equal(aAfter.note.superseded_by, r.target.id);
+    assert.ok(aAfter.note.valid_to);
+
+    const undo = undoContentConsolidation(ctx, r.run_id);
+    assert.equal(undo.ok, true, undo.reason);
+    assert.equal(undo.target_deleted, true);
+    assert.equal(read(ctx, r.target.id).ok, false);
+    const aRestored = read(ctx, a);
+    assert.equal(aRestored.note.valid_to, null);
+    assert.equal(aRestored.note.superseded_by, null);
+    assert.equal(undoContentConsolidation(ctx, r.run_id).status, 'already_undone');
+  } finally {
+    rm(dir);
+  }
+});
+
+test('API applyContentConsolidation：默认 5% 保险丝拒绝小库 merge，且不写文件', () => {
+  const { dir, ctx, a, b } = seedPair('memory-api-content-ratio-');
+  try {
+    const before = snapshot(dir);
+    const r = applyContentConsolidation(ctx, { mode: 'merge', ids: [a, b], apply: true });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'change_ratio_exceeded');
+    assert.deepEqual(snapshot(dir), before);
+    assert.deepEqual(readdirSync(join(dir, 'runs')), []);
+  } finally {
+    rm(dir);
+  }
+});
+
+test('API applyContentConsolidation：promote 只写候选，不关源；undo 删候选', () => {
+  const dir = tempDir('memory-api-content-promote-');
+  const ctx = openStore(dir);
+  ctx.ensure();
+  const ids = [];
+  try {
+    for (let i = 1; i <= 3; i += 1) {
+      const r = remember(ctx, {
+        text: [
+          '---',
+          'kind: semantic',
+          'trust: user_stated',
+          `valid_from: 2026-10-0${i}`,
+          '---',
+          '',
+          `# 观察 ${i}`,
+          '',
+          `第 ${i} 天观察到：发布前跑全量测试。`,
+        ].join('\n'),
+        writtenBy: 'test:content',
+      });
+      assert.equal(r.ok, true, r.reason);
+      ids.push(r.id);
+    }
+    const r = applyContentConsolidation(ctx, { mode: 'promote', ids, apply: true, maxChangeRatio: 1 });
+    assert.equal(r.ok, true, r.reason);
+    assert.equal(r.target.bucket, 'candidates');
+    assert.equal(r.target.status, 'draft');
+    assert.equal(listCandidates(ctx).count, 1);
+    for (const id of ids) assert.equal(read(ctx, id).note.status, 'active');
+    assert.equal(read(ctx, r.target.id).ok, false);
+
+    const undo = undoContentConsolidation(ctx, r.run_id);
+    assert.equal(undo.ok, true, undo.reason);
+    assert.equal(undo.target_deleted, true);
+    assert.equal(listCandidates(ctx).count, 0);
+  } finally {
+    rm(dir);
+  }
+});
+
 test('API proposeConsolidation：merge 只返回提案，库目录逐字节不变', () => {
   const { dir, ctx, a, b } = seedPair();
   try {
@@ -52,7 +138,7 @@ test('API proposeConsolidation：merge 只返回提案，库目录逐字节不�
     assert.equal(plan.ok, true, plan.reason);
     assert.equal(plan.status, 'proposed');
     assert.equal(plan.dry_run, true);
-    assert.equal(plan.apply_supported, false);
+    assert.equal(plan.apply_supported, true);
     assert.equal(plan.would_write, false);
     assert.equal(plan.target.path.startsWith('notes/'), true);
     assert.equal(plan.target.status, 'draft');
@@ -118,6 +204,24 @@ test('API proposeConsolidation：summarize 一条长记录，目标只在提案�
     assert.match(plan.target.body, /^# 摘要提案：发布流程/);
     assert.match(plan.target.body, /<!-- 摘要自：/);
     assert.deepEqual(snapshot(dir), before);
+  } finally {
+    rm(dir);
+  }
+});
+
+test('API undoContentConsolidation：目标被改过时整单拒绝，源保持关闭', () => {
+  const { dir, ctx, a, b } = seedPair('memory-api-content-undo-conflict-');
+  try {
+    const r = applyContentConsolidation(ctx, { mode: 'merge', ids: [a, b], apply: true, maxChangeRatio: 1 });
+    assert.equal(r.ok, true, r.reason);
+    const file = join(dir, r.target.path);
+    writeFileSync(file, readFileSync(file, 'utf8') + '\n外部追加。\n', 'utf8');
+    const undo = undoContentConsolidation(ctx, r.run_id);
+    assert.equal(undo.ok, false);
+    assert.equal(undo.status, 'conflict');
+    assert.ok(undo.conflicts.some((c) => c.reason === 'target_changed'));
+    assert.equal(read(ctx, r.target.id).ok, true);
+    assert.equal(read(ctx, a).note.superseded_by, r.target.id);
   } finally {
     rm(dir);
   }

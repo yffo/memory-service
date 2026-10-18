@@ -45,7 +45,7 @@ DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自�
 - **文件是唯一真相源**：任何时刻可 `cat`、可 git、可带走；索引可以丢，事实不能丢。
 - **写入过闸门**：去重、长度、信任分级、破坏性改写，全部 fail-closed；拒绝是正常结果。
 - **预算感知**：调用方给 token 预算，服务端裁剪并说明裁掉了什么。
-- **可解释（M1 + M2：回执 / 巩固 / 撤销）**：`recall` 返回分数拆解、来源与 `budget.dropped`；加 `--receipt` / `--save-receipt` 会把这次判断落成可核验回执（不含正文，只记 `noteSha256`），`explain` 逐条解释纳入 / 未纳入 / 预算丢弃，`verify` 核对回执是否被改、库是否漂移。`consolidate` 默认只出计划，`--apply` 才写元数据并留巩固回执，`--undo` 可整单撤销；当前支持 `invalidate`（按 `supersedes` 失效）与显式 `archive`（只改 `status`，不写有效期），两者都只动元数据。`--merge` / `--summarize` / `--promote` 只出内容类提案（草稿、不落盘，`--apply` 退 2），执行层、写入回执与后台自动巩固仍未做。
+- **可解释（M1 + M2：回执 / 巩固 / 撤销）**：`recall` 返回分数拆解、来源与 `budget.dropped`；加 `--receipt` / `--save-receipt` 会把这次判断落成可核验回执（不含正文，只记 `noteSha256`），`explain` 逐条解释纳入 / 未纳入 / 预算丢弃，`verify` 核对回执是否被改、库是否漂移。`consolidate` 默认只出计划，`--apply` 才写元数据并留巩固回执，`--undo` 可整单撤销；当前支持 `invalidate`（按 `supersedes` 失效）与显式 `archive`（只改 `status`，不写有效期），两者都只动元数据。`--merge` / `--summarize` / `--promote` 默认只出内容类提案；加 `--apply` 会写目标，merge/summarize 还会把源写成 `valid_to` + `superseded_by`（正文不动），promote 只写候选、不关源；内容类 run 有独立回执与 `--undo`。写入回执与后台自动巩固仍未做。
 
 用法、命令清单、`--json` 的冻结形状、库布局：[docs/07-usage.md](docs/07-usage.md)。
 
@@ -60,7 +60,7 @@ DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自�
 | 携带 ≥8 次、一次没被翻开 | **23 条** |
 | 能不能证明「让回答变好」 | **不能**（指标只到「后来被打开」） |
 
-结论：push 式注入的信息密度太低，而且没有评测就没有方向。tabellio 当前已落地的不同：**默认 pull**、**评测先行**、**索引分层**、**可核验回执**；巩固已开工（显式 `consolidate`：invalidate + archive + 回执 + 撤销；merge / summarize / promote 已有不落盘的提案层），**内容类执行层**与后台自动巩固仍是 M2 计划。
+结论：push 式注入的信息密度太低，而且没有评测就没有方向。tabellio 当前已落地的不同：**默认 pull**、**评测先行**、**索引分层**、**可核验回执**；巩固已开工（显式 `consolidate`：invalidate + archive + 回执 + 撤销；merge / summarize / promote 默认提案、`--apply` 执行且有内容类回执与撤销），**后台自动巩固**仍是 M2 计划。
 
 **但这不是替代关系**（2026-10-16 的项目决定：旧插件不许冻结 —— 「一个不变的项目没有任何意义」）：旧插件继续迭代，新能力优先在它身上验证；通用化与跨宿主的部分进本项目。两条线共享一个 `memory-core` 内核。
 
@@ -79,7 +79,7 @@ DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自�
 | [docs/08-eval-runbook.md](docs/08-eval-runbook.md) | 评测跑法与判据 | 已完成 |
 | [docs/09-naming.md](docs/09-naming.md) | 命名调研（为什么叫 tabellio） | 已完成 |
 
-> 状态口径（2026-10-18）：**M1**（CLI + MCP + 检索闸门 + 导入 + 判据 1 评测）已完成；**M2** 已开工（读取回执 / `explain` / `verify` / 显式巩固 `consolidate`（invalidate / archive）/ `undo` 已实现；合并、摘要、提升的**提案层**已实现、执行层未做；`setup` + `capture` / `inbox` 上手闭环已实现；Claude Code SessionEnd 钩子已实现、默认不装、只生成候选；`--session-start` 可在会话开始提示待批准候选（只读）；自动衰减、写入回执与后台自动巩固未做）；**M3** 分发侧完成（npm 包 + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐。调研文档截至 2026-10；2026 H2 的模型原生记忆与托管服务尚未纳入。
+> 状态口径（2026-10-18）：**M1**（CLI + MCP + 检索闸门 + 导入 + 判据 1 评测）已完成；**M2** 已开工（读取回执 / `explain` / `verify` / 显式巩固 `consolidate`（invalidate / archive）/ `undo` 已实现；合并、摘要、提升的**提案层与执行层**（`--apply` + 内容类回执 + `undo`）已实现；`setup` + `capture` / `inbox` 上手闭环已实现；Claude Code SessionEnd 钩子已实现、默认不装、只生成候选；`--session-start` 可在会话开始提示待批准候选（只读）；自动衰减、写入回执与后台自动巩固未做）；**M3** 分发侧完成（npm 包 + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐。调研文档截至 2026-10；2026 H2 的模型原生记忆与托管服务尚未纳入。
 
 ## 纪律（一开始就定下来，免得重蹈覆辙）
 

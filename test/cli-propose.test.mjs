@@ -71,7 +71,7 @@ test('CLI consolidate --merge：只出提案，笔记与 runs/ 都不变', () =>
     assert.equal(r.json.status, 'proposed');
     assert.equal(r.json.mode, 'merge');
     assert.equal(r.json.dry_run, true);
-    assert.equal(r.json.apply_supported, false);
+    assert.equal(r.json.apply_supported, true);
     assert.equal(r.json.would_write, false);
     assert.match(r.json.target.path, /^notes\/[0-9A-HJKMNP-TV-Z]{26}\.md$/);
     assert.equal(r.json.target.status, 'draft');
@@ -94,21 +94,51 @@ test('CLI consolidate --merge：人读输出有提案、目标、草稿预览', 
     assert.match(r.stdout, /\[提案\] 合并：2 条源/);
     assert.match(r.stdout, /目标：notes\//);
     assert.match(r.stdout, /--- 草稿预览 ---/);
-    assert.match(r.stdout, /下一步：人工审阅提案/);
+    assert.match(r.stdout, /下一步：人工审阅后加 --apply 执行/);
   } finally {
     rm(dir);
   }
 });
 
-test('CLI consolidate 内容类提案：--apply 明确拒绝并退 2', () => {
+test('CLI consolidate 内容类 --apply：默认 5% 保险丝拒绝小库并退 1', () => {
   const { dir, a, b } = seedPair('memory-cli-propose-apply-');
   try {
     const before = getNote(dir, a);
     const r = cli(['consolidate', '--merge', `${a},${b}`, '--apply', '--json'], { store: dir });
-    assert.equal(r.code, 2);
-    assert.match(r.stderr, /只出提案，--apply 尚未实现/);
+    assert.equal(r.code, 1);
+    assert.equal(r.json.ok, false);
+    assert.equal(r.json.reason, 'change_ratio_exceeded');
     assert.equal(getNote(dir, a).body, before.body);
     assert.deepEqual(runsFiles(dir), []);
+  } finally {
+    rm(dir);
+  }
+});
+
+test('CLI consolidate 内容类 --apply：写目标、关源，--undo 恢复并删目标', () => {
+  const { dir, a, b } = seedPair('memory-cli-propose-applied-');
+  try {
+    const r = cli([
+      'consolidate', '--merge', `${a},${b}`, '--apply', '--max-change-ratio', '1', '--json',
+    ], { store: dir });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.json.ok, true);
+    assert.equal(r.json.status, 'applied');
+    assert.equal(r.json.target.status, 'active');
+    assert.match(getNote(dir, r.json.target.id).body, /^# 合并：/);
+    assert.equal(getNote(dir, a).note.superseded_by, r.json.target.id);
+
+    const human = cli([
+      'consolidate', '--merge', `${a},${b}`, '--apply', '--max-change-ratio', '1',
+    ], { store: dir });
+    assert.equal(human.code, 1, '源已被上一条关闭，重复执行应当失败而不是伪造成功');
+
+    const undo = cli(['consolidate', '--undo', r.json.run_id, '--json'], { store: dir });
+    assert.equal(undo.code, 0, undo.stderr);
+    assert.equal(undo.json.status, 'undone');
+    assert.equal(undo.json.target_deleted, true);
+    assert.equal(getNote(dir, a).note.valid_to, null);
+    assert.equal(cli(['read', '--id', r.json.target.id, '--json'], { store: dir }).code, 1);
   } finally {
     rm(dir);
   }
@@ -130,8 +160,9 @@ test('CLI consolidate 内容类提案：模式互斥、缺源、与 archive 混�
     assert.match(withArchive.stderr, /不能和 --archive/);
 
     const withRatio = cli(['consolidate', '--merge', `${a},${b}`, '--max-change-ratio', '0.1', '--json'], { store: dir });
-    assert.equal(withRatio.code, 2);
-    assert.match(withRatio.stderr, /不接受/);
+    assert.equal(withRatio.code, 0, withRatio.stderr);
+    assert.equal(withRatio.json.ok, true);
+    assert.equal(withRatio.json.apply_supported, true);
   } finally {
     rm(dir);
   }

@@ -11,7 +11,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { paths } from './vault.js';
-import { consolidateReceiptProblems, receiptIntegrity } from '../core/consolidate.js';
+import { consolidateReceiptProblems, receiptIntegrity, CONSOLIDATE_SCHEMA } from '../core/consolidate.js';
+import { contentReceiptProblems, contentReceiptIntegrity, CONTENT_RECEIPT_SCHEMA } from '../core/content-receipt.js';
 
 const RUN_ID_RE = /^run_[0-9A-HJKMNP-TV-Z]{26}$/;
 
@@ -58,6 +59,16 @@ export function writeRunPlan(storePath, plan) {
   if (!isRunId(id)) return errorOf('E_RUN_ID_INVALID', 'runId 必须是 run_ + 26 位 Crockford Base32');
   const filePath = runPlanPath(storePath, id);
   const doc = { schema: 'tabellio.consolidate.plan/1', ...plan };
+  return writeJsonNoOverwrite(filePath, doc, 'E_RUN_PLAN_WRITE');
+}
+
+
+/** 写内容类巩固的计划文件（apply 前；schema 与元数据巩固区分）。 */
+export function writeContentRunPlan(storePath, plan) {
+  const id = plan?.runId;
+  if (!isRunId(id)) return errorOf('E_RUN_ID_INVALID', 'runId 必须是 run_ + 26 位 Crockford Base32');
+  const filePath = runPlanPath(storePath, id);
+  const doc = { schema: 'tabellio.consolidate.content.plan/1', ...plan };
   return writeJsonNoOverwrite(filePath, doc, 'E_RUN_PLAN_WRITE');
 }
 
@@ -123,6 +134,42 @@ export function readRunPlan(storePath, ref) {
   const got = readJson(ref, (id) => runPlanPath(storePath, id), 'E_PLAN');
   if (!got.ok) return got;
   return { ok: true, plan: got.doc, path: got.path };
+}
+
+
+/** 写内容类巩固回执（与元数据回执同目录、同命名，靠 schema 区分）。 */
+export function writeContentRunReceipt(storePath, receipt) {
+  const id = receipt?.runId;
+  if (!isRunId(id)) return errorOf('E_RUN_ID_INVALID', 'runId 必须是 run_ + 26 位 Crockford Base32');
+  const shape = contentReceiptProblems(receipt);
+  if (shape.length) return errorOf('E_RUN_SHAPE', shape.join('；'));
+  const integrity = contentReceiptIntegrity(receipt);
+  if (!integrity.ok) return errorOf('E_RUN_HASH_MISMATCH', integrity.problems.join('；'));
+  const filePath = runReceiptPath(storePath, id);
+  return writeJsonNoOverwrite(filePath, receipt, 'E_RUN_RECEIPT_WRITE');
+}
+
+/**
+ * 按 schema 读任意一种巩固回执。
+ *
+ * 旧 API `readRunReceipt` 仍只接受元数据回执，避免调用方误把内容回执当元数据回执
+ * 交给 `undoConsolidation`；CLI 的 `--undo` 用这个函数先分辨再分派。
+ */
+export function readAnyRunReceipt(storePath, ref) {
+  const got = readJson(ref, (id) => runReceiptPath(storePath, id), 'E_RUN');
+  if (!got.ok) return got;
+  const schema = got.doc?.schema ?? null;
+  if (schema === CONSOLIDATE_SCHEMA) {
+    const shape = consolidateReceiptProblems(got.doc);
+    if (shape.length) return errorOf('E_RUN_SHAPE', shape.join('；'), { path: got.path });
+    return { ok: true, receipt: got.doc, path: got.path, schema, integrity: receiptIntegrity(got.doc) };
+  }
+  if (schema === CONTENT_RECEIPT_SCHEMA) {
+    const shape = contentReceiptProblems(got.doc);
+    if (shape.length) return errorOf('E_RUN_SHAPE', shape.join('；'), { path: got.path });
+    return { ok: true, receipt: got.doc, path: got.path, schema, integrity: contentReceiptIntegrity(got.doc) };
+  }
+  return errorOf('E_RUN_SCHEMA', '不认识的 consolidate receipt schema', { path: got.path, schema });
 }
 
 /** 读撤销记录（存在即说明这个 run 已撤销过）。 */

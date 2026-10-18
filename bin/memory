@@ -28,8 +28,9 @@ import {
   verifyRecallReceipt,
   explainRecall,
   consolidate,
-  proposeConsolidation,
+  applyContentConsolidation,
   undoConsolidation,
+  undoContentConsolidation,
   addCandidate,
   listCandidates,
   reviewCandidates,
@@ -44,6 +45,8 @@ import { readSourceIndex } from '../src/import/engramory.js';
 import { planSetup, applySetup } from '../src/setup.js';
 import { verifyHosts } from '../src/hostverify.js';
 import { planHookInstall, applyHookInstall, extractMemoryCandidates } from '../src/hooks.js';
+import { readAnyRunReceipt } from '../src/store/consolidate.js';
+import { CONTENT_RECEIPT_SCHEMA } from '../src/core/content-receipt.js';
 import { finiteOr } from '../src/util/text.js';
 import { VERSION } from '../src/version.js';
 
@@ -72,9 +75,9 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio verify --receipt <id|path> [--json]
   tabellio consolidate [--dry-run|--apply] [--max-change-ratio F] [--scope S] [--kinds a,b]
                     [--archive <id[,id]>]... [--json]
-  tabellio consolidate --merge <id[,id]>... [--json]       # 只出提案，不落盘
-  tabellio consolidate --summarize <id> [--json]            # 只出提案，不落盘
-  tabellio consolidate --promote <id[,id]>... [--json]      # 候选到 notes/candidates/，仍只出提案
+  tabellio consolidate --merge <id[,id]>... [--apply] [--json]       # 默认只出提案
+  tabellio consolidate --summarize <id> [--apply] [--json]            # 默认只出提案
+  tabellio consolidate --promote <id[,id]>... [--apply] [--json]      # 只写候选，不关源
   tabellio consolidate --undo <run|path> [--json]
   tabellio help | --help | -h | --version
 
@@ -300,6 +303,32 @@ function humanProposal(r) {
   return lines.join('\n');
 }
 
+
+function humanContentApply(r) {
+  if (!r.ok) {
+    const lines = [`内容类巩固中止（${r.reason}）：没有写入目标笔记`];
+    if (r.mode) lines.push(`模式：${r.mode}`);
+    if (r.run_id) lines.push(`run：${r.run_id}`);
+    if (r.source_id) lines.push(`源：${r.source_id}（${r.detail ?? 'changed'}）`);
+    if (r.failure) lines.push(`失败：${r.failure.id} ${r.failure.reason}`);
+    if (r.rolled_back !== undefined) lines.push(`回滚：${r.rolled_back ? '已回滚（目标已删除，源已恢复）' : '回滚不完整（需要人工检查）'}`);
+    if (r.error?.message) lines.push(`错误：${r.error.code ?? ''} ${r.error.message}`);
+    return lines.join('\n');
+  }
+  const s = r.stats;
+  const lines = [
+    `已应用${r.mode === 'promote' ? '候选' : '内容巩固'}：目标 ${r.target.id}（${r.target.status}）`,
+    `run：${r.run_id}`,
+    `目标：${r.target.path}（${r.target.chars} 字 / ${r.target.tokens} token）`,
+  ];
+  if (r.mode === 'promote') lines.push('源未关闭：候选规则尚未批准，原事实仍然有效。');
+  else lines.push(`源已关闭：${r.sources.length} 条（valid_to + superseded_by）`);
+  if (r.plan_path) lines.push(`计划：${r.plan_path}`);
+  if (r.receipt_path) lines.push(`回执：${r.receipt_path}（可 ` + 'consolidate --undo' + ` 撤销）`);
+  lines.push(`预计省：${s.saved_tokens >= 0 ? '省' : '多'} ${Math.abs(s.saved_tokens)} token`);
+  return lines.join('\n');
+}
+
 function humanConsolidate(r) {
   if (r.status === 'aborted') {
     const lines = [`巩固中止（${r.reason}）：计划 ${r.operations?.length ?? 0} 条，未改任何笔记`];
@@ -338,7 +367,7 @@ function humanUndo(r) {
   if (!r.ok) return `撤销失败（${r.status}）：${r.error?.code ?? ''} ${r.error?.message ?? ''}`.trim();
   const head = r.status === 'already_undone'
     ? '这次巩固已经撤销过，没有需要恢复的笔记'
-    : `已撤销：恢复 ${r.restored} 条，跳过 ${r.skipped} 条`;
+    : `已撤销：恢复 ${r.restored} 条源，跳过 ${r.skipped} 条${r.target_deleted ? '；目标笔记已删除' : ''}`;
   const lines = [head, `run：${r.run_id}`];
   if (r.undo_path) lines.push(`撤销记录：${r.undo_path}`);
   return lines.join('\n');
@@ -497,6 +526,20 @@ export async function main(argv, io = {}) {
         return r.ok ? 0 : 1;
       }
       case 'consolidate': {
+        const apply = Boolean(args.apply);
+        let maxChangeRatio = 0.05;
+        if (args['max-change-ratio'] !== undefined) {
+          const n = numArg(args['max-change-ratio'], NaN);
+          if (!Number.isFinite(n) || n < 0 || n > 1) {
+            err.write('consolidate --max-change-ratio 需要 0 到 1 之间的数（默认 0.05）\n');
+            return 2;
+          }
+          maxChangeRatio = n;
+        }
+        if (args.apply && args['dry-run']) {
+          err.write('consolidate 的 --apply 和 --dry-run 只能选一个\n');
+          return 2;
+        }
         const contentModes = ['merge', 'summarize', 'promote'].map((name) => ({ name, ...flagArgValues(argv, args, name) }));
         const selectedModes = contentModes.filter((m) => m.provided);
         if (selectedModes.length > 0) {
@@ -513,17 +556,18 @@ export async function main(argv, io = {}) {
             err.write('内容类提案不能和 --archive / --undo 同时用\n');
             return 2;
           }
-          if (args.apply) {
-            err.write('内容类操作目前只出提案，--apply 尚未实现；不会写任何文件\n');
-            return 2;
-          }
-          if (args['max-change-ratio'] !== undefined || args.scope !== undefined || args.kinds !== undefined) {
-            err.write('内容类提案不接受 --max-change-ratio / --scope / --kinds（这些是元数据巩固的参数）\n');
+          if (args.scope !== undefined || args.kinds !== undefined) {
+            err.write('内容类巩固不接受 --scope / --kinds（这些是元数据巩固的参数）\n');
             return 2;
           }
           const chosen = selectedModes[0];
-          const r = proposeConsolidation(ctx, { mode: chosen.name, ids: chosen.values });
-          emit(r, { json, human: humanProposal(r) });
+          const r = applyContentConsolidation(ctx, {
+            mode: chosen.name,
+            ids: chosen.values,
+            apply,
+            maxChangeRatio,
+          });
+          emit(r, { json, human: r.dry_run === false ? humanContentApply(r) : humanProposal(r) });
           return r.ok ? 0 : 1;
         }
         const archive = archiveArgValues(argv, args);
@@ -541,23 +585,12 @@ export async function main(argv, io = {}) {
             err.write('consolidate --undo 不能和 --apply/--dry-run/--archive 同时用\n');
             return 2;
           }
-          const r = undoConsolidation(ctx, undoRef);
+          const peek = readAnyRunReceipt(ctx.store, undoRef);
+          const r = peek.ok && peek.schema === CONTENT_RECEIPT_SCHEMA
+            ? undoContentConsolidation(ctx, undoRef)
+            : undoConsolidation(ctx, undoRef);
           emit(r, { json, human: humanUndo(r) });
           return r.ok ? 0 : 1;
-        }
-        if (args.apply && args['dry-run']) {
-          err.write('consolidate 的 --apply 和 --dry-run 只能选一个\n');
-          return 2;
-        }
-        const apply = Boolean(args.apply);
-        let maxChangeRatio = 0.05;
-        if (args['max-change-ratio'] !== undefined) {
-          const n = numArg(args['max-change-ratio'], NaN);
-          if (!Number.isFinite(n) || n < 0 || n > 1) {
-            err.write('consolidate --max-change-ratio 需要 0 到 1 之间的数（默认 0.05）\n');
-            return 2;
-          }
-          maxChangeRatio = n;
         }
         const r = consolidate(ctx, {
           apply,
