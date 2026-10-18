@@ -78,7 +78,7 @@ function planJson(host, { path, server, readOnly, force, now }) {
     mcpServers: { ...currentServers, tabellio: server },
   };
   const wouldWrite = action === 'create' || action === 'append' || action === 'update';
-  return {
+  const plan = {
     host,
     label: HOSTS[host].label,
     path,
@@ -91,8 +91,11 @@ function planJson(host, { path, server, readOnly, force, now }) {
     read_only: readOnly,
     would_write: wouldWrite,
     backup: wouldWrite && exists ? path + '.tabellio-backup-' + stampOf(now) : null,
-    preview: wouldWrite ? JSON.stringify(next, null, 2) + '\n' : null,
+    preview: null,
   };
+  // 整个配置文件可能含 env 凭据：preview 只给 apply 用，不参与 JSON 序列化。
+  if (wouldWrite) Object.defineProperty(plan, 'preview', { value: JSON.stringify(next, null, 2) + '\n', enumerable: false });
+  return plan;
 }
 
 function findTomlSection(lines) {
@@ -144,7 +147,7 @@ function planToml(host, { path, server, force, now }) {
     }
   }
   const wouldWrite = action === 'create' || action === 'append' || action === 'update';
-  return {
+  const plan = {
     host,
     label: HOSTS[host].label,
     path,
@@ -156,8 +159,11 @@ function planToml(host, { path, server, force, now }) {
     read_only: false,
     would_write: wouldWrite,
     backup: wouldWrite && existsSync(path) ? path + '.tabellio-backup-' + stampOf(now) : null,
-    preview: wouldWrite ? nextText : null,
+    preview: null,
   };
+  // 整个配置文件可能含其他服务的凭据：preview 只给 apply 用，不参与 JSON 序列化。
+  if (wouldWrite) Object.defineProperty(plan, 'preview', { value: nextText, enumerable: false });
+  return plan;
 }
 
 /**
@@ -227,6 +233,10 @@ export function applySetup(plan) {
       continue;
     }
     try {
+      if (typeof host.preview !== 'string') {
+        failed.push({ host: host.host, path: host.path, action: host.action, error: 'missing_preview' });
+        continue;
+      }
       if (host.backup) copyFileSync(host.path, host.backup);
       mkdirSync(dirname(host.path), { recursive: true });
       const tmp = host.path + '.tabellio-tmp-' + process.pid;

@@ -3,6 +3,21 @@
 只记**看得见的行为变化**与**改了的口径**，不记「测试通过数」这类会腐烂的状态
 （要读状态就去跑 `node --test` 与 `node bench/run-eval.mjs`）。
 
+## 未发布
+
+### 体检：`tabellio doctor` 一份只读报告回答「哪一环没接上」
+
+- **修的问题**：安装链路已经有 `setup` / `setup --verify` / `hook` / `schedule`，但用户出问题时得分别跑 `status`、`setup`、`hook install`（dry-run）、`schedule status` 才能拼出全貌；「配置写对了」和「宿主真能连上」仍然容易混。没有体检入口，支持成本会落回到读文档。
+- **做法**：新增 `src/doctor.js` 与 `tabellio doctor [--verify] [--json]`。它只读地聚合：库（`status` 的解析失败/索引是否陈旧/超长/待批准候选与提案）、宿主（`planSetup` 的检测与冲突/损坏状态，不输出配置正文）、Claude 钩子（SessionEnd/SessionStart/`--auto-consolidate` 是否与当前 bin/store 匹配）、macOS 定时任务（`scheduleStatus` 的已安装/已加载）。`--verify` 才调用宿主 CLI，沿用 `hostverify` 的六级分级。
+- **行为**：建议分 `error` / `warn` / `info`；解析失败、宿主配置冲突/损坏、钩子或 plist 读不了退 1，待批准候选/索引陈旧/未装钩子只是提醒退 0。空库跑完不建目录；`--json` 的 `hosts.items` 不含 `preview`，不会把别的 MCP server 的 env/token 再打印出来。`doctor` 不自动修，`setup` / `hook install` / `schedule install` 仍要用户确认。
+- **边界**：不检查 Cursor 的 GUI 连接，不把配置文件存在说成已连接；不做网络探测、不启动 MCP server；`launchctl` 不可用时只说「无法确认」，不猜已加载。证据见 `test/doctor.test.mjs`（空库、候选、宿主冲突、钩子、`--verify`、CLI 退出码）。
+
+### 安全：`setup --json` 不再回显宿主配置全文
+
+- **修的问题**：`setup` 的计划对象把整份宿主配置放在 `preview` 里，而 `--json` 直接序列化计划。只要 `~/.claude.json` / `~/.cursor/mcp.json` / `~/.codex/config.toml` 里有别的 MCP server 的环境变量或 token，`tabellio setup --json` 就会把它们打印到 stdout（日志、录屏、issue 里都会带走）。dry-run 和 `--write` 都一样。
+- **做法**：`src/setup.js` 把 `preview` 改成**不可枚举**属性，只有 `applySetup` 在进程内能读到；`JSON.stringify` / CLI 输出不再包含它。`applySetup` 增加 `missing_preview` 防御：计划若被序列化后再应用，不会把 `undefined` 写成文件。`--json` 的计划形状里不再有 `preview`。
+- **边界**：这不是加密，只是不回显；宿主配置本身的读写权限仍由用户与宿主控制。`setup --write` 仍会原样保留配置文件里的其他字段。
+
 ## 0.1.4（2026-10-19）
 
 本次发布把 0.1.3 之后的 M2 能力一次发出去：内容类巩固执行层、自动发现提案、macOS launchd 定时自动发现。

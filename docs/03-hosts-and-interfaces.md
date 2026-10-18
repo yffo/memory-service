@@ -183,6 +183,14 @@ tabellio hook uninstall --host claude --write
 - **默认 dry-run**：不加 `--write` 不写文件、不调用 `launchctl`。加载失败时 plist 保留、命令退 1；
   卸载只删自己的 label。完整用法、退出码与真实 launchd E2E 见 `docs/07-usage.md` §15。
 
+### 3.0.3 只读体检（`tabellio doctor`）
+
+`setup --verify` 只回答「宿主连没连上」；`doctor` 把整条链路摊开：库健康、宿主配置、Claude 钩子、macOS 定时任务，以及下一步该跑什么。它**不修任何东西**，跑空库也不会创建目录；只有 `--verify` 会调用宿主 CLI，并沿用 §3.0 的分级。
+
+- 建议分 `error` / `warn` / `info`：解析失败、宿主配置冲突/损坏、钩子或 plist 读不了是 `error`（退 1）；待批准候选、索引陈旧、未装钩子只是提醒（退 0）。
+- `--json` 的 `hosts.items` 只给 `host/path/action/ok/error`，不包含宿主配置正文，避免把别的 MCP server 的 env/token 又打出来。
+- 不检查 Cursor 的 GUI 状态，也不把「配置文件存在」说成「已连接」；真实证据见 `test/doctor.test.mjs`。
+
 ### 3.1 Claude Code（最完整，也最会在细节上咬人）
 
 - 配置：三种作用域 —— Local（默认，存 `~/.claude.json` 该项目路径下，不共享）/ Project（项目根 `.mcp.json`，可入 git 共享，需批准）/ User（`~/.claude.json`，所有项目）。来源：https://code.claude.com/docs/en/mcp.md#mcp-installation-scopes

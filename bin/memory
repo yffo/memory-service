@@ -47,6 +47,7 @@ import {
 import { readSourceIndex } from '../src/import/engramory.js';
 import { planSetup, applySetup } from '../src/setup.js';
 import { verifyHosts } from '../src/hostverify.js';
+import { buildDoctorReport } from '../src/doctor.js';
 import { planHookInstall, applyHookInstall, extractMemoryCandidates } from '../src/hooks.js';
 import {
   planScheduleInstall,
@@ -75,6 +76,7 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio capture  --file <path.md|-> [--source REF] [--kind k] [--tags a,b] [--dry] [--json]
   tabellio inbox    [--accept <id[,id]>]... [--reject <id[,id]>]... [--dry] [--json]  # 候选和自动巩固提案都能批
 
+  tabellio doctor   [--verify] [--json]                # 只读体检：库 / 宿主配置 / 钩子 / 定时任务
   tabellio setup    [--host claude,cursor,codex|all] [--write] [--verify] [--force] [--read-only] [--json]
   tabellio hook install   --host claude [--session-start] [--auto-consolidate] [--write] [--force] [--json]  # 默认只装 SessionEnd
   tabellio hook uninstall --host claude [--write] [--json]
@@ -436,7 +438,7 @@ export async function main(argv, io = {}) {
     out.write(`${VERSION}\n`);
     return 0;
   }
-  if (!['status', 'index', 'search', 'read', 'remember', 'capture', 'inbox', 'setup', 'hook', 'schedule', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths'].includes(command)) {
+  if (!['status', 'index', 'search', 'read', 'remember', 'capture', 'inbox', 'doctor', 'setup', 'hook', 'schedule', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths'].includes(command)) {
     err.write(`未知命令：${command}\n\n${USAGE}\n`);
     return 2;
   }
@@ -789,6 +791,23 @@ export async function main(argv, io = {}) {
         emit(result, { json, human: renderReview(result) });
         return result.ok ? 0 : 1;
 
+      }
+      case 'doctor': {
+        if (args.home === true || args['mcp-bin'] === true) {
+          err.write('doctor 的参数缺值：--home / --mcp-bin\n');
+          return 2;
+        }
+        const home = args.home ? resolve(String(args.home)) : homedir();
+        const report = buildDoctorReport({
+          ctx,
+          bin: resolve(join(HERE, 'memory')),
+          mcpBin: args['mcp-bin'] ? resolve(String(args['mcp-bin'])) : resolve(join(HERE, 'memory-mcp')),
+          home,
+          platform: process.env.TABELLIO_SCHEDULE_PLATFORM || process.platform,
+          verify: Boolean(args.verify),
+        });
+        emit(report, { json, human: renderDoctor(report) });
+        return report.ok ? 0 : 1;
       }
       case 'setup': {
         if (args.host === true || args.command === true || args['mcp-bin'] === true) {
@@ -1401,6 +1420,78 @@ function renderScheduleStatus(r) {
   if (r.store) lines.push('库：' + r.store);
   lines.push('日志：' + r.out_log);
   if (r.checked && !r.loaded && r.detail) lines.push('launchd 说：' + r.detail);
+  return lines.join('\n');
+}
+
+function renderDoctor(r) {
+  const lines = ['tabellio doctor（只读体检，不会修任何东西）'];
+  const hasContent = r.store.notes > 0 || r.store.candidates > 0 || r.store.proposals > 0 || r.store.index_exists;
+  lines.push('库：' + r.store.path + (hasContent ? '' : '（还没有笔记）'));
+
+  if (hasContent) {
+    lines.push('笔记：' + r.store.notes + ' 条（核心 ' + r.store.core + '）  |  候选：' + r.store.candidates + ' 条  |  提案：' + r.store.proposals + ' 条');
+    const indexState = !r.store.index_exists ? '未生成' : r.store.index_stale ? '陈旧（条数对不上）' : '正常';
+    lines.push('索引：' + indexState + (r.store.index_exists ? '（' + r.store.index_lines + ' 行 / ' + r.store.index_bytes + ' 字节，列出 ' + r.store.index_listed + '/' + r.store.notes + '）' : ''));
+    if (r.store.parse_failures > 0) lines.push('解析失败：' + r.store.parse_failures + ' 个文件（已退出检索面）');
+    if (r.store.oversize_chars > 0 || r.store.oversize_tokens > 0) {
+      lines.push('超长：' + r.store.oversize_chars + ' 条按字、' + r.store.oversize_tokens + ' 条按 token');
+    }
+  }
+
+  if (r.hosts.detected.length > 0) {
+    lines.push('宿主：' + r.hosts.detected.join(' / '));
+    for (const h of r.hosts.items) {
+      const state = h.action === 'unchanged'
+        ? '已配置'
+        : h.action === 'conflict'
+          ? '已有冲突配置（指向别处）'
+          : h.action === 'invalid'
+            ? '配置读取失败'
+            : '还没配置（setup 待写）';
+      lines.push('  - ' + h.label + '：' + state + ' — ' + h.path);
+    }
+  } else {
+    lines.push('宿主：没有检测到已安装的 Claude Code / Cursor / Codex');
+  }
+  if (r.hosts.verification) lines.push(renderVerification(r.hosts.verification));
+
+  if (r.hook) {
+    const parts = [
+      r.hook.session_end ? '会话结束 ✓' : '会话结束未装',
+      r.hook.auto_consolidate ? '自动发现 ✓' : '自动发现未开',
+      r.hook.session_start ? '待办提示 ✓' : '待办提示未装',
+    ];
+    lines.push('Claude 钩子：' + parts.join(' / '));
+    lines.push('  配置：' + r.hook.path);
+  } else {
+    lines.push('Claude 钩子：没有检测到 Claude Code，未检查');
+  }
+
+  if (r.schedule && r.schedule.supported) {
+    const state = !r.schedule.installed
+      ? '未安装'
+      : r.schedule.checked
+        ? (r.schedule.loaded ? '已安装并加载' : '已写盘但未加载')
+        : '已安装（launchctl 不可用，无法确认加载状态）';
+    lines.push('定时发现：' + state + (r.schedule.interval_minutes ? '（每 ' + scheduleIntervalLabel(r.schedule.interval_minutes) + '）' : ''));
+  } else if (r.schedule) {
+    lines.push('定时发现：当前平台不支持（只支持 macOS launchd）');
+  }
+
+  lines.push('');
+  if (r.actions.length === 0) {
+    lines.push('建议：没有需要处理的事。');
+  } else {
+    const mark = { error: '!', warn: '⚠', info: '·' };
+    lines.push('建议：');
+    for (const a of r.actions) {
+      lines.push('  ' + (mark[a.severity] ?? '·') + ' ' + a.title);
+      if (a.detail) lines.push('     ' + a.detail);
+      if (a.command) lines.push('     → ' + a.command);
+    }
+  }
+  for (const e of r.errors ?? []) lines.push('  ! ' + e.scope + '：' + e.message);
+  lines.push(r.ok ? '结论：没有阻塞问题。' : '结论：有需要处理的问题（退出码 1）。');
   return lines.join('\n');
 }
 

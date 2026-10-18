@@ -32,11 +32,11 @@ aliases: [acme-editor, 编辑器]  # 可选：作者给的同义说法，只参�
 正文上限 **400 字 / 200 token** —— 超了闸门会拒，并且告诉你超了多少。
 超过一条事实该有的量，说明该拆成多条（`tabellio import` 会自动切）。
 
-## 十五个命令
+## 十六个命令
 
-`setup` / `status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `capture` / `inbox` / `hook` / `schedule` / `import`（另有 `paths` 查路径）。
+`setup` / `doctor` / `status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `capture` / `inbox` / `hook` / `schedule` / `import`（另有 `paths` 查路径）。
 
-`setup` 只写宿主的 MCP 配置，不碰记忆库；`hook` 把 Claude Code 的会话结束事件接到候选箱（默认不装）；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改库的入口**：默认只出计划，`--apply` 才动；元数据操作只改字段，内容类操作会写目标并关闭源，两者都能 `--undo`。`--merge` / `--summarize` / `--promote` 默认只出**内容类提案**，`--apply` 才执行；`--auto` 自动发现近似重复，但只写待批准提案，不直接改库。`schedule` 在 macOS 上给这条发现加一个可选的 launchd 定时器，仍然只产提案。
+`setup` 只写宿主的 MCP 配置，不碰记忆库；`hook` 把 Claude Code 的会话结束事件接到候选箱（默认不装）；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改库的入口**：默认只出计划，`--apply` 才动；元数据操作只改字段，内容类操作会写目标并关闭源，两者都能 `--undo`。`--merge` / `--summarize` / `--promote` 默认只出**内容类提案**，`--apply` 才执行；`--auto` 自动发现近似重复，但只写待批准提案，不直接改库。`schedule` 在 macOS 上给这条发现加一个可选的 launchd 定时器，仍然只产提案。`doctor` 是只读体检：把库、宿主配置、钩子和定时任务的状态收成一份报告，不修任何东西。
 
 `search` 与 `recall` 的分工：前者给**指针**（pull，读哪条由调用方决定），后者一步给出
 **可直接进上下文**的正文（按 token 预算裁剪、带拒答）；两者都零模型调用。
@@ -534,7 +534,7 @@ $ node bin/memory setup --host cursor --read-only --write
 - 已有**不同**的 `tabellio` 配置：默认整单 `conflict`、一份都不写；`--force` 才覆盖。JSON/TOML 解析失败也是整单 `invalid_config`，不写半份。
 - 退出码：成功/已存在 0；冲突、无宿主、解析失败、写失败、`--verify` 明确失败 1；参数缺值 2。
 
-`--json` 的计划里有 `{ok, reason, dry_run:true, hosts:[{host,label,path,kind,action,ok,exists,current,desired,read_only,would_write,backup,preview}], server, store, mcp_bin, command}`；`action` 是 `create|append|update|unchanged|conflict|invalid`。`--write` 后额外有 `{dry_run:false, applied:[{host,path,action,written,backup}], failed:[]}`。
+`--json` 的计划里有 `{ok, reason, dry_run:true, hosts:[{host,label,path,kind,action,ok,exists,current,desired,read_only,would_write,backup}], server, store, mcp_bin, command}`；`action` 是 `create|append|update|unchanged|conflict|invalid`。**没有 `preview`**：计划内部用完整文件文本落盘，但宿主配置可能含 `env` 凭据，所以它不参与 JSON 序列化。`--write` 后额外有 `{dry_run:false, applied:[{host,path,action,written,backup}], failed:[]}`。
 
 **`--verify`：让宿主自己回答「连上了吗」**
 
@@ -777,6 +777,43 @@ node bin/memory schedule uninstall --write       # 从 launchd 卸载并删除 p
 `~/Library/LaunchAgents` 无残留。单元测试用可注入的 `run` 覆盖 apply 顺序、
 冲突、加载失败、卸载与 XML 转义，不依赖真实 launchd。
 
+### 16. `doctor` —— 只读体检，不替你修
+
+```bash
+node bin/memory doctor                     # 人读报告
+node bin/memory doctor --json              # 机器可读（形状见下）
+node bin/memory doctor --verify            # 额外让宿主 CLI 自查连接（Claude 才会真连）
+```
+
+它回答「现在到底哪一环没接上」，不要求你先读一堆文档：
+
+- **库**：有没有内容、核心档条数、索引是否生成/陈旧、解析失败数、超长条数、待批准候选/提案数。
+- **宿主**：检测到哪些宿主；每个宿主的 MCP 配置是已配置、待写、冲突还是读不了；不会输出配置正文。
+- **Claude 钩子**：SessionEnd / SessionStart / `--auto-consolidate` 各自装没装，是否与当前 bin/store 匹配。
+- **定时发现**：plist 在不在、launchd 加载没有；`launchctl` 不可用时只说无法确认，不猜。
+- **建议**：按 `error` / `warn` / `info` 列出要处理的事和可直接复制的下一步命令。
+
+**只读**：不 `ensure`、不重建索引、不写宿主配置、不写提案、不批准候选。空库跑完仍然没有目录；只有 `--verify` 会调用宿主 CLI（用配置临时副本，见 §11 的 `--verify`），而且只在该宿主的配置已经指向当前 bin/store 时才真正验证——否则宿主验的是旧配置，`connected` 会误导。
+
+**退出码**：没有 `error` 级问题退 0（待批准候选、索引陈旧、未装钩子都只是 warn/info，不会让脚本失败）；库解析失败、宿主配置冲突/损坏、钩子或 plist 读不了退 1；`--home` 等参数缺值退 2。
+
+**JSON 形状**（开发用）：
+
+```json
+{
+  "ok": true,
+  "store": {"path":"…","exists":true,"notes":12,"core":2,"index_exists":true,"index_stale":false,
+            "parse_failures":0,"oversize_chars":0,"oversize_tokens":0,"candidates":1,"proposals":0},
+  "hosts": {"detected":["claude"],"items":[{"host":"claude","action":"unchanged","ok":true}],
+            "setup_ok":true,"setup_reason":null},
+  "hook": {"ok":true,"session_end":true,"session_start":false,"auto_consolidate":false,"matches_current":true},
+  "schedule": {"ok":true,"supported":true,"installed":false,"loaded":false,"checked":false},
+  "actions": [{"id":"inbox:pending","severity":"warn","title":"…","detail":"…","command":"tabellio inbox"}]
+}
+```
+
+`hosts.items` 不包含 `preview` / 配置正文；`--verify` 时多一个 `hosts.verification`，沿用 `connected` / `configured` / `unverified` / `unavailable` / `failed` / `missing` 六级。**边界**：它不是修复器，也不会替你看 Cursor 的 GUI；`setup` / `hook install` / `schedule install` 仍要你确认后自己跑。
+
 ## 评测（开发用，可零模型）
 
 ```bash
@@ -863,8 +900,8 @@ id 前缀是人写文件时形成的天然主题，组数与组内条数都在�
 
 | 码 | 含义 |
 | --- | --- |
-| 0 | 成功（拒绝也是成功的回答 —— `search` 的 `refused`、`remember` 的 `deny`、`inbox --reject` 的成功拒绝都算；`setup` 的 dry-run / `unchanged`、`hook` 的 dry-run / `unchanged`、内部 SessionEnd / SessionStart 命令的错误也都算） |
-| 1 | 判定拒绝 / 库不健康 / 回执或巩固失败（`read` 找不到、`remember` deny、`capture` 拒收、`inbox` 有失败项、`index` 有笔记走不到或 `stale`、`verify` 不是 `verified`、`recall --save-receipt` 落盘失败、`consolidate` 中止或 `undo` 冲突/被篡改、`setup` 冲突/无宿主/解析失败、`hook install` 冲突/坏配置/未知宿主） |
+| 0 | 成功（拒绝也是成功的回答 —— `search` 的 `refused`、`remember` 的 `deny`、`inbox --reject` 的成功拒绝都算；`setup` 的 dry-run / `unchanged`、`doctor` 没有 `error` 级问题、`hook` 的 dry-run / `unchanged`、内部 SessionEnd / SessionStart 命令的错误也都算） |
+| 1 | 判定拒绝 / 库不健康 / 回执或巩固失败（`read` 找不到、`remember` deny、`capture` 拒收、`inbox` 有失败项、`index` 有笔记走不到或 `stale`、`verify` 不是 `verified`、`recall --save-receipt` 落盘失败、`consolidate` 中止或 `undo` 冲突/被篡改、`setup` 冲突/无宿主/解析失败、`doctor` 发现解析失败/宿主冲突/钩子或 plist 读不了、`hook install` 冲突/坏配置/未知宿主） |
 | 2 | 用法错误（缺参数、命令不认识） |
 
 `remember --json` 的 `ok` 与退出码一致：脚本里既可以读 JSON，也可以直接 `if`。

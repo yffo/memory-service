@@ -239,3 +239,26 @@ test('setup：未知宿主与缺参数退出 2', () => {
     rm(home);
   }
 });
+
+test('setup --json 不回显宿主配置整体（preview 不参与序列化）', () => {
+  const home = homeDir('memory-setup-preview-');
+  try {
+    const path = configPath(home, 'claude');
+    writeFileSync(path, JSON.stringify({ env: { SECRET: 'super-secret-value' }, mcpServers: { other: { command: 'x' } } }, null, 2) + '\n', 'utf8');
+    const store = join(home, 'store');
+
+    const dry = cli(['setup', '--home', home, '--host', 'claude', '--json'], { store });
+    assert.equal(dry.code, 0, dry.stderr);
+    assert.equal(dry.stdout.includes('super-secret-value'), false, 'dry-run JSON 不能带出配置文件正文');
+    assert.equal(dry.json.hosts[0].preview, undefined);
+
+    const written = cli(['setup', '--home', home, '--host', 'claude', '--write', '--json'], { store });
+    assert.equal(written.code, 0, written.stderr);
+    assert.equal(written.stdout.includes('super-secret-value'), false, '--write JSON 也不能带出配置文件正文');
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(config.env.SECRET, 'super-secret-value', '写入时必须保留其他字段');
+    assert.equal(config.mcpServers.tabellio.command, process.execPath);
+  } finally {
+    rm(home);
+  }
+});
