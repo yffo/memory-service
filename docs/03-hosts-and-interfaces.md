@@ -166,7 +166,22 @@ tabellio hook uninstall --host claude --write
 - **SessionStart 提示什么**：`--session-start` 装的内部命令 `tabellio hook claude-session-start` **只读候选数与提案数**；任一 >0 时按 Claude 的 hook 协议向 stdout 输出 `hookSpecificOutput`（`hookEventName:"SessionStart"` + `additionalContext`），提示用户运行 `tabellio inbox`；都为 0 时不输出。**不写库、不批准、不删除**，批准权不变。
 - **写到哪**：只写 `notes/candidates/`，不重建主索引、不进默认检索面；`written_by:capture:hook`，`source:claude:session-end:<session_id>`。批准仍在 CLI `tabellio inbox`，走与 `remember` 同一条闸门。
 - **失败语义**：两个内部命令的任何事件/读取/store 错误都退 0（不能阻塞宿主退出或开始）；安装/卸载冲突、坏配置、未知宿主退 1，参数缺值退 2。
-- **证据与边界**：真实 Claude Code 2.1.142 的 `-p` 会话已实测 `SessionEnd` 触发、exec form 被接受、候选落盘且主库 `notes=0`；SessionStart 用并排的 marker 钩子证明事件确实触发，且提示没有写库；可复核的 gated 测试是 `test/hook-claude-e2e.test.mjs`（`TABELLIO_HOOK_E2E=1` 才跑）。未登录时 API 会报错，但两个事件仍触发——说明钩子不依赖模型回答。**不伪造** additionalContext 已被模型看到（需要已登录会话）。没有定时/后台触发；`--auto-consolidate` 只在 SessionEnd 扫描一次、只产提案，不自动执行合并；也不承诺「记住一切」；过滤是尽力而为，不是 DLP。
+- **证据与边界**：真实 Claude Code 2.1.142 的 `-p` 会话已实测 `SessionEnd` 触发、exec form 被接受、候选落盘且主库 `notes=0`；SessionStart 用并排的 marker 钩子证明事件确实触发，且提示没有写库；可复核的 gated 测试是 `test/hook-claude-e2e.test.mjs`（`TABELLIO_HOOK_E2E=1` 才跑）。未登录时 API 会报错，但两个事件仍触发——说明钩子不依赖模型回答。**不伪造** additionalContext 已被模型看到（需要已登录会话）。钩子本身没有定时/常驻触发；`--auto-consolidate` 只在 SessionEnd 扫描一次、只产提案，不自动执行合并。要定时见 §3.0.2。也不承诺「记住一切」；过滤是尽力而为，不是 DLP。
+
+### 3.0.2 定时自动发现（可选，只有 macOS launchd）
+
+`tabellio schedule install --write` 在 `~/Library/LaunchAgents/io.github.yffo.tabellio.sweep.plist`
+写一个 LaunchAgent，每 6 小时（可 `--interval 15m..7d`）跑一次
+`<node> <bin/memory> consolidate --auto --write --store <store> --json`，跑完退出。
+
+- **不是常驻进程**：没有 daemon、没有端口、没有网络；launchd 到点叫醒一次。`RunAtLoad=false`，
+  日志写到 `~/Library/Logs/tabellio/`。
+- **只产提案**：命令固定带 `--auto --write`，只写 `runs/proposals/` 的 pending 提案，
+  不合并、不批准、不写正式笔记、不重建索引；批准仍在 CLI `inbox`。
+- **只支持 macOS**：Linux/Windows 返回 `unsupported_platform`，不伪造调度器；Linux 可先用 cron。
+  `schedule status` 只读，区分「plist 已安装」与「launchd 已加载」。
+- **默认 dry-run**：不加 `--write` 不写文件、不调用 `launchctl`。加载失败时 plist 保留、命令退 1；
+  卸载只删自己的 label。完整用法、退出码与真实 launchd E2E 见 `docs/07-usage.md` §15。
 
 ### 3.1 Claude Code（最完整，也最会在细节上咬人）
 

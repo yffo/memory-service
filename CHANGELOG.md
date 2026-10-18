@@ -5,13 +5,21 @@
 
 ## 未发布
 
+### 定时：macOS launchd 定期自动发现，只产提案
+
+- **修的问题**：自动发现已经能安全地产提案，但触发仍要人记得敲 `consolidate --auto`，或依赖 Claude Code 的 SessionEnd。用户不装钩子、或不用 Claude 时，「定期看一眼有没有重复」这件事还是没人做；加常驻 daemon 又会引入端口、保活与权限问题。
+- **做法**：新增 `src/schedule.js` 与 `tabellio schedule install|uninstall|status`。只支持 macOS launchd：在 `~/Library/LaunchAgents/io.github.yffo.tabellio.sweep.plist` 写 LaunchAgent，`StartInterval` 默认 21600 秒（6 小时，可 `--interval 15m..7d`），`RunAtLoad=false`，命令固定为 `<node> <bin/memory> consolidate --auto --write --store <store> --json`。默认 dry-run，`--write` 才建日志目录（0700）、原子写 plist（0644）、`bootout` 后 `bootstrap gui/<uid>`；update 先备份，冲突默认拒绝、`--force` 才替换。`status` 只读，解析 plist 并用 `launchctl print` 区分「已安装」与「已加载」。
+- **行为**：定时任务到点跑一次就退出，只写 `runs/proposals/` 的 pending 提案；不合并、不批准、不写正式笔记、不重建索引。加载失败时 plist 保留、命令退 1 并说明「已写未加载」；卸载只 `bootout` 并删除自己的 label，不碰别的 LaunchAgent。Linux/Windows 返回 `unsupported_platform`，不伪造调度器；Linux 可先用 cron 跑同一条命令。
+- **边界**：不是常驻进程，没有「错过的每一次都补跑」；`StartInterval` 是间隔不是日历，睡眠/关机期间不运行。Node 被 nvm 挪走后任务会失败，`status` 会显示未加载。它仍只产提案，**不会自动批准或自动执行合并**；批准入口始终是 `inbox`。
+- **证据**：新增 `test/schedule.test.mjs`（计划/应用/冲突/加载失败/卸载/status/XML 转义）、`test/cli-schedule.test.mjs`（dry-run、真实文件、退出码、非 macOS），以及 gated 的 `test/schedule-launchd-e2e.test.mjs`（`TABELLIO_SCHEDULE_E2E=1` 且 macOS 才跑，临时 HOME/store，plan→apply→status 断言 `launchctl` 已加载，`finally` 卸载）。本机实测通过且无残留 plist。
+
 ### 巩固：自动发现近似重复，只产 inbox 提案
 
 - **修的问题**：内容类执行层已经能安全地合并，但源 id 仍要人自己去读库、找重复、抄 id；「每次都要用户提醒沉淀」的问题只解决了一半——发现了也没有入口，普通人不会主动做近似重复排查。自动执行又违背「不静默写正式库」的边界。
 - **做法**：新增 `src/core/auto-consolidate.js` 与 `src/store/proposals.js`。`consolidate --auto` 扫描 active、未过期、未被取代、正文至少 40 字的笔记，按 `scope` / `kind` / `trust` 分组，用 8-gram 字符 n-gram 的 Jaccard 相似度找近似重复（默认阈值 0.62，每组最多 4 条，每次最多 20 组）。发现结果只写成 `runs/proposals/<proposal_id>.json` 的 pending 提案，不写笔记、不建索引、不进检索面。`--write` 才落提案，默认 dry-run；重复扫描同一组会复用已有提案，不重复创建。
 - **行为**：`inbox` 同时列候选与自动巩固提案；`--accept prop_...` 才调用内容类执行层合并（写目标、关闭源、写内容回执，可 `--undo`），`--reject` 把提案移到 `runs/proposals/rejected/`。批准前逐源比对提案里的正文 hash，源被改过就整单 `proposal_stale`，不写任何文件。因为人已经逐条看过固定清单，批准路径把 5% 保险丝显式放开为 `maxChangeRatio:1`；执行层自己的 hash、字段、目标存在检查一条不少。两类 id 可在同一次 `inbox` 调用里混批。
 - **行为（钩子）**：`hook install --host claude --auto-consolidate --write` 让 SessionEnd 在抓候选之后顺带跑一次 sweep（只写提案），并隐含安装 SessionStart 提示；关闭开关只把 SessionEnd 改回原命令，不删除已装的 SessionStart，避免已有提案没人提示。sweep 失败不阻塞会话结束，命令仍退 0。
-- **边界**：只做 merge 近似重复，不做自动 summarize / promote / 误报判定，也不自动执行；提案未批准前不进检索面。没有后台进程或定时触发——要么显式跑 `consolidate --auto`，要么装 Claude Code 钩子。相似度是字面 8-gram，不是语义模型；跨语言、改写较大的重复会漏。提案里的 source hash 只证明「批准时源没变」，不是签名。
+- **边界**：只做 merge 近似重复，不做自动 summarize / promote / 误报判定，也不自动执行；提案未批准前不进检索面。这条自动发现本身没有定时触发——要么显式跑 `consolidate --auto`，要么装 Claude Code 钩子；macOS 定时触发见上面的 `schedule`，仍然只产提案。相似度是字面 8-gram，不是语义模型；跨语言、改写较大的重复会漏。提案里的 source hash 只证明「批准时源没变」，不是签名。
 
 ### 巩固：内容类 merge / summarize / promote 可 `--apply`，回执与撤销成对
 

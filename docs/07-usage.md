@@ -1,6 +1,6 @@
 # 07 · 用法
 
-`tabellio` 当前（M1 + M2：读取回执 / 巩固 / 撤销 / 候选闭环 / 自动发现提案）是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
+`tabellio` 当前（M1 + M2：读取回执 / 巩固 / 撤销 / 候选闭环 / 自动发现提案 / 可选定时任务）是**命令行 + MCP**，没有常驻后台进程、没有数据库、没有网络调用。macOS 可选装 launchd 定时任务，它到点跑一次扫描就退出，只写待批准提案。
 零运行时依赖：`node bin/memory` 直接就能跑，不需要 `npm install`。
 
 - 要求：Node ≥ 20.11（实测 Node 25.8）。
@@ -10,7 +10,7 @@
 ```bash
 git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
-node --test 'test/**/*.test.mjs'       # 全绿才继续（506 条）
+node --test 'test/**/*.test.mjs'       # 全绿才继续（521 条）
 ```
 
 ## 一条事实一个文件
@@ -32,11 +32,11 @@ aliases: [acme-editor, 编辑器]  # 可选：作者给的同义说法，只参�
 正文上限 **400 字 / 200 token** —— 超了闸门会拒，并且告诉你超了多少。
 超过一条事实该有的量，说明该拆成多条（`tabellio import` 会自动切）。
 
-## 十四个命令
+## 十五个命令
 
-`setup` / `status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `capture` / `inbox` / `hook` / `import`（另有 `paths` 查路径）。
+`setup` / `status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `capture` / `inbox` / `hook` / `schedule` / `import`（另有 `paths` 查路径）。
 
-`setup` 只写宿主的 MCP 配置，不碰记忆库；`hook` 把 Claude Code 的会话结束事件接到候选箱（默认不装）；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改库的入口**：默认只出计划，`--apply` 才动；元数据操作只改字段，内容类操作会写目标并关闭源，两者都能 `--undo`。`--merge` / `--summarize` / `--promote` 默认只出**内容类提案**，`--apply` 才执行；`--auto` 自动发现近似重复，但只写待批准提案，不直接改库。
+`setup` 只写宿主的 MCP 配置，不碰记忆库；`hook` 把 Claude Code 的会话结束事件接到候选箱（默认不装）；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改库的入口**：默认只出计划，`--apply` 才动；元数据操作只改字段，内容类操作会写目标并关闭源，两者都能 `--undo`。`--merge` / `--summarize` / `--promote` 默认只出**内容类提案**，`--apply` 才执行；`--auto` 自动发现近似重复，但只写待批准提案，不直接改库。`schedule` 在 macOS 上给这条发现加一个可选的 launchd 定时器，仍然只产提案。
 
 `search` 与 `recall` 的分工：前者给**指针**（pull，读哪条由调用方决定），后者一步给出
 **可直接进上下文**的正文（按 token 预算裁剪、带拒答）；两者都零模型调用。
@@ -502,11 +502,12 @@ node bin/memory consolidate --undo run_...          # 合并后可撤销
 - `--auto` 与 `--apply` / `--dry-run` / `--merge` / `--summarize` / `--promote` /
   `--archive` / `--undo` / `--scope` / `--kinds` 互斥。
 - **边界**：只做 merge 近似重复，不做自动 summarize / promote，不自动执行；相似度是字面
-  8-gram，不是语义模型，跨语言或改写较大的重复会漏。没有后台进程或定时触发——要么显式跑
-  `consolidate --auto`，要么用下一节的 Claude 钩子 `--auto-consolidate`。
+  8-gram，不是语义模型，跨语言或改写较大的重复会漏。默认没有定时触发——要么显式跑
+  `consolidate --auto`，要么用下一节的 Claude 钩子 `--auto-consolidate`，要么在 macOS 上装
+  §15 的 launchd 定时任务；三者都只产提案，不自动批准。
 
-**还没做**：replay、forget、写入回执、后台定时自动发现/自动巩固、`diff.jsonl`；
-自动发现本身已可用（显式 `--auto` 或 Claude 钩子触发），但只产提案、执行仍要人批准。
+**还没做**：replay、forget、写入回执、自动执行/自动巩固、`diff.jsonl`；
+自动发现本身已可用（显式 `--auto`、Claude 钩子或 macOS launchd 定时任务触发），但只产提案、执行仍要人批准。
 
 ### 11. `setup` —— 一条命令给宿主写 MCP 配置
 
@@ -713,11 +714,68 @@ SessionStart 用一条并排的 marker 钩子证明宿主确实触发了事件�
 
 **边界**
 
-只有 Claude Code；没有定时/后台触发，没有跨会话批量重放；`--auto-consolidate` 只在
+只有 Claude Code；钩子本身没有定时/常驻触发（要定时见 §15 的 macOS launchd），没有跨会话批量重放；`--auto-consolidate` 只在
 SessionEnd 时扫描一次、只产提案，不会自动执行合并；它不是「自动记住一切」，
 只是把「会话结束该问要不要记」变成候选箱里的一条待审记录，并在下次会话开始时提醒一次。
 提示只在候选数 > 0 时出现，不是每次会话都打扰；卸载只移除 tabellio 的钩子，不删候选、
 不删已有记忆。
+
+### 15. `schedule` —— macOS launchd 定时自动发现（只产提案）
+
+```bash
+node bin/memory schedule status                  # 只读：文件在不在、launchd 里有没有加载
+node bin/memory schedule install                 # 默认 dry-run：只打印会写什么
+node bin/memory schedule install --write         # 写 plist 并加载；默认每 6 小时
+node bin/memory schedule install --write --interval 12h
+node bin/memory schedule install --write --force # 已有不同配置时替换（先备份）
+node bin/memory schedule uninstall               # 默认 dry-run
+node bin/memory schedule uninstall --write       # 从 launchd 卸载并删除 plist
+```
+
+它解决「谁定期来找重复」：不用常驻进程，也不要求用户记得敲命令。macOS 的 launchd
+到点叫醒一次 `tabellio consolidate --auto --write`，跑完就退出。**它只写
+`runs/proposals/` 的待批准提案，不合并、不批准、不写正式笔记、不重建索引。**
+
+- **只支持 macOS**。launchd 的 `gui/<uid>` 会话、plist 位置和 `launchctl` 语义不能
+  假装搬到 Linux/Windows；其他平台 `schedule status` 返回 `supported:false`，
+  `install` 退 1。Linux 可先用 cron 手动跑同一条命令。
+- **间隔**：默认 **360 分钟（6 小时）**，范围 **15 分钟–7 天**；写法 `30m` / `6h` /
+  `1d` / 裸数字（按分钟算）。越界或格式错退 2。
+- **写什么**：`~/Library/LaunchAgents/io.github.yffo.tabellio.sweep.plist`。
+  `RunAtLoad=false`，`StartInterval` 是秒数；日志重定向到
+  `~/Library/Logs/tabellio/sweep.log` 与 `sweep.err.log`；`WorkingDirectory` 是
+  home。命令使用当前 Node 与 `bin/memory` 的**绝对路径**，不依赖 shell 的 PATH。
+- **默认 dry-run**：不加 `--write` 只返回计划，不写 plist、不调用 `launchctl`。
+  `--write` 时先建日志目录（0700），临时文件 + rename 原子写 plist（0644），
+  执行 `launchctl bootout gui/<uid>/<label>` 再 `launchctl bootstrap gui/<uid> <plist>`。
+  update 会先把旧 plist 备份成 `.tabellio-backup-<时间戳>`。
+- **加载失败不回滚文件**：如果 plist 已写但 `bootstrap` 失败（比如没有 GUI 会话），
+  命令退 1，并明确说「plist 已写入，但没有加载」；文件保留，可在桌面会话里重试。
+  `schedule status` 区分「已安装」与「已加载」，不会把文件存在当成任务在跑。
+- **冲突**：已有指向别的 store 或别的参数的 tabellio plist 时默认 `conflict`，不写；
+  `--force` 才备份并替换。它只碰自己的 label，不删、不改用户别的 LaunchAgent。
+- **卸载**：`schedule uninstall --write` 先 `bootout` 再删除 plist；本来没装则
+  `unchanged` 退 0。dry-run 不碰 launchctl。
+- **状态**：`schedule status` 只读；从 plist 解析间隔与 `--store`，用
+  `launchctl print gui/<uid>/<label>` 判断是否加载。`launchctl` 不可用时
+  `checked:false` + `error:'launchctl_unavailable'`，不伪造「已加载」。
+- **边界**：不是常驻 daemon，没有「错过的每一次都补跑」；`StartInterval` 是间隔
+  不是日历，机器睡眠/关机期间不会运行，唤醒后由 launchd 决定下一次。Node 被 nvm
+  挪走后任务会失败，`schedule status` 会显示未加载；重装即可。它仍只产提案，
+  **不会自动批准或自动执行合并**；批准入口始终是 `inbox`。
+- **JSON 形状**（开发用）：install dry-run 返回
+  `{ok,platform,label,action,path,interval_minutes,program_arguments,preview,dry_run:true}`；
+  `--write` 追加 `{written,loaded,backup?}`；uninstall dry-run 返回
+  `{action:'uninstall',path,removed:true,dry_run:true}`；status 返回
+  `{supported,installed,loaded,checked,path,interval_minutes,store}`。`preview` 是完整 plist。
+- **退出码**：成功 / dry-run / `unchanged` 0；平台不支持、冲突、写失败、加载失败 1；
+  参数缺值或非法退 2。
+
+**真实证据**：`test/schedule-launchd-e2e.test.mjs` 在 macOS 上（`TABELLIO_SCHEDULE_E2E=1`
+才跑）用临时 HOME、唯一 label 与临时 store 执行 plan → apply → status，断言
+`launchctl print` 能看到任务已加载，最后在 `finally` 里卸载；实测通过且
+`~/Library/LaunchAgents` 无残留。单元测试用可注入的 `run` 覆盖 apply 顺序、
+冲突、加载失败、卸载与 XML 转义，不依赖真实 launchd。
 
 ## 评测（开发用，可零模型）
 

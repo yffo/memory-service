@@ -48,6 +48,13 @@ import { readSourceIndex } from '../src/import/engramory.js';
 import { planSetup, applySetup } from '../src/setup.js';
 import { verifyHosts } from '../src/hostverify.js';
 import { planHookInstall, applyHookInstall, extractMemoryCandidates } from '../src/hooks.js';
+import {
+  planScheduleInstall,
+  applyScheduleInstall,
+  scheduleStatus,
+  parseIntervalMinutes,
+  SCHEDULE_DEFAULT_INTERVAL_MINUTES,
+} from '../src/schedule.js';
 import { readAnyRunReceipt } from '../src/store/consolidate.js';
 import { CONTENT_RECEIPT_SCHEMA } from '../src/core/content-receipt.js';
 import { finiteOr } from '../src/util/text.js';
@@ -73,6 +80,9 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio hook uninstall --host claude [--write] [--json]
   tabellio hook claude-session-end [--json] [--auto-consolidate]  # 内部：只写候选/提案
   tabellio hook claude-session-start [--json]        # 内部：宿主 SessionStart 调用，只提示待批准
+  tabellio schedule install   [--interval 6h] [--write] [--force] [--json]  # macOS launchd 定时发现，只产提案
+  tabellio schedule uninstall [--write] [--json]
+  tabellio schedule status    [--json]                # 文件在不在、launchd 里有没有加载
   tabellio import --from <旧 Engramory 库目录> [--dry] [--json]
   tabellio recall --query "<词>" [--receipt|--save-receipt] [--budget-tokens N] [--json]
   tabellio explain (--query "<词>" | --receipt <id|path>) [--json]
@@ -426,7 +436,7 @@ export async function main(argv, io = {}) {
     out.write(`${VERSION}\n`);
     return 0;
   }
-  if (!['status', 'index', 'search', 'read', 'remember', 'capture', 'inbox', 'setup', 'hook', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths'].includes(command)) {
+  if (!['status', 'index', 'search', 'read', 'remember', 'capture', 'inbox', 'setup', 'hook', 'schedule', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths'].includes(command)) {
     err.write(`未知命令：${command}\n\n${USAGE}\n`);
     return 2;
   }
@@ -808,6 +818,52 @@ export async function main(argv, io = {}) {
         const human = renderSetupApplied(plan, applied) + (verification ? '\n\n' + renderVerification(verification) : '');
         emit(result, { json, human });
         return applied.ok && (!verification || verification.ok) ? 0 : 1;
+      }
+      case 'schedule': {
+        const sub = args._[1] ?? 'status';
+        if (args.home === true || args.interval === true) {
+          err.write('schedule 的参数缺值：--home / --interval\n');
+          return 2;
+        }
+        if (!['install', 'uninstall', 'status'].includes(sub)) {
+          err.write('schedule 需要 install / uninstall / status\n');
+          return 2;
+        }
+        const platform = process.env.TABELLIO_SCHEDULE_PLATFORM || process.platform;
+        const home = args.home ? resolve(String(args.home)) : homedir();
+        if (sub === 'status') {
+          const result = scheduleStatus({ platform, home });
+          emit(result, { json, human: renderScheduleStatus(result) });
+          return result.ok ? 0 : 1;
+        }
+        let intervalMinutes = SCHEDULE_DEFAULT_INTERVAL_MINUTES;
+        if (args.interval !== undefined) {
+          const parsed = parseIntervalMinutes(args.interval);
+          if (parsed === null) {
+            err.write('schedule --interval 需要 15m–7d 之间，例如 6h / 30m / 360\n');
+            return 2;
+          }
+          intervalMinutes = parsed;
+        }
+        const plan = planScheduleInstall({
+          platform,
+          home,
+          bin: resolve(join(HERE, 'memory')),
+          store: storePath,
+          command: process.execPath,
+          intervalMinutes,
+          uninstall: sub === 'uninstall',
+          force: Boolean(args.force),
+        });
+        if (!args.write) {
+          const result = { ...plan, dry_run: true };
+          emit(result, { json, human: renderSchedulePlan(plan, true) });
+          return plan.ok ? 0 : 1;
+        }
+        const applied = applyScheduleInstall(plan);
+        const result = { ...plan, dry_run: false, ...applied };
+        emit(result, { json, human: renderScheduleApplied(plan, applied) });
+        return applied.ok ? 0 : 1;
       }
       case 'hook': {
         const sub = args._[1];
@@ -1230,6 +1286,121 @@ function renderHookApplied(plan, applied) {
   ];
   if (events.includes('会话开始')) lines.push('下次 Claude Code 会话开始时会提示待批准候选数；批准仍走 tabellio inbox。');
   if (events.includes('会话结束')) lines.push('下次 Claude Code 会话结束后会自动生成候选；用 tabellio inbox 查看/批准。');
+  return lines.join('\n');
+}
+
+function scheduleIntervalLabel(minutes) {
+  if (!Number.isFinite(minutes)) return '?';
+  if (minutes % 1440 === 0) return minutes / 1440 + ' 天';
+  if (minutes % 60 === 0) return minutes / 60 + ' 小时';
+  return minutes + ' 分钟';
+}
+
+function renderSchedulePlan(plan, dryRun) {
+  const reasons = {
+    unsupported_platform: '定时自动发现目前只支持 macOS',
+    missing_target: '缺少可执行文件或 store 路径',
+    invalid_path: 'bin / store 必须是绝对路径',
+    invalid_command: 'Node 必须是绝对路径',
+    invalid_interval: '间隔超出范围（15 分钟到 7 天）',
+    conflict: '已有另一个 tabellio 定时任务；确认替换请加 --force',
+    E_SCHEDULE_UNREADABLE: '已有 plist 无法读取',
+    invalid_plan: '计划本身不成立',
+  };
+  if (!plan.ok) {
+    const lines = ['定时任务未安装：' + (reasons[plan.reason] ?? plan.reason)];
+    if (plan.path) lines.push('plist：' + plan.path);
+    if (plan.hint) lines.push(plan.hint);
+    return lines.join('\n');
+  }
+  const actionLabel = {
+    create: '新建 LaunchAgent',
+    update: '替换已有 LaunchAgent',
+    unchanged: '已是最新配置',
+    uninstall: '移除 LaunchAgent',
+  };
+  const lines = [(dryRun ? '[dry-run] ' : '') + '定时自动发现：' + (actionLabel[plan.action] ?? plan.action)];
+  lines.push('plist：' + plan.path);
+  if (plan.action === 'uninstall') {
+    lines.push('将移除 ' + plan.path + '，并尝试从 launchd 卸载 ' + plan.label);
+    if (dryRun) lines.push('加 --write 才移除。');
+    return lines.join('\n');
+  }
+  if (plan.action === 'unchanged') {
+    lines.push('内容没有变化；加 --write 会确认/尝试加载。');
+    return lines.join('\n');
+  }
+  lines.push('间隔：每 ' + scheduleIntervalLabel(plan.interval_minutes));
+  lines.push('库：' + plan.store);
+  lines.push('命令：' + plan.program_arguments.join(' '));
+  lines.push('日志：' + plan.out_log + ' / ' + plan.err_log);
+  if (plan.backup) lines.push('写前备份：' + plan.backup);
+  lines.push('它只跑 consolidate --auto --write：只写待批准提案，不会合并、批准或改笔记。');
+  if (dryRun) lines.push('加 --write 才写入并加载到 launchd。');
+  return lines.join('\n');
+}
+
+function renderScheduleApplied(plan, applied) {
+  if (!applied.ok) {
+    const reasons = {
+      load_failed: 'plist 已写入，但 launchd 没有加载',
+      launchctl_unavailable: '找不到 launchctl，无法加载',
+      no_uid: '拿不到当前用户 uid',
+      write_failed: 'plist 写入失败',
+      remove_failed: 'plist 移除失败',
+      invalid_plan: '计划本身不成立',
+      missing_preview: '内部错误：没有可写入的内容',
+      conflict: '已有另一个 tabellio 定时任务；确认替换请加 --force',
+    };
+    const lines = ['定时任务未生效：' + (reasons[applied.reason] ?? applied.reason)];
+    if (applied.written) lines.push('plist 已写入：' + applied.path);
+    if (applied.error) lines.push('原因：' + applied.error);
+    if (applied.hint) lines.push(applied.hint);
+    return lines.join('\n');
+  }
+  if (plan.action === 'uninstall') {
+    return [
+      '已移除定时任务：' + applied.path,
+      applied.unloaded ? 'launchd 已卸载。' : 'launchd 里本来就没有加载这个任务。',
+    ].join('\n');
+  }
+  if (!applied.written) {
+    return applied.loaded ? '配置已是最新，launchd 里已加载：' + applied.path : '配置已是最新：' + applied.path;
+  }
+  const lines = [
+    '定时任务已安装：' + applied.path,
+    '间隔：每 ' + scheduleIntervalLabel(plan.interval_minutes),
+    '库：' + plan.store,
+    applied.loaded ? 'launchd：已加载，下次到点会运行。' : 'launchd：未加载。',
+    '日志：' + plan.out_log,
+  ];
+  lines.push('它只写待批准提案；用 tabellio inbox 查看，批准仍要你点名。');
+  return lines.join('\n');
+}
+
+function renderScheduleStatus(r) {
+  if (!r.supported) {
+    return [
+      '当前平台（' + r.platform + '）不支持定时自动发现。',
+      '目前只支持 macOS launchd；Linux 可先用 cron 手动跑 tabellio consolidate --auto --write。',
+    ].join('\n');
+  }
+  if (!r.installed) {
+    return [
+      '没有安装定时任务。',
+      '安装：tabellio schedule install --write（默认每 6 小时；只产提案）',
+    ].join('\n');
+  }
+  const loadState = r.checked ? (r.loaded ? '已加载' : '未加载') : '无法检查（' + (r.error ?? 'launchctl 不可用') + '）';
+  const lines = [
+    '定时任务：已安装',
+    'plist：' + r.path,
+    'launchd：' + loadState,
+  ];
+  if (r.interval_minutes !== null) lines.push('间隔：每 ' + scheduleIntervalLabel(r.interval_minutes));
+  if (r.store) lines.push('库：' + r.store);
+  lines.push('日志：' + r.out_log);
+  if (r.checked && !r.loaded && r.detail) lines.push('launchd 说：' + r.detail);
   return lines.join('\n');
 }
 
