@@ -27,13 +27,14 @@
  * `recall` 是只读的预算感知读接口：一次返回正文，证据不足时拒答（不是错误）。
  */
 import { openStore, status, search, read, remember, addCandidate, recallQuery, INDEX_CAPS } from '../api.js';
+import { VERSION } from '../version.js';
 
 /** 我们同时会说的协议版本（顺序 = 优先度，第一个是最新）。 */
 export const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(['2026-07-28', '2025-11-25']);
 export const LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0];
 /** 产品名（`serverInfo.name`）。宿主面板里显示的就是它，所以是产品名而不是仓库名。 */
 export const SERVER_NAME = 'tabellio';
-export const SERVER_VERSION = '0.1.1';
+export const SERVER_VERSION = VERSION;
 
 /** JSON-RPC 错误码（协议层；工具执行错误走 `result.isError`，见 §1.6）。 */
 export const RPC = Object.freeze({

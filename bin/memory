@@ -45,9 +45,9 @@ import { planSetup, applySetup } from '../src/setup.js';
 import { verifyHosts } from '../src/hostverify.js';
 import { planHookInstall, applyHookInstall, extractMemoryCandidates } from '../src/hooks.js';
 import { finiteOr } from '../src/util/text.js';
+import { VERSION } from '../src/version.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-export const VERSION = '0.1.1';
 
 export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 / 巩固 / 撤销）
 
@@ -1100,4 +1100,4 @@ if (invokedDirectly) {
   process.exitCode = code;
 }
 
-export { INDEX_CAPS, STORE_CAPS, MAX_NOTE_CHARS, MAX_NOTE_TOKENS, HERE };
+export { INDEX_CAPS, STORE_CAPS, MAX_NOTE_CHARS, MAX_NOTE_TOKENS, VERSION, HERE };
