@@ -3,7 +3,9 @@
 只记**看得见的行为变化**与**改了的口径**，不记「测试通过数」这类会腐烂的状态
 （要读状态就去跑 `node --test` 与 `node bench/run-eval.mjs`）。
 
-## M2（未发布）
+## 0.1.2（2026-10-18）
+
+本次发布把 M1 之后的 M2 可用面一次发出去：`setup`、`capture` / `inbox`、MCP `capture` / `recall`、`setup --verify`、Claude Code 会话钩子。
 
 ### MCP：`recall` 一次返回正文，预算感知且可拒答
 
