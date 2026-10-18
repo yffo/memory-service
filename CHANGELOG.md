@@ -5,6 +5,14 @@
 
 ## M2（未发布）
 
+### 钩子：Claude Code 会话结束时自动生成候选（默认不装）
+
+- **修的问题**：`setup` 解决了安装摩擦，`capture` 给了 agent 主动提议的入口，但两者都要求「有人先想起要记」。真实用户不会每轮都敲 `remember`，也不会替 agent 调用 `capture`；而完全自动写正式库又违背「不静默写」的边界。
+- **做法**：新增 `src/hooks.js` 与 `tabellio hook install` / `uninstall`，只支持 Claude Code。它合并 `~/.claude/settings.json` 的 `hooks.SessionEnd`，用 exec form（`command` + `args`）指向内部命令 `tabellio hook claude-session-end`，`timeout:15` 秒；默认 dry-run，`--write` 才落盘，写前备份为 `settings.json.tabellio-backup-<时间戳>`，JSON 原子写，新文件 mode `0600`，保留用户其他钩子、`env` 与 settings 其他字段。已有指向别的 store 的 tabellio 钩子先报冲突，`--force` 才替换；坏 JSON 整份不写。
+- **行为**：内部命令从 `SessionEnd` 事件拿到 `transcript_path`，只读当前会话、只取真实用户发言，跳过 sidechain / meta / compact summary / tool_result / system-reminder；按显式线索（「记住」「以后都」「我偏好」「我们决定」「默认用」「改用」等中英文）切句，排除问句/假设句与命中密钥模式的整句，每会话最多 3 条。**不调用模型、不联网、不摘要、不自动合并**，只写 `notes/candidates/`，不重建主索引、不进默认检索面；`written_by:capture:hook`，`source:claude:session-end:<session_id>`。批准仍走 CLI `tabellio inbox` 的同一条写入闸门。内部命令的任何事件/读取/store 错误都退 0（不阻塞宿主退出）；安装/卸载冲突、坏配置、未知宿主退 1，参数缺值退 2。
+- **验证**：真实 Claude Code 2.1.142 的 `-p` 会话已实测 `SessionEnd` 触发、exec form 被接受、候选落盘且主库 `notes=0`；即使未登录导致模型 API 失败，钩子仍触发。可复核的 gated 测试是 `test/hook-claude-e2e.test.mjs`（`TABELLIO_HOOK_E2E=1` 才跑）；单元与 CLI 测试在 `test/hooks.test.mjs` / `test/cli-hooks.test.mjs`。
+- **边界**：只支持 Claude Code——Cursor 没有等价的无头钩子契约，Codex 没有会话结束钩子，不伪造。没有定时/后台触发，没有自动巩固，也不承诺「记住一切」；线索规则是尽力而为，可能漏也可能误报，候选箱仍是人工闸门；密钥过滤是尽力而为，不是 DLP。安装会改用户的 `~/.claude/settings.json`，所以必须显式加 `--write`。
+
 ### 宿主：`setup --verify` 用宿主自己的命令验证连接
 
 - **修的问题**：`setup` 只证明「配置文件写对了」，用户在 Claude Code / Codex 里看到的连接状态它不知道；把「写对」说成「连上」是假验证。
@@ -21,14 +29,14 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 - **修的问题**：MCP 工具面此前只有 `search` / `read` / `list` / `status`，`--allow-write` 只多一个 `remember`。Agent 在会话里看到「这条以后用得上」时，要么直接 `remember` 写进正式库（越过候选与人工批准），要么什么也做不了；CLI 的 `capture` 它够不着。
 - **做法**：`src/mcp/protocol.js` 新增 `capture` 工具（`CAPTURE_INPUT`：`content` 必填，可选 `source` / `kind` / `tags` / `id`；不暴露 `trust` / `scope`）。与 `remember` 一样只在 `--allow-write` 时挂载，工具面变成 6 条（仍在 5±2 内）。底层复用 `addCandidate`，`written_by` 记为 `capture:mcp`，不是 CLI。
 - **行为**：成功只落 `notes/candidates/<id>.md`（`status:draft` / `trust:system_derived`），不重建主索引、不进检索面；返回候选 id、标题、字数、来源与路径，并提示人运行 `tabellio inbox`。重复 / 超长 / id 已存在是**正常判定**（`ok:false`、`isError:false`），只有非法输入或落盘失败才标 `isError:true`——宿主会把 `isError` 当失败并自动重试，不能把「这条已经有了」伪装成故障。
-- **边界**：没有把批准权交给 agent，也没有新增 `inbox --accept` 的 MCP 写工具；仍不会从对话自动抽取，仍没有自动巩固或后台任务。候选正文上限仍是 8KB，批准时仍走 `remember` 的同一条闸门。
+- **边界**：没有把批准权交给 agent，也没有新增 `inbox --accept` 的 MCP 写工具；`capture` 本身仍只是显式提交，不会从对话自动抽取（自动候选只在 Claude `SessionEnd` 钩子启用后发生）。仍没有自动巩固或后台任务。候选正文上限仍是 8KB，批准时仍走 `remember` 的同一条闸门。
 
 ### 上手：`setup` 一条命令写宿主配置；`capture` / `inbox` 让候选可批准
 
 - **修的问题**：装完 `tabellio` 之后，用户还得自己翻三个宿主的文档、手写 MCP 配置；记忆只能靠人先想起「这件事该记」，再主动 `remember`。前者是安装摩擦，后者是「产品该负责判断，却把判断推给用户」——而完全自动写又违背「不静默写」的边界。
 - **做法**：新增 `src/setup.js`（纯计划 `planSetup` + 落盘 `applySetup`）与 `tabellio setup`，给 Claude Code（`~/.claude.json`）、Cursor（`~/.cursor/mcp.json`）、Codex CLI（`~/.codex/config.toml`）写 `tabellio` 的 MCP server；新增候选 API `addCandidate` / `listCandidates` / `reviewCandidates` 与 CLI `capture` / `inbox`。候选落在 `notes/candidates/`，**不参与默认检索**；`inbox --accept` 走与 `remember` 同一条写入闸门（去重/长度/信任分级一条不少），批准后才进 `notes/` 与主索引。
 - **行为**：`setup` 默认 dry-run，`--write` 才落盘；`all` 只处理已安装的宿主，显式 `--host` 可创建；写前备份为 `<文件>.tabellio-backup-<时间戳>`，JSON 原子写，Codex 只替换 `[mcp_servers.tabellio]` 段、保留其他段与注释。已有不同的 `tabellio` 配置默认 `conflict` 整单不写，`--force` 才替换；坏 JSON/TOML 整单拒绝。默认给 MCP 加 `--allow-write`，`--read-only` 可去掉；`command` 默认当前 node，`mcpBin` 用绝对路径，不依赖 PATH。`capture` 写入 `status:draft` / `trust:system_derived` / `provenance.written_by:capture:cli`，默认不重建主索引；`inbox` 无参数只列候选，`--accept` / `--reject` 可重复或逗号分隔，批准后候选移到 `notes/candidates/decided/`、拒绝移到 `rejected/` 留审计；`status` 的候选数不再恒为 0，并提示「N 条候选待处理」。
-- **边界**：只自动写 Claude/Cursor/Codex 三家；DSH 的 `~/.dsh/cordis.patch.yml` 是 YAML loader patch，零依赖改写的风险高于收益，只给文档片段、不做自动写。**没有任何会话结束钩子或自动抽取**：`capture` 是显式原语，宿主/脚本要自己调用；「自动从对话生成候选」仍在 P1。也没有自动巩固、后台任务、定时清理；`inbox` 第一批只收候选，内容类巩固提案仍走 `consolidate --merge/--summarize/--promote`，不混进来冒充「可批准」。候选正文仍受单条 8KB 上限，批准时再受 400 字/200 token 闸门约束；候选归档是移动文件，不是签名，能写库的人仍可改。
+- **边界**：只自动写 Claude/Cursor/Codex 三家；DSH 的 `~/.dsh/cordis.patch.yml` 是 YAML loader patch，零依赖改写的风险高于收益，只给文档片段、不做自动写。**这一版没有会话结束钩子或自动抽取**：`capture` 是显式原语，宿主/脚本要自己调用；后续 M2 补了 Claude Code 的 `SessionEnd` 钩子（见顶部），其他宿主仍未做。也没有自动巩固、后台任务、定时清理；`inbox` 第一批只收候选，内容类巩固提案仍走 `consolidate --merge/--summarize/--promote`，不混进来冒充「可批准」。候选正文仍受单条 8KB 上限，批准时再受 400 字/200 token 闸门约束；候选归档是移动文件，不是签名，能写库的人仍可改。
 
 ### 索引：空库重建不再把根节点当叶子
 

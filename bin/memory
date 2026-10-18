@@ -13,7 +13,7 @@
  * 3. **退出码**：0 = 成功；1 = 判定拒绝（deny，含 `status` 发现解析失败这种「库不健康」）；
  *    2 = 用法错误。脚本里可以只判 `$?`。
  */
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -43,6 +43,7 @@ import {
 import { readSourceIndex } from '../src/import/engramory.js';
 import { planSetup, applySetup } from '../src/setup.js';
 import { verifyHosts } from '../src/hostverify.js';
+import { planHookInstall, applyHookInstall, extractMemoryCandidates } from '../src/hooks.js';
 import { finiteOr } from '../src/util/text.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -61,6 +62,9 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio capture  --file <path.md|-> [--source REF] [--kind k] [--tags a,b] [--dry] [--json]
   tabellio inbox    [--accept <id[,id]>]... [--reject <id[,id]>]... [--dry] [--json]
   tabellio setup    [--host claude,cursor,codex|all] [--write] [--verify] [--force] [--read-only] [--json]
+  tabellio hook install   --host claude [--write] [--force] [--json]   # SessionEnd 钩子，默认 dry-run
+  tabellio hook uninstall --host claude [--write] [--json]
+  tabellio hook claude-session-end [--json]        # 内部：宿主 SessionEnd 调用，只写候选
   tabellio import --from <旧 Engramory 库目录> [--dry] [--json]
   tabellio recall --query "<词>" [--receipt|--save-receipt] [--budget-tokens N] [--json]
   tabellio explain (--query "<词>" | --receipt <id|path>) [--json]
@@ -387,7 +391,7 @@ export async function main(argv, io = {}) {
     out.write(`${VERSION}\n`);
     return 0;
   }
-  if (!['status', 'index', 'search', 'read', 'remember', 'capture', 'inbox', 'setup', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths'].includes(command)) {
+  if (!['status', 'index', 'search', 'read', 'remember', 'capture', 'inbox', 'setup', 'hook', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths'].includes(command)) {
     err.write(`未知命令：${command}\n\n${USAGE}\n`);
     return 2;
   }
@@ -690,6 +694,99 @@ export async function main(argv, io = {}) {
         emit(result, { json, human });
         return applied.ok && (!verification || verification.ok) ? 0 : 1;
       }
+      case 'hook': {
+        const sub = args._[1];
+        if (args.host === true || args.home === true) {
+          err.write('hook 的参数缺值：--host / --home\n');
+          return 2;
+        }
+        if (sub === 'install' || sub === 'uninstall') {
+          const plan = planHookInstall({
+            host: args.host ?? 'claude',
+            home: args.home ? resolve(String(args.home)) : homedir(),
+            bin: resolve(join(HERE, 'memory')),
+            store: storePath,
+            command: process.execPath,
+            uninstall: sub === 'uninstall',
+            force: Boolean(args.force),
+          });
+          if (!args.write) {
+            const result = { ...plan, dry_run: true };
+            emit(result, { json, human: renderHookPlan(plan, true) });
+            return plan.ok ? 0 : 1;
+          }
+          const applied = applyHookInstall(plan);
+          const result = { ...plan, dry_run: false, ...applied };
+          emit(result, { json, human: renderHookApplied(plan, applied) });
+          return applied.ok ? 0 : 1;
+        }
+        if (sub === 'claude-session-end') {
+          // 宿主钩子：读 stdin 的 SessionEnd 事件。任何失败都退 0——钩子不该阻塞宿主退出。
+          let event;
+          try {
+            event = JSON.parse(await readAll(io.stdin ?? process.stdin));
+          } catch {
+            if (json) out.write(JSON.stringify({ ok: false, reason: 'invalid_event' }) + '\n');
+            return 0;
+          }
+          const transcriptPath = typeof event?.transcript_path === 'string' ? event.transcript_path : null;
+          if (!transcriptPath) {
+            if (json) out.write(JSON.stringify({ ok: false, reason: 'transcript_path_missing' }) + '\n');
+            return 0;
+          }
+          if (!existsSync(transcriptPath)) {
+            if (json) out.write(JSON.stringify({ ok: false, reason: 'transcript_missing', transcript_path: transcriptPath }) + '\n');
+            return 0;
+          }
+          let transcript;
+          try {
+            transcript = readFileSync(transcriptPath, 'utf8');
+          } catch (e) {
+            if (json) out.write(JSON.stringify({ ok: false, reason: 'transcript_unreadable', error: String(e?.message ?? e) }) + '\n');
+            return 0;
+          }
+          const extracted = extractMemoryCandidates(transcript);
+          const sessionId =
+            typeof event?.session_id === 'string'
+              ? event.session_id
+              : extracted.candidates.find((c) => c.session_id)?.session_id ?? null;
+          const source = 'claude:session-end:' + (sessionId ?? 'unknown');
+          const captured = [];
+          const rejected = [];
+          let storeError = null;
+          if (extracted.candidates.length > 0) {
+            try {
+              const hookCtx = openStore(storePath);
+              for (const candidate of extracted.candidates) {
+                const r = addCandidate(
+                  hookCtx,
+                  { text: candidate.body, source, tags: ['hook', 'claude'], kind: 'semantic' },
+                  { writtenBy: 'capture:hook' },
+                );
+                if (r.ok) captured.push({ id: r.id, title: r.title, chars: r.chars });
+                else rejected.push({ reason: r.reason, ...(r.duplicate_of ? { duplicate_of: r.duplicate_of } : {}) });
+              }
+            } catch (e) {
+              // 钩子不能因为 store 损坏/没权限就阻塞宿主退出；失败如实报，但退出码仍是 0。
+              storeError = String(e?.message ?? e);
+            }
+          }
+          const result = {
+            ok: storeError === null,
+            event: 'SessionEnd',
+            ...(storeError ? { reason: 'store_write_failed', error: storeError } : { reason: typeof event?.reason === 'string' ? event.reason : null }),
+            session_id: sessionId,
+            captured,
+            rejected,
+            stats: extracted.stats,
+            truncated: extracted.truncated,
+          };
+          if (json) out.write(JSON.stringify(result) + '\n');
+          return 0;
+        }
+        err.write('hook 需要 install / uninstall / claude-session-end\n');
+        return 2;
+      }
       case 'import': {
         const from = args.from ?? args._[1];
         if (!from) {
@@ -822,6 +919,64 @@ function renderSetupApplied(plan, applied) {
     lines.push('  ' + (a.written ? '✓ 写入 ' : '= 未变 ') + a.host + '：' + a.path + (a.backup ? '（备份 ' + a.backup + '）' : ''));
   }
   return lines.join('\n');
+}
+
+function renderHookPlan(plan, dryRun) {
+  const actionLabel = {
+    create: '新建配置',
+    append: '追加到已有配置',
+    update: '替换已有的 tabellio 钩子',
+    unchanged: '已经是目标配置，无需改动',
+    uninstall: '移除 tabellio 钩子',
+    conflict: '已有指向别处的 tabellio 钩子',
+    invalid: '配置无法安全解析',
+    unsupported: '不支持的宿主',
+  };
+  const lines = [];
+  if (!plan.ok) {
+    const reasons = {
+      unknown_host: '只支持 Claude Code（--host claude）',
+      conflict: '已有指向别处的 tabellio 钩子；确认替换请加 --force',
+      invalid_config: 'settings.json 解析失败或结构不认识；整份未写入',
+      missing_target: '缺少可执行文件或 store 路径',
+    };
+    lines.push('钩子未安装：' + (reasons[plan.reason] ?? plan.reason));
+    if (plan.path) lines.push('配置：' + plan.path);
+    if (plan.error?.message) lines.push('原因：' + plan.error.message);
+    return lines.join('\n');
+  }
+  lines.push((dryRun ? '[dry-run] ' : '') + 'Claude Code 会话结束钩子：' + (actionLabel[plan.action] ?? plan.action));
+  lines.push('配置：' + plan.path);
+  if (plan.action === 'uninstall') {
+    lines.push('将移除 ' + plan.removed + ' 条 tabellio 钩子');
+  } else if (plan.action !== 'unchanged') {
+    lines.push('命令：' + plan.desired.command + ' ' + plan.desired.args.join(' '));
+    lines.push('超时：' + plan.desired.timeout + ' 秒');
+  }
+  if (plan.backup) lines.push('写前备份：' + plan.backup);
+  if (dryRun) lines.push('加 --write 才落盘。');
+  return lines.join('\n');
+}
+
+function renderHookApplied(plan, applied) {
+  if (!applied.ok) {
+    const reasons = {
+      conflict: '已有指向别处的 tabellio 钩子；确认替换请加 --force',
+      invalid_config: 'settings.json 解析失败或结构不认识；整份未写入',
+      invalid_plan: '计划本身不成立，未写入',
+      missing_preview: '内部错误：没有可写入的内容',
+      write_failed: '写入失败',
+    };
+    const lines = ['钩子未写入：' + (reasons[applied.reason] ?? applied.reason)];
+    if (applied.error) lines.push('原因：' + applied.error);
+    return lines.join('\n');
+  }
+  if (!applied.written) return '没有改动：' + (plan.path ?? '');
+  return [
+    '钩子已写入：' + applied.path,
+    ...(applied.backup ? ['写前备份：' + applied.backup] : []),
+    '下次 Claude Code 会话结束后会自动生成候选；用 tabellio inbox 查看/批准。',
+  ].join('\n');
 }
 
 function renderRemember(r) {

@@ -10,6 +10,8 @@
 ```bash
 npm i -g tabellio
 tabellio setup --write --verify          # 写 MCP 配置，再用宿主自己的命令验证（默认 dry-run）
+tabellio hook install --host claude      # 可选：装 Claude Code 会话结束钩子（默认 dry-run）
+tabellio hook install --host claude --write
 tabellio status                          # 建库 + 看一眼
 tabellio recall --query "编辑器偏好"      # 按预算取回记忆
 printf '%s\n' '# 发布流程' '' '发版前跑 npm test 和 node bench/run-eval.mjs。' \
@@ -26,9 +28,11 @@ tabellio-mcp                             # 给宿主用的 MCP stdio 服务器
 `--verify` 会调用宿主自己的 CLI：Claude Code 报 `Connected` 才算连上；Codex 只接受配置、不做连接检查；
 Cursor 没有无头检查，需要 GUI 确认。找不到宿主 CLI 不会误报成配置失败。
 DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自动记忆」的诚实版本：
-**当前不会从对话里自动抽取**，宿主或脚本调用 `capture` 把候选丢进来，人在 `inbox` 里批准，
-批准时才走与 `remember` 同一条写入闸门。自动生成候选、自动巩固和后台进程仍在路线图里，
-现在没有——所以它不会偷偷写你的库，但目前仍要宿主或脚本主动把线索丢进候选箱。
+默认**不会从对话里自动抽取**；只有你显式装 Claude Code 的 SessionEnd 钩子
+（`tabellio hook install --host claude --write`），会话结束时才会从**用户发言**里抓显式线索
+（「以后都用…」「记住…」「我偏好…」），生成候选，**不写主库**。候选仍要在 `inbox` 里由人批准，
+批准时才走与 `remember` 同一条写入闸门。钩子只支持 Claude Code、默认不装、不联网、最多 3 条/会话；
+它可能漏、也可能误，且没有后台进程或自动巩固——不是「记住一切」。
 
 ## 它到底是什么
 
@@ -69,11 +73,11 @@ DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自�
 | [docs/04-cost-model.md](docs/04-cost-model.md) | 模型选型与月成本模型（三档方案） | 已完成 |
 | [docs/05-agi-direction.md](docs/05-agi-direction.md) | 记忆在 AGI 方向的前沿与可下注之处 | 已完成 |
 | [docs/06-architecture.md](docs/06-architecture.md) | 架构设计（分层、闸门、账本、检索） | 草案（M1 + M2 读取回执/巩固已实现） |
-| [docs/07-usage.md](docs/07-usage.md) | 用法：十三个命令、MCP、候选闭环、回执、巩固、库布局、退出码 | 已定稿 |
+| [docs/07-usage.md](docs/07-usage.md) | 用法：十四个命令、MCP、候选闭环、会话钩子、回执、巩固、库布局、退出码 | 已定稿 |
 | [docs/08-eval-runbook.md](docs/08-eval-runbook.md) | 评测跑法与判据 | 已完成 |
 | [docs/09-naming.md](docs/09-naming.md) | 命名调研（为什么叫 tabellio） | 已完成 |
 
-> 状态口径（2026-10-17）：**M1**（CLI + MCP + 检索闸门 + 导入 + 判据 1 评测）已完成；**M2** 已开工（读取回执 / `explain` / `verify` / 显式巩固 `consolidate`（invalidate / archive）/ `undo` 已实现；合并、摘要、提升的**提案层**已实现、执行层未做；自动衰减、写入回执与后台自动巩固未做）；**M3** 只完成了分发侧（npm 包 + MCP registry），三宿主实机验证未做。调研文档截至 2026-10；2026 H2 的模型原生记忆与托管服务尚未纳入。
+> 状态口径（2026-10-18）：**M1**（CLI + MCP + 检索闸门 + 导入 + 判据 1 评测）已完成；**M2** 已开工（读取回执 / `explain` / `verify` / 显式巩固 `consolidate`（invalidate / archive）/ `undo` 已实现；合并、摘要、提升的**提案层**已实现、执行层未做；`setup` + `capture` / `inbox` 上手闭环已实现；Claude Code SessionEnd 钩子已实现、默认不装、只生成候选；自动衰减、写入回执与后台自动巩固未做）；**M3** 分发侧完成（npm 包 + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐。调研文档截至 2026-10；2026 H2 的模型原生记忆与托管服务尚未纳入。
 
 ## 纪律（一开始就定下来，免得重蹈覆辙）
 

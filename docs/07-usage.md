@@ -32,11 +32,11 @@ aliases: [acme-editor, 编辑器]  # 可选：作者给的同义说法，只参�
 正文上限 **400 字 / 200 token** —— 超了闸门会拒，并且告诉你超了多少。
 超过一条事实该有的量，说明该拆成多条（`tabellio import` 会自动切）。
 
-## 十三个命令
+## 十四个命令
 
-`setup` / `status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `capture` / `inbox` / `import`（另有 `paths` 查路径）。
+`setup` / `status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `capture` / `inbox` / `hook` / `import`（另有 `paths` 查路径）。
 
-`setup` 只写宿主的 MCP 配置，不碰记忆库；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改元数据的入口**：默认只出计划，`--apply` 才动元数据，`--undo` 可撤销；`--merge` / `--summarize` / `--promote` 目前只出**内容类提案**，不写库。
+`setup` 只写宿主的 MCP 配置，不碰记忆库；`hook` 把 Claude Code 的会话结束事件接到候选箱（默认不装）；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改元数据的入口**：默认只出计划，`--apply` 才动元数据，`--undo` 可撤销；`--merge` / `--summarize` / `--promote` 目前只出**内容类提案**，不写库。
 
 `search` 与 `recall` 的分工：前者给**指针**（pull，读哪条由调用方决定），后者一步给出
 **可直接进上下文**的正文（按 token 预算裁剪、带拒答）；两者都零模型调用。
@@ -522,7 +522,7 @@ $ printf '%s\n' '# 发布流程' '' '发版前跑 npm test 和 node bench/run-ev
 - 候选强制 `status:draft`、`trust:system_derived`、`provenance.written_by:capture:cli`——输入里写 `active` / `user_stated` 也不会改变这个身份。**不重建主索引**，默认检索面看不到它。
 - 正文上限 **8KB**；空文本、非法 id、主库或候选里已有同 id、内容指纹重复都会拒（重复可用 `--force` 绕过；`id_exists` 不行）。拒绝是正常结果，`ok:false` + 退 1；参数缺值退 2。
 - `reason` 固定为 `empty|too_large|invalid_id|id_exists|duplicate|store_write_failed`；重复时附 `duplicate_of:{id,kind}`。
-- **它不是自动抽取**：没有会话钩子、没有后台监听，宿主或脚本要显式调用。自动从对话生成候选仍在 P1。
+- **它本身不监听会话**：`capture` 是显式原语，宿主或脚本要自己调用。自动候选来自下一节的 `hook install`——只支持 Claude Code、默认不装、只抓用户发言里的显式线索，且只写候选。
 
 ### 13. `inbox` —— 人批准后才进主库
 
@@ -543,6 +543,69 @@ $ node bin/memory inbox --reject 01N... --dry    # 只预览
 - `--dry` 用同一套闸门返回 `planned`，不写 note、不移动候选。
 - JSON 是 `{ok,dry_run,accepted,rejected,failed,accepted_count,rejected_count,failed_count}`；`accepted[]` 的 `status` 是 `stored|planned`，`rejected[]` 是 `rejected|planned`。
 - 索引只在真有批准写入时重建一次；只拒绝不重建。`status` 的「候选」计数与「N 条候选待处理」警告读的就是这个目录。
+
+### 14. `hook` —— Claude Code 会话结束时生成候选（默认不装）
+
+```bash
+$ node bin/memory hook install --host claude            # 默认 dry-run：只打印会改哪个文件
+$ node bin/memory hook install --host claude --write    # 写入 ~/.claude/settings.json
+$ node bin/memory hook uninstall --host claude --write  # 只移除 tabellio 自己的钩子
+```
+
+它解决的是「每次都要用户提醒它沉淀」：Claude Code 退出/结束时，宿主把 `SessionEnd` 事件
+（含 `transcript_path`）交给 `tabellio hook claude-session-end`，后者从**本次会话的用户发言**
+里找显式线索，生成候选。**不写正式库**，批准仍在 `inbox`。
+
+- **只支持 Claude Code**（本机 2.1.142 实测）。Cursor 没有等价的无头会话结束钩子，Codex 也没有；
+  不伪造支持，装其他宿主会退 1。
+- **默认不装、默认 dry-run**；只改 `<home>/.claude/settings.json` 的 `hooks.SessionEnd`，
+  保留用户的其他钩子、`env` 和其他字段。写前备份成
+  `settings.json.tabellio-backup-<紧凑 ISO 时间戳>`；JSON 原子写；新文件 mode `0600`。
+- 钩子用 exec form：`{type:"command", command:<当前 node>, args:[<bin/memory>, "hook",
+  "claude-session-end", "--store", <库>], timeout:15}`。不依赖 shell 引号，也不依赖 PATH。
+- 已有指向**别的 store**的 tabellio 钩子时默认 `conflict`、一份不写；确认替换加 `--force`。
+  坏 JSON / 不认识的 `hooks.SessionEnd` 结构整份不写。
+- `--json` 输出计划/结果；**不会输出整份 settings**（里面可能有宿主 env 凭据）。
+  `action` 取值：`create|append|update|unchanged|uninstall|conflict|invalid|unsupported`。
+
+**抓什么、不抓什么**
+
+- 只读 `transcript_path` 指向的当前会话 JSONL；只取 `type:"user"`、`message.role:"user"`、
+  非 sidechain / meta / compact-summary 的真实用户文本；跳过 `tool_result`、队列事件和
+  `<system-reminder>` / 本地命令注入。
+- 只抓**显式线索**：`记住/帮我记/别忘了`、`以后/今后都…`、`我/我们 + 喜欢/偏好/习惯/讨厌`、
+  `我/我们 + 决定/约定/说好`、`始终/总是/一律/默认 + 用/按/不要`、`改用/别再/不要用`，
+  以及英文 `remember / from now on / I prefer / we decided / please always / never`。
+- 跳过问句和假设句（「要不要」「是否」「吗」）、太短的句子，以及命中密钥模式的整句
+  （`sk-…`、`ghp_…`、`AKIA…`、私钥、Bearer、`password/token/密码: …` 等）。
+  这是**尽力而为的过滤，不是 DLP**；候选里仍可能有敏感内容，装之前先想清楚。
+- 每会话最多 **3 条**；同一句去重；候选正文带一个 `# 会话记忆：…` 标题，正文是原句。
+  `source` 为 `claude:session-end:<session_id>`，`written_by` 为 `capture:hook`。
+- 不调用模型、不联网、不做摘要、不自动合并；漏报和误报都会有。它只负责把候选放进
+  `notes/candidates/`，不重建主索引。
+
+**内部命令与失败语义**
+
+`tabellio hook claude-session-end` 是给宿主调用的，不面向日常使用：
+
+- 从 stdin 读 `SessionEnd` 事件；只有 `--json` 才输出，默认静默。
+- 事件坏、没有 `transcript_path`、文件不存在/读不了：`ok:false` + `reason`，
+  **始终退 0**——钩子不能阻塞宿主退出；用法错误才退 2。
+- 有候选时才打开库并逐条 `addCandidate`；重复/超长是正常 `rejected`，不算命令失败。
+- 安装/卸载的退出码：成功/dry-run/`unchanged` 0；冲突、坏配置、写失败、未知宿主 1；参数缺值 2。
+
+**真实宿主证据**
+
+`test/hook-claude-e2e.test.mjs` 用真实 `claude`（`TABELLIO_HOOK_E2E=1` 才跑）在临时
+`settings.json` 上验证：钩子被调用、exec form 被接受、候选落盘、主库 `notes=0`。
+本机在 Claude Code 2.1.142 的 `-p` 会话里实测通过（未登录时 API 会报错，但 `SessionEnd`
+仍触发——这恰好说明钩子不依赖模型回答）。不碰真实 `~/.claude/settings.json`。
+
+**边界**
+
+只有 Claude Code；没有定时/后台触发，没有跨会话批量重放，没有自动巩固；它不是「自动记住一切」，
+只是把「会话结束时该问用户一句要不要记」变成候选箱里的一条待审记录。卸载只移除 tabellio 的钩子，
+不删候选、不删已有记忆。
 
 ## 评测（开发用，可零模型）
 
@@ -625,8 +688,8 @@ id 前缀是人写文件时形成的天然主题，组数与组内条数都在�
 
 | 码 | 含义 |
 | --- | --- |
-| 0 | 成功（拒绝也是成功的回答 —— `search` 的 `refused`、`remember` 的 `deny`、`inbox --reject` 的成功拒绝都算；`setup` 的 dry-run / `unchanged` 也算） |
-| 1 | 判定拒绝 / 库不健康 / 回执或巩固失败（`read` 找不到、`remember` deny、`capture` 拒收、`inbox` 有失败项、`index` 有笔记走不到或 `stale`、`verify` 不是 `verified`、`recall --save-receipt` 落盘失败、`consolidate` 中止或 `undo` 冲突/被篡改、`setup` 冲突/无宿主/解析失败） |
+| 0 | 成功（拒绝也是成功的回答 —— `search` 的 `refused`、`remember` 的 `deny`、`inbox --reject` 的成功拒绝都算；`setup` 的 dry-run / `unchanged`、`hook` 的 dry-run / `unchanged`、内部 SessionEnd 命令的错误也都算） |
+| 1 | 判定拒绝 / 库不健康 / 回执或巩固失败（`read` 找不到、`remember` deny、`capture` 拒收、`inbox` 有失败项、`index` 有笔记走不到或 `stale`、`verify` 不是 `verified`、`recall --save-receipt` 落盘失败、`consolidate` 中止或 `undo` 冲突/被篡改、`setup` 冲突/无宿主/解析失败、`hook install` 冲突/坏配置/未知宿主） |
 | 2 | 用法错误（缺参数、命令不认识） |
 
 `remember --json` 的 `ok` 与退出码一致：脚本里既可以读 JSON，也可以直接 `if`。
