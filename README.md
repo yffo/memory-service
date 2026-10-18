@@ -12,6 +12,7 @@ npm i -g tabellio
 tabellio setup --write --verify          # 写 MCP 配置，再用宿主自己的命令验证（默认 dry-run）
 tabellio hook install --host claude      # 可选：装 Claude Code 会话结束钩子（默认 dry-run）
 tabellio hook install --host claude --write
+tabellio hook install --host claude --session-start --write  # 再加「待批准候选」提示
 tabellio status                          # 建库 + 看一眼
 tabellio recall --query "编辑器偏好"      # 按预算取回记忆
 printf '%s\n' '# 发布流程' '' '发版前跑 npm test 和 node bench/run-eval.mjs。' \
@@ -31,7 +32,8 @@ DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自�
 默认**不会从对话里自动抽取**；只有你显式装 Claude Code 的 SessionEnd 钩子
 （`tabellio hook install --host claude --write`），会话结束时才会从**用户发言**里抓显式线索
 （「以后都用…」「记住…」「我偏好…」），生成候选，**不写主库**。候选仍要在 `inbox` 里由人批准，
-批准时才走与 `remember` 同一条写入闸门。钩子只支持 Claude Code、默认不装、不联网、最多 3 条/会话；
+批准时才走与 `remember` 同一条写入闸门。加 `--session-start` 后，下次会话开始会提示待批准候选数
+（只读，不写库）。钩子只支持 Claude Code、默认不装、不联网、最多 3 条/会话；
 它可能漏、也可能误，且没有后台进程或自动巩固——不是「记住一切」。
 
 ## 它到底是什么
@@ -77,7 +79,7 @@ DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自�
 | [docs/08-eval-runbook.md](docs/08-eval-runbook.md) | 评测跑法与判据 | 已完成 |
 | [docs/09-naming.md](docs/09-naming.md) | 命名调研（为什么叫 tabellio） | 已完成 |
 
-> 状态口径（2026-10-18）：**M1**（CLI + MCP + 检索闸门 + 导入 + 判据 1 评测）已完成；**M2** 已开工（读取回执 / `explain` / `verify` / 显式巩固 `consolidate`（invalidate / archive）/ `undo` 已实现；合并、摘要、提升的**提案层**已实现、执行层未做；`setup` + `capture` / `inbox` 上手闭环已实现；Claude Code SessionEnd 钩子已实现、默认不装、只生成候选；自动衰减、写入回执与后台自动巩固未做）；**M3** 分发侧完成（npm 包 + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐。调研文档截至 2026-10；2026 H2 的模型原生记忆与托管服务尚未纳入。
+> 状态口径（2026-10-18）：**M1**（CLI + MCP + 检索闸门 + 导入 + 判据 1 评测）已完成；**M2** 已开工（读取回执 / `explain` / `verify` / 显式巩固 `consolidate`（invalidate / archive）/ `undo` 已实现；合并、摘要、提升的**提案层**已实现、执行层未做；`setup` + `capture` / `inbox` 上手闭环已实现；Claude Code SessionEnd 钩子已实现、默认不装、只生成候选；`--session-start` 可在会话开始提示待批准候选（只读）；自动衰减、写入回执与后台自动巩固未做）；**M3** 分发侧完成（npm 包 + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐。调研文档截至 2026-10；2026 H2 的模型原生记忆与托管服务尚未纳入。
 
 ## 纪律（一开始就定下来，免得重蹈覆辙）
 

@@ -1,13 +1,14 @@
 /**
- * Claude Code 会话结束钩子：安装/卸载 + 从 transcript 里提取候选。
+ * Claude Code 钩子：安装/卸载 + 会话结束时提取候选 + 会话开始时提示待批准。
  *
  * 口径：
- * 1. 只支持 Claude Code。它给了稳定的 SessionEnd 事件和 transcript_path；
- *    Cursor / Codex 目前没有等价的会话结束契约，不伪造。
- * 2. 钩子只写 notes/candidates/，不写正式笔记、不重建主索引；批准仍走 tabellio inbox。
- * 3. 只抓**显式记忆线索**（记住、以后…、偏好、决定、改口），并过滤密钥。
+ * 1. 只支持 Claude Code。它给了稳定的 SessionEnd / SessionStart 事件和 transcript_path；
+ *    Cursor / Codex 目前没有等价的契约，不伪造。
+ * 2. SessionEnd 只写 notes/candidates/，不写正式笔记、不重建主索引；批准仍走 tabellio inbox。
+ * 3. SessionStart 只读候选数、输出提示，不写库、不改批准权；失败也不阻塞会话。
+ * 4. 只抓**显式记忆线索**（记住、以后…、偏好、决定、改口），并过滤密钥。
  *    宁可漏，不可把整段对话倒进候选箱——候选箱是人工闸门，不是垃圾场。
- * 4. 安装默认 dry-run：写的是 ~/.claude/settings.json，里面可能有用户凭据。
+ * 5. 安装默认 dry-run：写的是 ~/.claude/settings.json，里面可能有用户凭据。
  */
 import {
   chmodSync,
@@ -24,9 +25,16 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 export const HOOK_HOSTS = Object.freeze(['claude']);
+export const HOOK_EVENTS = Object.freeze(['session-end', 'session-start']);
 export const HOOK_TIMEOUT_SECONDS = 15;
 export const MAX_CANDIDATES_PER_SESSION = 3;
 export const MAX_CANDIDATE_SENTENCE_CHARS = 240;
+
+const HOOK_EVENT_META = Object.freeze({
+  'session-end': { settingsKey: 'SessionEnd', command: 'claude-session-end', label: '会话结束' },
+  'session-start': { settingsKey: 'SessionStart', command: 'claude-session-start', label: '会话开始' },
+});
+const TABELLIO_HOOK_COMMANDS = new Set(Object.values(HOOK_EVENT_META).map((meta) => meta.command));
 
 const MIN_SENTENCE_CHARS = 8;
 const CANDIDATE_TITLE_PREFIX = '会话记忆：';
@@ -90,11 +98,12 @@ function hookTokens(hook) {
   return tokens;
 }
 
-/** 只认带 hook + claude-session-end 两个词的那条；不碰用户自己的 SessionEnd 钩子。 */
+/** 只认带 hook + 已知内部子命令的那条；不碰用户自己的钩子。 */
 function isTabellioHook(hook) {
   if (!isPlainObject(hook) || hook.type !== 'command') return false;
   const tokens = hookTokens(hook);
-  return tokens.includes('hook') && tokens.includes('claude-session-end');
+  if (!tokens.includes('hook')) return false;
+  return tokens.some((token) => TABELLIO_HOOK_COMMANDS.has(token));
 }
 
 function sameCommandArgs(current, desired) {
@@ -109,19 +118,32 @@ function sameHook(current, desired) {
   return sameCommandArgs(current, desired) && current?.timeout === desired.timeout;
 }
 
-function desiredHook({ command, bin, store }) {
+function desiredHook({ command, bin, store, event }) {
+  const meta = HOOK_EVENT_META[event];
   return {
     type: 'command',
     command,
-    args: [bin, 'hook', 'claude-session-end', '--store', store],
+    args: [bin, 'hook', meta.command, '--store', store],
     timeout: HOOK_TIMEOUT_SECONDS,
   };
 }
 
-function collectOurs(sessionEnd) {
+function normalizeEvents(events, sessionStart = false) {
+  const raw = Array.isArray(events) ? events : events ? [events] : ['session-end'];
+  const wanted = new Set();
+  for (const item of raw) {
+    const name = String(item ?? '').trim();
+    if (HOOK_EVENTS.includes(name)) wanted.add(name);
+  }
+  if (wanted.size === 0) wanted.add('session-end');
+  if (sessionStart) wanted.add('session-start');
+  return HOOK_EVENTS.filter((name) => wanted.has(name));
+}
+
+function collectOurs(groups) {
   const ours = [];
-  for (let groupIndex = 0; groupIndex < sessionEnd.length; groupIndex += 1) {
-    const group = sessionEnd[groupIndex];
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+    const group = groups[groupIndex];
     for (const hook of group.hooks) {
       if (isTabellioHook(hook)) ours.push({ groupIndex, hook });
     }
@@ -129,9 +151,9 @@ function collectOurs(sessionEnd) {
   return ours;
 }
 
-function withoutOurs(sessionEnd) {
+function withoutOurs(groups) {
   const out = [];
-  for (const group of sessionEnd) {
+  for (const group of groups) {
     const hooks = group.hooks.filter((hook) => !isTabellioHook(hook));
     if (hooks.length === 0) continue;
     out.push({ ...group, hooks });
@@ -139,14 +161,39 @@ function withoutOurs(sessionEnd) {
   return out;
 }
 
-function withSessionEnd(data, sessionEnd) {
+function withEvent(data, settingsKey, groups) {
   const next = { ...data };
   const hooks = isPlainObject(next.hooks) ? { ...next.hooks } : {};
-  if (sessionEnd.length === 0) delete hooks.SessionEnd;
-  else hooks.SessionEnd = sessionEnd;
+  if (groups.length === 0) delete hooks[settingsKey];
+  else hooks[settingsKey] = groups;
   if (Object.keys(hooks).length === 0) delete next.hooks;
   else next.hooks = hooks;
   return next;
+}
+
+function eventGroups(data, settingsKey) {
+  const hooks = isPlainObject(data.hooks) ? data.hooks : {};
+  const groups = hooks[settingsKey];
+  if (groups === undefined) return { ok: true, groups: [] };
+  if (!Array.isArray(groups)) return { ok: false, message: 'hooks.' + settingsKey + ' 必须是数组' };
+  for (const group of groups) {
+    if (!isPlainObject(group) || !Array.isArray(group.hooks)) {
+      return { ok: false, message: 'hooks.' + settingsKey + ' 里有不认识的项（需要 { hooks: [...] }）' };
+    }
+    for (const hook of group.hooks) {
+      if (!isPlainObject(hook)) return { ok: false, message: 'hooks.' + settingsKey + ' 里有不认识的 hook（需要对象）' };
+    }
+  }
+  return { ok: true, groups };
+}
+
+function withPreview(plan, next) {
+  Object.defineProperty(plan, 'preview', {
+    value: JSON.stringify(next, null, 2) + '\n',
+    enumerable: false,
+    configurable: true,
+  });
+  return plan;
 }
 
 /**
@@ -163,6 +210,8 @@ export function planHookInstall({
   uninstall = false,
   force = false,
   now = Date.now(),
+  events = ['session-end'],
+  sessionStart = false,
 } = {}) {
   if (!HOOK_HOSTS.includes(host)) {
     return {
@@ -176,6 +225,7 @@ export function planHookInstall({
     };
   }
   const path = claudeSettingsPath(home);
+  const wanted = normalizeEvents(events, sessionStart);
   if (!uninstall && (typeof bin !== 'string' || !bin || typeof store !== 'string' || !store)) {
     return invalidPlan(host, path, 'E_ARGS', '缺少 bin / store', { reason: 'missing_target' });
   }
@@ -186,27 +236,21 @@ export function planHookInstall({
   if (data.hooks !== undefined && !isPlainObject(data.hooks)) {
     return invalidPlan(host, path, 'E_CONFIG_INVALID', 'hooks 必须是对象');
   }
-  const hooks = data.hooks ?? {};
-  if (hooks.SessionEnd !== undefined && !Array.isArray(hooks.SessionEnd)) {
-    return invalidPlan(host, path, 'E_CONFIG_INVALID', 'hooks.SessionEnd 必须是数组');
-  }
-  const sessionEnd = hooks.SessionEnd ?? [];
-  for (const group of sessionEnd) {
-    if (!isPlainObject(group) || !Array.isArray(group.hooks)) {
-      return invalidPlan(host, path, 'E_CONFIG_INVALID', 'hooks.SessionEnd 里有不认识的项（需要 { hooks: [...] }）');
-    }
-    for (const hook of group.hooks) {
-      if (!isPlainObject(hook)) {
-        return invalidPlan(host, path, 'E_CONFIG_INVALID', 'hooks.SessionEnd 里有不认识的 hook（需要对象）');
-      }
-    }
-  }
-
-  const ours = collectOurs(sessionEnd);
-  const remaining = withoutOurs(sessionEnd);
 
   if (uninstall) {
-    if (ours.length === 0) {
+    let next = data;
+    let removed = 0;
+    const details = [];
+    for (const event of HOOK_EVENTS) {
+      const meta = HOOK_EVENT_META[event];
+      const got = eventGroups(data, meta.settingsKey);
+      if (!got.ok) return invalidPlan(host, path, 'E_CONFIG_INVALID', got.message);
+      const ours = collectOurs(got.groups);
+      removed += ours.length;
+      next = withEvent(next, meta.settingsKey, withoutOurs(got.groups));
+      details.push({ event, settings_key: meta.settingsKey, action: ours.length ? 'uninstall' : 'unchanged', removed: ours.length });
+    }
+    if (removed === 0) {
       return {
         ok: true,
         host,
@@ -216,81 +260,96 @@ export function planHookInstall({
         exists: read.exists,
         would_write: false,
         removed: 0,
+        events: details,
       };
     }
-    const next = withSessionEnd(data, remaining);
     const plan = {
       ok: true,
       host,
       path,
       action: 'uninstall',
       exists: read.exists,
-      removed: ours.length,
+      removed,
       would_write: true,
       backup: read.exists ? path + '.tabellio-backup-' + stampOf(now) : null,
+      events: details,
     };
-    Object.defineProperty(plan, 'preview', {
-      value: JSON.stringify(next, null, 2) + '\n',
-      enumerable: false,
-      configurable: true,
-    });
-    return plan;
+    return withPreview(plan, next);
   }
 
-  const desired = desiredHook({ command, bin, store });
-  let action;
-  if (ours.length === 0) action = read.exists ? 'append' : 'create';
-  else if (ours.length === 1 && sameHook(ours[0].hook, desired)) action = 'unchanged';
-  else if (!force && !ours.every((item) => sameCommandArgs(item.hook, desired))) action = 'conflict';
-  else action = 'update';
+  let next = data;
+  const details = [];
+  for (const event of wanted) {
+    const meta = HOOK_EVENT_META[event];
+    const got = eventGroups(data, meta.settingsKey);
+    if (!got.ok) return invalidPlan(host, path, 'E_CONFIG_INVALID', got.message);
+    const ours = collectOurs(got.groups);
+    const remaining = withoutOurs(got.groups);
+    const desired = desiredHook({ command, bin, store, event });
+    let action;
+    if (ours.length === 0) action = read.exists ? 'append' : 'create';
+    else if (ours.length === 1 && sameHook(ours[0].hook, desired)) action = 'unchanged';
+    else if (!force && !ours.every((item) => sameCommandArgs(item.hook, desired))) action = 'conflict';
+    else action = 'update';
 
-  if (action === 'conflict') {
-    return {
-      ok: false,
-      host,
-      path,
+    if (action === 'conflict') {
+      return {
+        ok: false,
+        host,
+        path,
+        action,
+        reason: 'conflict',
+        exists: read.exists,
+        event,
+        current: ours[0]?.hook ?? null,
+        desired,
+        would_write: false,
+        hint: '已有指向别处的 tabellio 钩子；确认替换请加 --force',
+      };
+    }
+    if (action !== 'unchanged') {
+      next = withEvent(next, meta.settingsKey, [...remaining, { hooks: [desired] }]);
+    }
+    details.push({
+      event,
+      settings_key: meta.settingsKey,
       action,
-      reason: 'conflict',
-      exists: read.exists,
       current: ours[0]?.hook ?? null,
       desired,
-      would_write: false,
-      hint: '已有指向别处的 tabellio 钩子；确认替换请加 --force',
-    };
+    });
   }
-  if (action === 'unchanged') {
+
+  const changed = details.filter((item) => item.action !== 'unchanged');
+  if (changed.length === 0) {
     return {
       ok: true,
       host,
       path,
-      action,
+      action: 'unchanged',
       exists: read.exists,
-      current: ours[0]?.hook ?? null,
-      desired,
+      current: details[0]?.current ?? null,
+      desired: details[0]?.desired ?? null,
       would_write: false,
+      events: details,
     };
   }
-
-  const next = withSessionEnd(data, [...remaining, { hooks: [desired] }]);
+  const action = !read.exists ? 'create' : changed.some((item) => item.action === 'update') ? 'update' : 'append';
   const plan = {
     ok: true,
     host,
     path,
     action,
     exists: read.exists,
-    desired,
+    desired: details[0]?.desired ?? null,
+    current: details.find((item) => item.current)?.current ?? null,
     would_write: true,
     backup: read.exists ? path + '.tabellio-backup-' + stampOf(now) : null,
-    ...(ours.length > 0 ? { current: ours[0].hook } : {}),
+    events: details,
   };
   // 整个 settings 可能含 env 凭据：preview 只给 apply 用，不参与 JSON 序列化。
-  Object.defineProperty(plan, 'preview', {
-    value: JSON.stringify(next, null, 2) + '\n',
-    enumerable: false,
-    configurable: true,
-  });
-  return plan;
+  return withPreview(plan, next);
 }
+
 
 /** 应用计划；坏配置/冲突的计划不会写半份。 */
 export function applyHookInstall(plan) {

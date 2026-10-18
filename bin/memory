@@ -13,7 +13,7 @@
  * 3. **退出码**：0 = 成功；1 = 判定拒绝（deny，含 `status` 发现解析失败这种「库不健康」）；
  *    2 = 用法错误。脚本里可以只判 `$?`。
  */
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -62,9 +62,10 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio capture  --file <path.md|-> [--source REF] [--kind k] [--tags a,b] [--dry] [--json]
   tabellio inbox    [--accept <id[,id]>]... [--reject <id[,id]>]... [--dry] [--json]
   tabellio setup    [--host claude,cursor,codex|all] [--write] [--verify] [--force] [--read-only] [--json]
-  tabellio hook install   --host claude [--write] [--force] [--json]   # SessionEnd 钩子，默认 dry-run
+  tabellio hook install   --host claude [--session-start] [--write] [--force] [--json]  # 默认只装 SessionEnd
   tabellio hook uninstall --host claude [--write] [--json]
-  tabellio hook claude-session-end [--json]        # 内部：宿主 SessionEnd 调用，只写候选
+  tabellio hook claude-session-end [--json]          # 内部：宿主 SessionEnd 调用，只写候选
+  tabellio hook claude-session-start [--json]        # 内部：宿主 SessionStart 调用，只提示待批准
   tabellio import --from <旧 Engramory 库目录> [--dry] [--json]
   tabellio recall --query "<词>" [--receipt|--save-receipt] [--budget-tokens N] [--json]
   tabellio explain (--query "<词>" | --receipt <id|path>) [--json]
@@ -709,6 +710,7 @@ export async function main(argv, io = {}) {
             command: process.execPath,
             uninstall: sub === 'uninstall',
             force: Boolean(args.force),
+            sessionStart: Boolean(args['session-start']),
           });
           if (!args.write) {
             const result = { ...plan, dry_run: true };
@@ -784,7 +786,47 @@ export async function main(argv, io = {}) {
           if (json) out.write(JSON.stringify(result) + '\n');
           return 0;
         }
-        err.write('hook 需要 install / uninstall / claude-session-end\n');
+        if (sub === 'claude-session-start') {
+          // 宿主钩子：只读候选数、输出提示。任何失败都退 0——提示不该阻塞会话开始。
+          let event;
+          try {
+            event = JSON.parse(await readAll(io.stdin ?? process.stdin));
+          } catch {
+            if (json) out.write(JSON.stringify({ ok: false, reason: 'invalid_event' }) + '\n');
+            return 0;
+          }
+          let count;
+          try {
+            // 库路径存在但不是目录，是明确的配置错误；不要静默当成「没有候选」。
+            if (existsSync(storePath) && !statSync(storePath).isDirectory()) throw new Error('store 不是目录：' + storePath);
+            count = listCandidates(openStore(storePath)).count;
+          } catch (e) {
+            if (json) out.write(JSON.stringify({ ok: false, reason: 'store_unreadable', error: String(e?.message ?? e) }) + '\n');
+            return 0;
+          }
+          const additionalContext =
+            count > 0
+              ? '[tabellio] 有 ' + count + ' 条候选待确认。运行 `tabellio inbox` 查看；批准用 `tabellio inbox --accept <id>`。'
+              : null;
+          if (json) {
+            out.write(
+              JSON.stringify({
+                ok: true,
+                event: 'SessionStart',
+                source: typeof event?.source === 'string' ? event.source : null,
+                candidates: count,
+                prompted: count > 0,
+                ...(additionalContext ? { additionalContext } : {}),
+              }) + '\n',
+            );
+            return 0;
+          }
+          if (additionalContext) {
+            out.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext } }) + '\n');
+          }
+          return 0;
+        }
+        err.write('hook 需要 install / uninstall / claude-session-end / claude-session-start\n');
         return 2;
       }
       case 'import': {
@@ -921,6 +963,10 @@ function renderSetupApplied(plan, applied) {
   return lines.join('\n');
 }
 
+function hookEventLabel(event) {
+  return event === 'session-start' ? '会话开始' : event === 'session-end' ? '会话结束' : String(event ?? '钩子');
+}
+
 function renderHookPlan(plan, dryRun) {
   const actionLabel = {
     create: '新建配置',
@@ -941,17 +987,25 @@ function renderHookPlan(plan, dryRun) {
       missing_target: '缺少可执行文件或 store 路径',
     };
     lines.push('钩子未安装：' + (reasons[plan.reason] ?? plan.reason));
+    if (plan.event) lines.push('事件：' + hookEventLabel(plan.event));
     if (plan.path) lines.push('配置：' + plan.path);
     if (plan.error?.message) lines.push('原因：' + plan.error.message);
     return lines.join('\n');
   }
-  lines.push((dryRun ? '[dry-run] ' : '') + 'Claude Code 会话结束钩子：' + (actionLabel[plan.action] ?? plan.action));
+  const details = Array.isArray(plan.events) ? plan.events : [];
+  const active = details.filter((item) => item.action !== 'unchanged');
+  const scope = active.length ? '（' + active.map((item) => hookEventLabel(item.event)).join(' + ') + '）' : '';
+  lines.push((dryRun ? '[dry-run] ' : '') + 'Claude Code 钩子' + scope + '：' + (actionLabel[plan.action] ?? plan.action));
   lines.push('配置：' + plan.path);
   if (plan.action === 'uninstall') {
     lines.push('将移除 ' + plan.removed + ' 条 tabellio 钩子');
+    for (const item of active) lines.push('  - ' + hookEventLabel(item.event) + '：' + item.removed + ' 条');
   } else if (plan.action !== 'unchanged') {
-    lines.push('命令：' + plan.desired.command + ' ' + plan.desired.args.join(' '));
-    lines.push('超时：' + plan.desired.timeout + ' 秒');
+    for (const item of active) {
+      if (!item.desired) continue;
+      lines.push('  - ' + hookEventLabel(item.event) + '：' + item.desired.command + ' ' + item.desired.args.join(' '));
+    }
+    lines.push('超时：' + (plan.desired?.timeout ?? 15) + ' 秒');
   }
   if (plan.backup) lines.push('写前备份：' + plan.backup);
   if (dryRun) lines.push('加 --write 才落盘。');
@@ -972,11 +1026,21 @@ function renderHookApplied(plan, applied) {
     return lines.join('\n');
   }
   if (!applied.written) return '没有改动：' + (plan.path ?? '');
-  return [
+  if (plan.action === 'uninstall') {
+    return [
+      '已移除 ' + plan.removed + ' 条 tabellio 钩子：' + applied.path,
+      ...(applied.backup ? ['写前备份：' + applied.backup] : []),
+    ].join('\n');
+  }
+  const events = (plan.events ?? []).filter((item) => item.action !== 'unchanged').map((item) => hookEventLabel(item.event));
+  const lines = [
     '钩子已写入：' + applied.path,
     ...(applied.backup ? ['写前备份：' + applied.backup] : []),
-    '下次 Claude Code 会话结束后会自动生成候选；用 tabellio inbox 查看/批准。',
-  ].join('\n');
+    '已安装：' + (events.join(' + ') || '会话结束'),
+  ];
+  if (events.includes('会话开始')) lines.push('下次 Claude Code 会话开始时会提示待批准候选数；批准仍走 tabellio inbox。');
+  if (events.includes('会话结束')) lines.push('下次 Claude Code 会话结束后会自动生成候选；用 tabellio inbox 查看/批准。');
+  return lines.join('\n');
 }
 
 function renderRemember(r) {

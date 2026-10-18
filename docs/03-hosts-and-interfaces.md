@@ -147,22 +147,24 @@
 - **不做**：Cline / Zed / VS Code / Windsurf / Continue / Gemini 的自动写（格式分散、且当前无实机验证）；DSH 的 `~/.dsh/cordis.patch.yml` 是 YAML loader patch，零依赖做保真改写风险高，只给片段（§3.11）；Claude Code 项目级作用域、Cursor 项目级配置、Codex `--config` 覆盖也不写。
 - 边界：`setup` 默认只证明「配置写对了」；加 `--verify` 才让宿主自己回答。Claude Code 已实测 `✓ Connected`；Codex 的 `mcp list` 只证明配置被接受（`enabled`），不 spawn server，不算连接检查；Cursor 没有无头健康检查，只能标 `unverified`、需 GUI 确认。可复核的实现见 `test/hostverify.test.mjs`；真实宿主 E2E 在 `test/host-e2e.test.mjs`（默认跳过，`TABELLIO_HOST_E2E=1` 才跑）。
 
-### 3.0.1 会话结束钩子（只有 Claude Code，默认不装）
+### 3.0.1 会话钩子（只有 Claude Code，默认不装）
 
 `setup` 只写 MCP server 配置，不写会话钩子；自动生成候选是单独的一步：
 
 ```bash
 tabellio hook install --host claude            # 默认 dry-run
-tabellio hook install --host claude --write    # 写 ~/.claude/settings.json
+tabellio hook install --host claude --write    # 写 ~/.claude/settings.json（SessionEnd）
+tabellio hook install --host claude --session-start --write  # 另加 SessionStart 待批准提示
 tabellio hook uninstall --host claude --write
 ```
 
 - **为什么只有 Claude Code**：Claude Code 有稳定的 `SessionEnd` 钩子，事件里带 `transcript_path`；Cursor 没有等价的无头钩子契约，Codex 也没有会话结束钩子。没有实机契约就不伪造，装其他宿主直接退 1。
-- **写什么**：只合并 `hooks.SessionEnd` 里 tabellio 自己的 command hook，用 exec form（`command` + `args`），`timeout:15` 秒；保留用户其他钩子、`env` 与 settings 其他字段。写前备份成 `settings.json.tabellio-backup-<时间戳>`，JSON 原子写，新文件 mode `0600`；已有指向别的 store 的 tabellio 钩子先 `conflict`，`--force` 才替换；坏 JSON / 不认识的结构整份不写。
+- **写什么**：默认只合并 `hooks.SessionEnd` 里 tabellio 自己的 command hook；`--session-start` 时同时合并 `hooks.SessionStart`。用 exec form（`command` + `args`），`timeout:15` 秒；保留用户其他钩子、`env` 与 settings 其他字段。写前备份成 `settings.json.tabellio-backup-<时间戳>`，JSON 原子写，新文件 mode `0600`；已有指向别的 store 的 tabellio 钩子先 `conflict`，`--force` 才替换；坏 JSON / 不认识的结构整份不写。
 - **抓什么**：宿主调用的是内部命令 `tabellio hook claude-session-end`，它只读事件给的当前 transcript，只取真实用户发言，跳过 sidechain / meta / compact summary / tool_result / system-reminder；按显式线索（「记住」「以后都」「我偏好」「我们决定」「默认用」「改用」等中英文）切句，排除问句/假设句和命中密钥模式的整句；每会话最多 3 条。**不调用模型、不联网、不摘要、不自动合并。**
+- **SessionStart 提示什么**：`--session-start` 装的内部命令 `tabellio hook claude-session-start` **只读候选数**；>0 时按 Claude 的 hook 协议向 stdout 输出 `hookSpecificOutput`（`hookEventName:"SessionStart"` + `additionalContext`），提示用户运行 `tabellio inbox`；=0 时不输出。**不写库、不批准、不删除**，批准权不变。
 - **写到哪**：只写 `notes/candidates/`，不重建主索引、不进默认检索面；`written_by:capture:hook`，`source:claude:session-end:<session_id>`。批准仍在 CLI `tabellio inbox`，走与 `remember` 同一条闸门。
-- **失败语义**：内部命令的任何事件/读取/store 错误都退 0（不能阻塞宿主退出）；安装/卸载冲突、坏配置、未知宿主退 1，参数缺值退 2。
-- **证据与边界**：真实 Claude Code 2.1.142 的 `-p` 会话已实测 `SessionEnd` 触发、exec form 被接受、候选落盘且主库 `notes=0`；可复核的 gated 测试是 `test/hook-claude-e2e.test.mjs`（`TABELLIO_HOOK_E2E=1` 才跑）。未登录时 API 会报错，但钩子仍触发——说明它不依赖模型回答。没有定时/后台触发，没有自动巩固，也不承诺「记住一切」；过滤是尽力而为，不是 DLP。
+- **失败语义**：两个内部命令的任何事件/读取/store 错误都退 0（不能阻塞宿主退出或开始）；安装/卸载冲突、坏配置、未知宿主退 1，参数缺值退 2。
+- **证据与边界**：真实 Claude Code 2.1.142 的 `-p` 会话已实测 `SessionEnd` 触发、exec form 被接受、候选落盘且主库 `notes=0`；SessionStart 用并排的 marker 钩子证明事件确实触发，且提示没有写库；可复核的 gated 测试是 `test/hook-claude-e2e.test.mjs`（`TABELLIO_HOOK_E2E=1` 才跑）。未登录时 API 会报错，但两个事件仍触发——说明钩子不依赖模型回答。**不伪造** additionalContext 已被模型看到（需要已登录会话）。没有定时/后台触发，没有自动巩固，也不承诺「记住一切」；过滤是尽力而为，不是 DLP。
 
 ### 3.1 Claude Code（最完整，也最会在细节上咬人）
 

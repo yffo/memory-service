@@ -10,6 +10,7 @@ import { join } from 'node:path';
 
 import { tempDir, rm } from './helpers.mjs';
 import {
+  HOOK_EVENTS,
   HOOK_TIMEOUT_SECONDS,
   applyHookInstall,
   buildCandidateBody,
@@ -193,6 +194,70 @@ test('applyHookInstall：写入、幂等、保留其他钩子和 env 字段', ()
     assert.equal(after.env.SECRET_TOKEN, 'super-secret-value');
     assert.equal(after.hooks.SessionEnd.length, 1);
     assert.equal(after.hooks.SessionEnd[0].hooks[0].args[0], 'keep-me');
+  } finally {
+    rm(home);
+  }
+});
+
+test('planHookInstall：--session-start 同时装两个事件，保留别人的 SessionStart，uninstall 全清', () => {
+  const home = tempDir('memory-hook-session-start-');
+  try {
+    const settings = claudeSettingsPath(home);
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(
+      settings,
+      JSON.stringify(
+        {
+          env: { SECRET_TOKEN: 'super-secret-value' },
+          hooks: {
+            SessionStart: [{ hooks: [{ type: 'command', command: 'echo', args: ['keep-start'] }] }],
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+
+    const plan = planHookInstall({
+      home,
+      bin: '/tmp/memory',
+      store: '/tmp/store',
+      command: '/usr/bin/node',
+      sessionStart: true,
+    });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.action, 'append');
+    assert.deepEqual(plan.events.map((item) => item.event), [...HOOK_EVENTS]);
+    assert.deepEqual(plan.events.map((item) => item.action), ['append', 'append']);
+    assert.match(plan.events[1].desired.args.join(' '), /claude-session-start/);
+
+    const applied = applyHookInstall(plan);
+    assert.equal(applied.written, true);
+    const config = JSON.parse(readFileSync(settings, 'utf8'));
+    assert.equal(config.env.SECRET_TOKEN, 'super-secret-value');
+    assert.equal(config.hooks.SessionEnd.length, 1);
+    assert.equal(config.hooks.SessionStart.length, 2);
+    assert.equal(config.hooks.SessionStart[0].hooks[0].args[0], 'keep-start');
+    assert.deepEqual(config.hooks.SessionStart[1].hooks[0].args.slice(0, 3), ['/tmp/memory', 'hook', 'claude-session-start']);
+
+    const again = planHookInstall({
+      home,
+      bin: '/tmp/memory',
+      store: '/tmp/store',
+      command: '/usr/bin/node',
+      sessionStart: true,
+    });
+    assert.equal(again.action, 'unchanged');
+    assert.equal(applyHookInstall(again).written, false);
+
+    const removed = planHookInstall({ home, uninstall: true });
+    assert.equal(removed.action, 'uninstall');
+    assert.equal(removed.removed, 2);
+    assert.equal(applyHookInstall(removed).written, true);
+    const after = JSON.parse(readFileSync(settings, 'utf8'));
+    assert.equal(after.hooks.SessionStart.length, 1);
+    assert.equal(after.hooks.SessionStart[0].hooks[0].args[0], 'keep-start');
+    assert.equal(after.hooks.SessionEnd, undefined);
   } finally {
     rm(home);
   }

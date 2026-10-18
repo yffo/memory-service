@@ -5,6 +5,14 @@
 
 ## M2（未发布）
 
+### 钩子：Claude Code 会话开始时提示待批准候选（默认不装）
+
+- **修的问题**：SessionEnd 钩子会把候选放进 `notes/candidates/`，但用户不主动跑 `tabellio inbox` 就永远看不到；自动捕获与人工批准之间缺一个通知环，等于仍要用户自己想起去查。
+- **做法**：`hook install --host claude --session-start --write` 在 `hooks.SessionStart` 里再加一个 tabellio 钩子，指向内部命令 `tabellio hook claude-session-start`。默认 install 仍只装 SessionEnd，不改变旧行为；`uninstall` 同时清两个事件里的 tabellio 钩子，但保留用户自己的 SessionStart 钩子。
+- **行为**：内部命令只读候选数；候选数 > 0 时向 stdout 输出 Claude 的 hook 协议 JSON（`hookSpecificOutput.hookEventName=SessionStart` + `additionalContext`，提示运行 `tabellio inbox`），= 0 时静默。**不写库、不批准、不删除**，批准权仍在 CLI `inbox`。事件/读取/store 错误一律退 0，不阻塞会话开始。
+- **验证**：单元与 CLI 测试覆盖双事件安装/卸载、保留他人 SessionStart 钩子、协议输出、无候选静默、坏事件与坏 store 退 0；gated `test/hook-claude-e2e.test.mjs` 用并排 marker 钩子证明真实 Claude Code 2.1.142 确实触发 SessionStart，且提示没有写库。不伪造 additionalContext 已被模型看到。
+- **边界**：只支持 Claude Code；提示只在候选数 > 0 时出现，不是每次会话都打扰；没有定时/后台触发、没有自动批准、没有自动巩固。
+
 ### 钩子：Claude Code 会话结束时自动生成候选（默认不装）
 
 - **修的问题**：`setup` 解决了安装摩擦，`capture` 给了 agent 主动提议的入口，但两者都要求「有人先想起要记」。真实用户不会每轮都敲 `remember`，也不会替 agent 调用 `capture`；而完全自动写正式库又违背「不静默写」的边界。

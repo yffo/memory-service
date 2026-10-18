@@ -1,8 +1,10 @@
 /**
- * 真实 Claude Code SessionEnd 钩子 E2E：默认跳过。
+ * 真实 Claude Code 钩子 E2E：默认跳过。
  *
  * 只验证「钩子真的被宿主调用、配置格式被接受、候选真的落盘」，
  * 不验证 Claude 的回答质量，也不要求已登录——未登录时 -p 会失败，但 SessionEnd 仍会触发。
+ * SessionStart 的 E2E 只能证明宿主触发了事件（用侧面 marker 钩子作证），
+ * 不能证明 additionalContext 被模型看到——那需要已登录会话，不能伪造成立。
  * 需要已安装 claude CLI：TABELLIO_HOOK_E2E=1 node --test test/hook-claude-e2e.test.mjs
  */
 import test from 'node:test';
@@ -92,6 +94,68 @@ test('真实 Claude Code：SessionEnd 钩子触发，只写候选，不写主库
     // 保留候选文件的可读证据，失败时方便排查。
     const candidatePath = listed.candidates[0].path;
     assert.equal(readFileSync(candidatePath, 'utf8').includes('pnpm'), true);
+  } finally {
+    rm(home);
+  }
+});
+
+test('真实 Claude Code：SessionStart 钩子被宿主触发，提示不写库', (t) => {
+  if (process.env.TABELLIO_HOOK_E2E !== '1') {
+    return t.skip('设置 TABELLIO_HOOK_E2E=1 才跑真实宿主 E2E');
+  }
+  const probe = spawnSync('claude', ['--version'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0) {
+    return t.skip('claude CLI 不可用');
+  }
+
+  const home = tempDir('memory-hook-start-e2e-');
+  try {
+    const store = join(home, 'store');
+    const settingsPath = join(home, 'settings.json');
+    const marker = join(home, 'session-start-marker');
+    const candidateFile = join(home, 'candidate.md');
+    writeFileSync(candidateFile, '# 待批准候选\n\n会话开始时应提示，但不该自动入库。\n');
+    const capture = spawnSync(process.execPath, [CLI, 'capture', '--file', candidateFile, '--store', store, '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env },
+    });
+    assert.equal(capture.status, 0, capture.stderr);
+
+    const settings = {
+      hooks: {
+        SessionStart: [
+          { hooks: [{ type: 'command', command: '/bin/sh', args: ['-c', 'touch ' + marker] }] },
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: process.execPath,
+                args: [CLI, 'hook', 'claude-session-start', '--store', store],
+                timeout: 15,
+              },
+            ],
+          },
+        ],
+      },
+    };
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+
+    const run = spawnSync(
+      'claude',
+      ['-p', '只回复：好', '--settings', settingsPath, '--setting-sources', 'local', '--output-format', 'json', '--max-turns', '1', '--tools', ''],
+      { cwd: home, encoding: 'utf8', timeout: 120000, env: { ...process.env } },
+    );
+    assert.equal(run.error, undefined, String(run.error));
+    assert.equal(existsSync(marker), true, 'SessionStart 钩子没有被宿主触发：' + (run.stdout || '') + (run.stderr || ''));
+
+    const status = spawnSync(process.execPath, [CLI, 'status', '--store', store, '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env },
+    });
+    assert.equal(status.status, 0, status.stderr);
+    const s = JSON.parse(status.stdout);
+    assert.equal(s.notes, 0, 'SessionStart 不能写主库');
+    assert.equal(s.candidates, 1, 'SessionStart 不能批准或删除候选');
   } finally {
     rm(home);
   }

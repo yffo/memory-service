@@ -137,6 +137,105 @@ test('hook install：已有别处 store 时先冲突退 1，--force 才替换', 
   }
 });
 
+test('hook install --session-start：两个事件都装，uninstall 都清掉', () => {
+  const home = tempDir('memory-cli-hook-start-install-');
+  try {
+    const store = join(home, 'store');
+    seedSettings(home);
+    const installed = cli(
+      ['hook', 'install', '--home', home, '--store', store, '--session-start', '--write', '--json'],
+      { store },
+    );
+    assert.equal(installed.code, 0, installed.stderr);
+    assert.equal(installed.json.written, true);
+    const config = JSON.parse(readFileSync(settingsPath(home), 'utf8'));
+    assert.equal(config.hooks.SessionEnd.length, 2);
+    assert.equal(config.hooks.SessionStart.length, 1);
+    assert.deepEqual(config.hooks.SessionStart[0].hooks[0].args.slice(0, 3), [CLI, 'hook', 'claude-session-start']);
+
+    const again = cli(
+      ['hook', 'install', '--home', home, '--store', store, '--session-start', '--write', '--json'],
+      { store },
+    );
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(again.json.action, 'unchanged');
+
+    const removed = cli(['hook', 'uninstall', '--home', home, '--store', store, '--write', '--json'], { store });
+    assert.equal(removed.code, 0, removed.stderr);
+    assert.equal(removed.json.removed, 2);
+    const after = JSON.parse(readFileSync(settingsPath(home), 'utf8'));
+    assert.equal(after.hooks.SessionEnd.length, 1);
+    assert.equal(after.hooks.SessionStart, undefined);
+  } finally {
+    rm(home);
+  }
+});
+
+test('SessionStart 内部命令：只提示候选数，不写库；无候选/坏事件都退 0', () => {
+  const home = tempDir('memory-cli-hook-start-');
+  try {
+    const store = join(home, 'store');
+    const event = { session_id: 's-start', hook_event_name: 'SessionStart', source: 'startup' };
+    const empty = cli(['hook', 'claude-session-start', '--store', store, '--json'], {
+      store,
+      input: JSON.stringify(event),
+    });
+    assert.equal(empty.code, 0, empty.stderr);
+    assert.equal(empty.json.candidates, 0);
+    assert.equal(empty.json.prompted, false);
+    assert.equal(empty.json.additionalContext, undefined);
+    assert.equal(empty.stdout.includes('hookSpecificOutput'), false);
+
+    const file = join(home, 'candidate.md');
+    writeFileSync(file, '# 待批准候选\n\n会话开始时应该提示这条。\n');
+    const captured = cli(['capture', '--file', file, '--store', store, '--json'], { store });
+    assert.equal(captured.code, 0, captured.stderr);
+
+    const prompted = cli(['hook', 'claude-session-start', '--store', store], { store, input: JSON.stringify(event) });
+    assert.equal(prompted.code, 0, prompted.stderr);
+    assert.equal(prompted.stderr, '');
+    const protocol = JSON.parse(prompted.stdout);
+    assert.equal(protocol.hookSpecificOutput.hookEventName, 'SessionStart');
+    assert.match(protocol.hookSpecificOutput.additionalContext, /1 条候选待确认/);
+    assert.match(protocol.hookSpecificOutput.additionalContext, /tabellio inbox/);
+    assert.match(protocol.hookSpecificOutput.additionalContext, /--accept/);
+
+    const debug = cli(['hook', 'claude-session-start', '--store', store, '--json'], {
+      store,
+      input: JSON.stringify(event),
+    });
+    assert.equal(debug.code, 0, debug.stderr);
+    assert.equal(debug.json.candidates, 1);
+    assert.equal(debug.json.prompted, true);
+    assert.equal(debug.json.source, 'startup');
+
+    assert.equal(cli(['inbox', '--store', store, '--json'], { store }).json.count, 1, '提示不能批准或删除候选');
+
+    const bad = cli(['hook', 'claude-session-start', '--store', store, '--json'], { store, input: '{' });
+    assert.equal(bad.code, 0);
+    assert.equal(bad.json.reason, 'invalid_event');
+  } finally {
+    rm(home);
+  }
+});
+
+test('SessionStart 内部命令：store 读不了也退 0，不阻塞会话开始', () => {
+  const home = tempDir('memory-cli-hook-start-store-');
+  try {
+    const store = join(home, 'store');
+    writeFileSync(store, 'not a directory\n');
+    const r = cli(['hook', 'claude-session-start', '--store', store, '--json'], {
+      store,
+      input: JSON.stringify({ session_id: 's-start-error', hook_event_name: 'SessionStart' }),
+    });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.json.reason, 'store_unreadable');
+    assert.equal(r.stderr, '');
+  } finally {
+    rm(home);
+  }
+});
+
 test('SessionEnd 内部命令：只写候选，不写主库；重复事件不重复落盘', () => {
   const home = tempDir('memory-cli-hook-capture-');
   try {

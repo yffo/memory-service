@@ -544,27 +544,34 @@ $ node bin/memory inbox --reject 01N... --dry    # 只预览
 - JSON 是 `{ok,dry_run,accepted,rejected,failed,accepted_count,rejected_count,failed_count}`；`accepted[]` 的 `status` 是 `stored|planned`，`rejected[]` 是 `rejected|planned`。
 - 索引只在真有批准写入时重建一次；只拒绝不重建。`status` 的「候选」计数与「N 条候选待处理」警告读的就是这个目录。
 
-### 14. `hook` —— Claude Code 会话结束时生成候选（默认不装）
+### 14. `hook` —— Claude Code 会话结束时生成候选、会话开始时提示待批准（默认不装）
 
 ```bash
 $ node bin/memory hook install --host claude            # 默认 dry-run：只打印会改哪个文件
-$ node bin/memory hook install --host claude --write    # 写入 ~/.claude/settings.json
-$ node bin/memory hook uninstall --host claude --write  # 只移除 tabellio 自己的钩子
+$ node bin/memory hook install --host claude --write    # 写入 ~/.claude/settings.json（只装 SessionEnd）
+$ node bin/memory hook install --host claude --session-start --write  # 再加 SessionStart 待批准提示
+$ node bin/memory hook uninstall --host claude --write  # 移除 tabellio 自己的两个钩子
 ```
 
 它解决的是「每次都要用户提醒它沉淀」：Claude Code 退出/结束时，宿主把 `SessionEnd` 事件
 （含 `transcript_path`）交给 `tabellio hook claude-session-end`，后者从**本次会话的用户发言**
 里找显式线索，生成候选。**不写正式库**，批准仍在 `inbox`。
 
+`--session-start` 是可选的通知环：下次会话开始时，宿主调用
+`tabellio hook claude-session-start`，它**只读**候选数，把「有 N 条候选待确认、用
+`tabellio inbox` 查看」注入会话上下文。不写库、不批准、不删除，也不改变批准权。
+
 - **只支持 Claude Code**（本机 2.1.142 实测）。Cursor 没有等价的无头会话结束钩子，Codex 也没有；
   不伪造支持，装其他宿主会退 1。
-- **默认不装、默认 dry-run**；只改 `<home>/.claude/settings.json` 的 `hooks.SessionEnd`，
-  保留用户的其他钩子、`env` 和其他字段。写前备份成
+- **默认不装、默认 dry-run**；默认只改 `<home>/.claude/settings.json` 的 `hooks.SessionEnd`，
+  加 `--session-start` 才同时写 `hooks.SessionStart`；保留用户的其他钩子、`env` 和其他字段。写前备份成
   `settings.json.tabellio-backup-<紧凑 ISO 时间戳>`；JSON 原子写；新文件 mode `0600`。
 - 钩子用 exec form：`{type:"command", command:<当前 node>, args:[<bin/memory>, "hook",
-  "claude-session-end", "--store", <库>], timeout:15}`。不依赖 shell 引号，也不依赖 PATH。
+  "claude-session-end" | "claude-session-start", "--store", <库>], timeout:15}`。
+  不依赖 shell 引号，也不依赖 PATH。
 - 已有指向**别的 store**的 tabellio 钩子时默认 `conflict`、一份不写；确认替换加 `--force`。
-  坏 JSON / 不认识的 `hooks.SessionEnd` 结构整份不写。
+  坏 JSON / 不认识的 `hooks.SessionEnd` / `hooks.SessionStart` 结构整份不写。
+- `uninstall` 会同时清掉两个事件里的 tabellio 钩子；用户自己的 SessionStart 钩子保留。
 - `--json` 输出计划/结果；**不会输出整份 settings**（里面可能有宿主 env 凭据）。
   `action` 取值：`create|append|update|unchanged|uninstall|conflict|invalid|unsupported`。
 
@@ -586,26 +593,33 @@ $ node bin/memory hook uninstall --host claude --write  # 只移除 tabellio 自
 
 **内部命令与失败语义**
 
-`tabellio hook claude-session-end` 是给宿主调用的，不面向日常使用：
+两个内部命令都是给宿主调用的，不面向日常使用：
 
-- 从 stdin 读 `SessionEnd` 事件；只有 `--json` 才输出，默认静默。
-- 事件坏、没有 `transcript_path`、文件不存在/读不了：`ok:false` + `reason`，
-  **始终退 0**——钩子不能阻塞宿主退出；用法错误才退 2。
+- `tabellio hook claude-session-end`：从 stdin 读 `SessionEnd` 事件，读 transcript、生成候选；
+  只有 `--json` 才输出调试结果，默认静默。
+- `tabellio hook claude-session-start`：从 stdin 读 `SessionStart` 事件；候选数 > 0 时向 stdout
+  输出 Claude 的 hook 协议 JSON（`hookSpecificOutput.hookEventName=SessionStart` +
+  `additionalContext`），候选数为 0 时不输出。**只读候选数**，不写库、不改变候选状态。
+- 事件坏、没有 `transcript_path`、文件不存在/读不了、库读不了：`ok:false` + `reason`，
+  **始终退 0**——钩子不能阻塞宿主退出或开始；用法错误才退 2。
 - 有候选时才打开库并逐条 `addCandidate`；重复/超长是正常 `rejected`，不算命令失败。
 - 安装/卸载的退出码：成功/dry-run/`unchanged` 0；冲突、坏配置、写失败、未知宿主 1；参数缺值 2。
 
 **真实宿主证据**
 
 `test/hook-claude-e2e.test.mjs` 用真实 `claude`（`TABELLIO_HOOK_E2E=1` 才跑）在临时
-`settings.json` 上验证：钩子被调用、exec form 被接受、候选落盘、主库 `notes=0`。
-本机在 Claude Code 2.1.142 的 `-p` 会话里实测通过（未登录时 API 会报错，但 `SessionEnd`
-仍触发——这恰好说明钩子不依赖模型回答）。不碰真实 `~/.claude/settings.json`。
+`settings.json` 上验证：钩子被调用、exec form 被接受、候选落盘、主库 `notes=0`；
+SessionStart 用一条并排的 marker 钩子证明宿主确实触发了事件，并确认提示没有写库。
+本机在 Claude Code 2.1.142 的 `-p` 会话里实测通过（未登录时 API 会报错，但两个事件
+仍触发——这恰好说明钩子不依赖模型回答）。**不能**用无头测试证明 additionalContext
+真的被模型看到——那需要已登录会话，不伪造。测试不碰真实 `~/.claude/settings.json`。
 
 **边界**
 
 只有 Claude Code；没有定时/后台触发，没有跨会话批量重放，没有自动巩固；它不是「自动记住一切」，
-只是把「会话结束时该问用户一句要不要记」变成候选箱里的一条待审记录。卸载只移除 tabellio 的钩子，
-不删候选、不删已有记忆。
+只是把「会话结束该问要不要记」变成候选箱里的一条待审记录，并在下次会话开始时提醒一次。
+提示只在候选数 > 0 时出现，不是每次会话都打扰；卸载只移除 tabellio 的钩子，不删候选、
+不删已有记忆。
 
 ## 评测（开发用，可零模型）
 
@@ -688,7 +702,7 @@ id 前缀是人写文件时形成的天然主题，组数与组内条数都在�
 
 | 码 | 含义 |
 | --- | --- |
-| 0 | 成功（拒绝也是成功的回答 —— `search` 的 `refused`、`remember` 的 `deny`、`inbox --reject` 的成功拒绝都算；`setup` 的 dry-run / `unchanged`、`hook` 的 dry-run / `unchanged`、内部 SessionEnd 命令的错误也都算） |
+| 0 | 成功（拒绝也是成功的回答 —— `search` 的 `refused`、`remember` 的 `deny`、`inbox --reject` 的成功拒绝都算；`setup` 的 dry-run / `unchanged`、`hook` 的 dry-run / `unchanged`、内部 SessionEnd / SessionStart 命令的错误也都算） |
 | 1 | 判定拒绝 / 库不健康 / 回执或巩固失败（`read` 找不到、`remember` deny、`capture` 拒收、`inbox` 有失败项、`index` 有笔记走不到或 `stale`、`verify` 不是 `verified`、`recall --save-receipt` 落盘失败、`consolidate` 中止或 `undo` 冲突/被篡改、`setup` 冲突/无宿主/解析失败、`hook install` 冲突/坏配置/未知宿主） |
 | 2 | 用法错误（缺参数、命令不认识） |
 
