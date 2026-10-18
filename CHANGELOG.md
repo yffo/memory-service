@@ -3,14 +3,16 @@
 只记**看得见的行为变化**与**改了的口径**，不记「测试通过数」这类会腐烂的状态
 （要读状态就去跑 `node --test` 与 `node bench/run-eval.mjs`）。
 
-## 未发布
+## 0.1.3（2026-10-18）
+
+0.1.2 发布后 smoke test 发现包内自报版本仍是 0.1.1；0.1.3 只修这个问题，功能面与 0.1.2 相同。
 
 ### 版本：CLI 与 MCP 自报版本从 `package.json` 读取
 
 - **修的问题**：0.1.2 发布前只抬了 `package.json` 与 `server.json`，`bin/memory` 的 `VERSION` 与 `src/mcp/protocol.js` 的 `SERVER_VERSION` 仍硬编码 `0.1.1`。从官方 registry 装 0.1.2 后，`tabellio --version` 和 MCP `serverInfo.version` 都还报 0.1.1；包内容本身是 0.1.2，但包内自报版本错了。
 - **做法**：新增 `src/version.js`，从 `package.json` 读 `version` 作为唯一真相源；CLI 与 MCP 都从它取版本。新增 `test/version.test.mjs`，断言 CLI、MCP `initialize` 与 `package.json` 一致，并真实 spawn `tabellio --version`。
-- **行为**：以后抬版本只改 `package.json`（`server.json` 的 registry 元数据仍要同步），CLI 与 MCP 不会再漂。本地 `npm pack` 后装 tarball 验证：`--version` 与 MCP `serverInfo.version` 都是 0.1.2。
-- **边界**：npm 上的 0.1.2 不可覆盖，这个修复只能随下一版（0.1.3）发布；已发布的 0.1.2 仍然自报 0.1.1。
+- **行为**：以后抬版本只改 `package.json`（`server.json` 的 registry 元数据仍要同步），CLI 与 MCP 不会再漂。本地 `npm pack` 后装 tarball 验证：`--version` 与 MCP `serverInfo.version` 都是 0.1.3。
+- **边界**：npm 上的 0.1.2 不可覆盖，仍会自报 0.1.1；要正确版本号请用 0.1.3。功能与 0.1.2 没有区别。
 
 ## 0.1.2（2026-10-18）
 
