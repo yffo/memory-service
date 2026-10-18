@@ -9,6 +9,13 @@ M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的�
 它们都属于「判据说达标了、但真实库上不成立」的那一类，不修掉的话 M2 的判据 3
 （不腐烂、不害人）是在坏地基上盖楼。
 
+### MCP：`capture` 让 agent 主动提议，批准仍留在 CLI
+
+- **修的问题**：MCP 工具面此前只有 `search` / `read` / `list` / `status`，`--allow-write` 只多一个 `remember`。Agent 在会话里看到「这条以后用得上」时，要么直接 `remember` 写进正式库（越过候选与人工批准），要么什么也做不了；CLI 的 `capture` 它够不着。
+- **做法**：`src/mcp/protocol.js` 新增 `capture` 工具（`CAPTURE_INPUT`：`content` 必填，可选 `source` / `kind` / `tags` / `id`；不暴露 `trust` / `scope`）。与 `remember` 一样只在 `--allow-write` 时挂载，工具面变成 6 条（仍在 5±2 内）。底层复用 `addCandidate`，`written_by` 记为 `capture:mcp`，不是 CLI。
+- **行为**：成功只落 `notes/candidates/<id>.md`（`status:draft` / `trust:system_derived`），不重建主索引、不进检索面；返回候选 id、标题、字数、来源与路径，并提示人运行 `tabellio inbox`。重复 / 超长 / id 已存在是**正常判定**（`ok:false`、`isError:false`），只有非法输入或落盘失败才标 `isError:true`——宿主会把 `isError` 当失败并自动重试，不能把「这条已经有了」伪装成故障。
+- **边界**：没有把批准权交给 agent，也没有新增 `inbox --accept` 的 MCP 写工具；仍不会从对话自动抽取，仍没有自动巩固或后台任务。候选正文上限仍是 8KB，批准时仍走 `remember` 的同一条闸门。
+
 ### 上手：`setup` 一条命令写宿主配置；`capture` / `inbox` 让候选可批准
 
 - **修的问题**：装完 `tabellio` 之后，用户还得自己翻三个宿主的文档、手写 MCP 配置；记忆只能靠人先想起「这件事该记」，再主动 `remember`。前者是安装摩擦，后者是「产品该负责判断，却把判断推给用户」——而完全自动写又违背「不静默写」的边界。

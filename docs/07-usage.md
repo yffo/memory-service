@@ -545,7 +545,10 @@ for l in sys.stdin:
 ```
 
 - 工具面：`search` / `read` / `list` / `status`（默认只读，四个都带
-  `annotations.readOnlyHint:true`）；加 `--allow-write` 才多出 `remember`。
+  `annotations.readOnlyHint:true`）；加 `--allow-write` 才多出 `remember` 与 `capture`
+  （共 6 条，仍在「5±2」预算内）。
+- `remember` 直接写正式记忆；`capture` **只写候选**，不重建主索引、不进检索面，
+  返回候选 id 并提示人运行 `tabellio inbox` 批准。Agent 可以主动丢候选，但批准权不交给它。
 - `search` 只回指针（不含 `body`），正文用 `read` 取 —— 与 CLI 同一套语义。
 - `list` 用 `limit` + `cursor` 翻页，`structuredContent` 回 `{items, total, next_cursor}`，
   正文里还会写一句人话「共 N 条，本次 M 条，下一页 cursor=…」。

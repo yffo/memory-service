@@ -774,7 +774,7 @@ export function addCandidate(ctx, input = {}, options = {}) {
     trust: 'system_derived',
     status: 'draft',
     tags: options.tags ?? input.tags ?? [],
-    writtenBy: 'capture:cli',
+    writtenBy: options.writtenBy ?? 'capture:cli',
     sourceRef: options.source ?? input.source ?? null,
     validFrom: options.validFrom ?? isoLocal(now),
   };
@@ -793,7 +793,7 @@ export function addCandidate(ctx, input = {}, options = {}) {
   note.status = 'draft';
   note.trust = 'system_derived';
   note.provenance = {
-    written_by: 'capture:cli',
+    written_by: options.writtenBy ?? 'capture:cli',
     source_ref: options.source ?? input.source ?? note.provenance?.source_ref ?? null,
     derived_from: Array.isArray(note.provenance?.derived_from) ? note.provenance.derived_from : [],
   };

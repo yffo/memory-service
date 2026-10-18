@@ -20,6 +20,8 @@ tabellio-mcp                             # 给宿主用的 MCP stdio 服务器
 
 零运行时依赖，Node ≥ 20.11，不需要 `npm install`。
 
+`tabellio-mcp` 默认只读；加 `--allow-write` 才挂两个写工具：`remember` 直接写正式记忆，`capture` 只写候选、由人在 CLI 批准。
+
 `setup` 只认 Claude Code / Cursor / Codex 三家，写前备份、默认只预览，已有的不同配置要显式 `--force`；
 DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自动记忆」的诚实版本：
 **当前不会从对话里自动抽取**，宿主或脚本调用 `capture` 把候选丢进来，人在 `inbox` 里批准，

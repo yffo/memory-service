@@ -140,6 +140,8 @@
 
 生成的 server 用当前 node 的绝对路径与 `bin/memory-mcp` 的绝对路径，带 `--store <库路径>`，默认再加 `--allow-write`（`--read-only` 可去掉）。这样宿主从任意工作目录都能起，不依赖 PATH。
 
+`--allow-write` 挂两个写工具：`remember` 直接写正式记忆；`capture` 只写候选、不进检索面，由人在 CLI `tabellio inbox` 批准。Agent 可以主动提议「这条值得记」，但批准权不交给 agent。
+
 - `all` 只处理已安装的宿主（配置文件或父目录存在）；`--host` 显式点名可以创建新文件。一个都没检测到返回 `no_host_detected`。
 - 已有不同的 `tabellio` 配置：整单 `conflict`，不写任何一份；`--force` 才替换。JSON/TOML 解析失败：整单 `invalid_config`，不写半份。
 - **不做**：Cline / Zed / VS Code / Windsurf / Continue / Gemini 的自动写（格式分散、且当前无实机验证）；DSH 的 `~/.dsh/cordis.patch.yml` 是 YAML loader patch，零依赖做保真改写风险高，只给片段（§3.11）；Claude Code 项目级作用域、Cursor 项目级配置、Codex `--config` 覆盖也不写。
@@ -255,7 +257,7 @@
 
 1. **只做 MCP + CLI 两个对外面**：不为任何宿主写代码适配；宿主差异最大只能影响我们「文档里的配置片段」和「首屏体验」，不能影响数据模型。
 2. **协议栈必须 Dual-era**：`server/discover` 必做、legacy `initialize` 必留、2026-07-28 的新语义（`_meta` 版本协商 / `resultType` / MRTR）必须实现但不依赖客户端支持；Tools 是唯一所有宿主都认的特性，Resources/Prompts 只当加分项。
-3. **工具 5±2、默认只读、输出可截断**：`search` / `read` / `remember`(写) / `list` / `status`，写工具独立且带 scope 与来源字段；任何返回都可能被宿主截断（Claude Code 25k token / 50k 字符，Gemini CLI 10 分钟超时），所以必须分页、必须给出「还有多少」。
+3. **工具 5±2、默认只读、输出可截断**：`search` / `read` / `remember`(写) / `capture`(写候选) / `list` / `status`，写工具独立且带 scope 与来源字段；任何返回都可能被宿主截断（Claude Code 25k token / 50k 字符，Gemini CLI 10 分钟超时），所以必须分页、必须给出「还有多少」。
 4. **进程模型走混合，先把「写」的语义钉死**：常驻核心串行写 + stdio 薄壳；锁/并发/退化行为写进设计文档，不留给实现阶段临时决定。
 5. **分发按主线+增量**：主线 = npm 包（stdio MCP）+ MCP registry 的 `server.json` 元数据（含 `mcp-name` 归属注释）；增量 = Claude Code 插件市场（自建 git，无审核）、DSH 黄页 `awesome-dsh-plugin`（PR + 逐条源码核对）、VS Code 市场（需要原生二进制时才值得做）。密钥一律走环境变量引用，永远不进配置文件明文。
 

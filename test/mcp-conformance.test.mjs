@@ -22,6 +22,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -137,7 +138,11 @@ test('MCP 一致性：initialize → tools/list → search/read/status/list → 
     }
     assert.ok(
       !names.includes('remember'),
-      '默认只读：没加 --allow-write 时不该挂写工具',
+      '默认只读：没加 --allow-write 时不该挂 remember',
+    );
+    assert.ok(
+      !names.includes('capture'),
+      '默认只读：没加 --allow-write 时不该挂 capture',
     );
 
     // ── 3. status：库看得见，而且和我们塞进去的篇数对得上 ──
@@ -191,7 +196,7 @@ test('MCP 一致性：initialize → tools/list → search/read/status/list → 
   }
 });
 
-test('MCP 一致性：--allow-write 才挂 remember，且默认只读面保持 4 个', { skip: sdkSkip }, async (t) => {
+test('MCP 一致性：--allow-write 才挂 remember / capture，capture 不直接进主库', { skip: sdkSkip }, async (t) => {
   const store = makeTempStore();
   const { Client } = await import(sdk.clientEntry);
   const { StdioClientTransport } = await import(sdk.stdioEntry);
@@ -206,10 +211,46 @@ test('MCP 一致性：--allow-write 才挂 remember，且默认只读面保持 4
     const listed = await client.listTools();
     const names = listed.tools.map((x) => x.name).sort();
     t.diagnostic(`--allow-write 工具面：${names.join(', ')}`);
-    assert.deepEqual(names, ['list', 'read', 'remember', 'search', 'status']);
+    assert.deepEqual(names, ['capture', 'list', 'read', 'remember', 'search', 'status']);
     const write = listed.tools.find((x) => x.name === 'remember');
     assert.equal(write.annotations?.readOnlyHint, false);
     assert.equal(write.inputSchema?.type, 'object');
+    const capture = listed.tools.find((x) => x.name === 'capture');
+    assert.equal(capture.annotations?.readOnlyHint, false);
+    assert.equal(capture.inputSchema?.type, 'object');
+
+    // capture 真的只落候选：主检索看不到，status 能看到待处理数。
+    const captured = await client.callTool({
+      name: 'capture',
+      arguments: { content: '# MCP 候选\n\nMCP 提交的代号是青鸟。', source: 'mcp:conformance' },
+    });
+    assert.equal(captured.isError, false);
+    assert.equal(captured.structuredContent?.ok, true);
+    const candidateId = captured.structuredContent.id;
+    assert.match(candidateId, /^[0-9A-HJKMNP-TV-Z]{26}$/);
+
+    const candidateStatus = await client.callTool({ name: 'status', arguments: {} });
+    assert.equal(candidateStatus.structuredContent?.candidates, 1);
+    assert.equal(candidateStatus.structuredContent?.notes, store.copied, 'capture 不能增加正式笔记');
+    const invisible = await client.callTool({ name: 'search', arguments: { query: '青鸟' } });
+    assert.equal(invisible.structuredContent?.refused, true, '候选不能进检索面');
+
+    // 人仍在 CLI 批准：MCP 提交的候选必须能被 CLI inbox 接住。
+    const accepted = spawnSync(
+      process.execPath,
+      [path.join(ROOT, 'bin', 'memory'), 'inbox', '--store', store.dir, '--accept', candidateId, '--json'],
+      { encoding: 'utf8' },
+    );
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.equal(JSON.parse(accepted.stdout).accepted_count, 1);
+    const after = spawnSync(
+      process.execPath,
+      [path.join(ROOT, 'bin', 'memory'), 'status', '--store', store.dir, '--json'],
+      { encoding: 'utf8' },
+    );
+    assert.equal(after.status, 0, after.stderr);
+    assert.equal(JSON.parse(after.stdout).notes, store.copied + 1);
+    assert.equal(JSON.parse(after.stdout).candidates, 0);
   } finally {
     try {
       await client.close();

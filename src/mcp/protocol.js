@@ -20,11 +20,12 @@
  *
  * ## 写权限
  *
- * `remember` 默认**不在工具面里**（默认只读是 §6.3 的三条之一）。只有 `--allow-write`
- * 才把它挂上去——「工具在但写不进去」是最糟的失败形态，宁可不暴露。
- * 即使暴露了，写入仍然过同一道闸门（`gate/`）。
+ * `remember` / `capture` 默认**不在工具面里**（默认只读是 §6.3 的三条之一）。只有
+ * `--allow-write` 才把它们挂上去——「工具在但写不进去」是最糟的失败形态，宁可不暴露。
+ * `remember` 直接写正式记忆，仍过同一道闸门（`gate/`）；`capture` 只写候选，
+ * 不重建主索引，等人在 CLI `inbox` 里批准后才可能进正式记忆。
  */
-import { openStore, status, search, read, remember, recallQuery, INDEX_CAPS } from '../api.js';
+import { openStore, status, search, read, remember, addCandidate, recallQuery, INDEX_CAPS } from '../api.js';
 
 /** 我们同时会说的协议版本（顺序 = 优先度，第一个是最新）。 */
 export const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze(['2026-07-28', '2025-11-25']);
@@ -43,9 +44,12 @@ export const RPC = Object.freeze({
   UNSUPPORTED_PROTOCOL_VERSION: -32002,
 });
 
-/** 工具面：`search` / `read` / `list` / `status`（+ 可选 `remember`）。5±2 条（§6.3）。 */
+/** 工具面：`search` / `read` / `list` / `status`（+ 可选 `remember` / `capture`）。5±2 条（§6.3）。 */
 export const READ_TOOLS = Object.freeze(['search', 'read', 'list', 'status']);
 export const WRITE_TOOL = 'remember';
+/** 只写候选、不写正式记忆的写工具；和 `remember` 一起受 `--allow-write` 控制。 */
+export const CAPTURE_TOOL = 'capture';
+export const WRITE_TOOLS = Object.freeze([WRITE_TOOL, CAPTURE_TOOL]);
 
 const SEARCH_INPUT = {
   type: 'object',
@@ -79,6 +83,19 @@ const LIST_INPUT = {
 
 const STATUS_INPUT = { type: 'object', properties: {}, additionalProperties: false };
 
+const CAPTURE_INPUT = {
+  type: 'object',
+  properties: {
+    content: { type: 'string', description: '想记下的内容（markdown）；只会进候选，不会直接进正式记忆' },
+    source: { type: 'string', description: '来源标识，例如 session:2026-10-18 或 claude-code；默认 mcp:capture' },
+    kind: { type: 'string', enum: ['core', 'semantic', 'episodic', 'procedural'] },
+    tags: { type: 'array', items: { type: 'string' } },
+    id: { type: 'string', description: '重试时复用同一个 id；不传则自动生成 ULID' },
+  },
+  required: ['content'],
+  additionalProperties: false,
+};
+
 const REMEMBER_INPUT = {
   type: 'object',
   properties: {
@@ -99,7 +116,7 @@ function tool(name, description, inputSchema, annotations) {
   return { name, description, inputSchema, annotations };
 }
 
-/** 工具清单。`allowWrite=false` 时不包含 `remember`。 */
+/** 工具清单。`allowWrite=false` 时只有只读四件套；为 true 才挂 `remember` / `capture`。 */
 export function listTools({ allowWrite = false } = {}) {
   const tools = [
     tool('search', '按词法检索记忆，返回命中的笔记 id/标题/分数与 token 估算。没有证据时 refused=true（正常返回，不是错误）。', SEARCH_INPUT, {
@@ -135,6 +152,17 @@ export function listTools({ allowWrite = false } = {}) {
         idempotentHint: false,
         openWorldHint: false,
       }),
+      tool(
+        'capture',
+        '把一段内容提交为待确认候选。不会进入正式记忆，也不参与检索；人在 CLI 里用 tabellio inbox 批准后才可能入库。',
+        CAPTURE_INPUT,
+        {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      ),
     );
   }
   return tools;
@@ -254,8 +282,60 @@ export function callTool(name, args, { ctx, allowWrite = false, ledger = false }
       const toolError = r.status === 'error' || r.reason === 'store_write_failed';
       return toolError ? fail(body, structured) : ok(body, structured);
     }
+    case 'capture': {
+      if (!allowWrite) {
+        return fail('这个服务器以只读模式启动，capture 未启用（要用候选请在启动参数里加 --allow-write）', {
+          error: 'write_disabled',
+        });
+      }
+      if (typeof a.content !== 'string' || a.content.trim() === '') {
+        return fail('capture 需要非空的 content', { error: 'invalid_params' });
+      }
+      const source = typeof a.source === 'string' && a.source.trim() !== '' ? a.source.trim() : 'mcp:capture';
+      const r = addCandidate(
+        ctx,
+        { text: a.content, source, kind: a.kind, tags: a.tags },
+        { id: a.id, writtenBy: 'capture:mcp' },
+      );
+      const structured = {
+        ok: r.ok,
+        reason: r.reason ?? null,
+        id: r.id ?? null,
+        title: r.title ?? null,
+        chars: r.chars ?? null,
+        source: r.source ?? source,
+        path: r.path ?? null,
+        duplicate_of: r.duplicate_of ?? null,
+      };
+      const text = r.ok
+        ? `已收为候选 [${r.id}]「${r.title}」（${r.chars} 字，source=${r.source}）。未进正式记忆；请运行 tabellio inbox 批准。`
+        : `未收为候选：${captureReasonText(r)}`;
+      // 只有真出错 / 调用方给了非法输入才标 isError。重复、超长、id 冲突都是
+      // 候选层的**正常判定**：宿主不该把它们渲染成红色失败并自动重试。
+      const toolError = r.reason === 'store_write_failed' || r.reason === 'invalid_id' || r.reason === 'empty';
+      return toolError ? fail(text, structured) : ok(text, structured);
+    }
     default:
       return null; // 调用方转成 JSON-RPC -32601
+  }
+}
+
+function captureReasonText(r) {
+  switch (r.reason) {
+    case 'empty':
+      return '内容为空';
+    case 'too_large':
+      return `超过上限（${r.bytes} 字节 > ${r.limit} 字节）`;
+    case 'duplicate':
+      return `已有相同内容（${r.duplicate_of?.kind ?? 'note'}: ${r.duplicate_of?.id ?? '?'}）`;
+    case 'id_exists':
+      return `id 已存在（${r.existing ?? 'note'}: ${r.id}）`;
+    case 'invalid_id':
+      return `id 不合法：${r.id}`;
+    case 'store_write_failed':
+      return `写候选失败：${r.error?.message ?? r.error ?? 'unknown'}`;
+    default:
+      return String(r.reason ?? 'unknown');
   }
 }
 
@@ -277,7 +357,8 @@ export function initializeResult({ requested, allowWrite, instructions }) {
     instructions:
       instructions ??
       `本地记忆库（pull 检索，默认${allowWrite ? '**可写**' : '只读'}）。用 search 找、read 取正文；` +
-        `没有证据时 search 会 refused=true，那是正常返回，不要重试同一个查询。`,
+        `没有证据时 search 会 refused=true，那是正常返回，不要重试同一个查询。` +
+        (allowWrite ? ` 觉得值得记但不确定该不该入库时，用 capture 提交候选；人会在 tabellio inbox 里批准。` : ''),
   };
 }
 

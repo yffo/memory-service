@@ -11,7 +11,7 @@
  * - **stdin EOF 时 SHOULD 尽快退出**（唯一可移植的优雅关闭信号）。
  *
  * 默认**只读**：工具面是 `search` / `read` / `list` / `status`。
- * `--allow-write` 才把 `remember` 挂上去（§6.3「工具 5±2、默认只读」）。
+ * `--allow-write` 才把 `remember` / `capture` 挂上去（§6.3「工具 5±2、默认只读」）。
  *
  * 用法：
  *   tabellio-mcp [--store DIR] [--allow-write] [--ledger]
@@ -48,7 +48,7 @@ const USAGE = `tabellio-mcp — 记忆库的 MCP stdio 服务器（默认只读�
 
 用法：tabellio-mcp [--store DIR] [--allow-write] [--ledger]
   --store DIR    库目录（默认 $MEMORY_STORE / $TABELLIO_STORE，否则 ~/memory/tabellio）
-  --allow-write  挂上 remember 工具（写入仍过闸门）
+  --allow-write  挂上 remember / capture（remember 直接写库，capture 只写候选）
   --ledger       把 search/read 也记进账本（默认不写）
 
 协议版本：${SUPPORTED_PROTOCOL_VERSIONS.join(' / ')}（双时代：server/discover + initialize）

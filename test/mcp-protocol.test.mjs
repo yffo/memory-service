@@ -20,9 +20,12 @@ import {
   RPC,
   READ_TOOLS,
   WRITE_TOOL,
+  CAPTURE_TOOL,
+  WRITE_TOOLS,
 } from '../src/mcp/protocol.js';
-import { openStore, status, search, read, remember } from '../src/api.js';
+import { openStore, status, search, read, remember, reviewCandidates } from '../src/api.js';
 import { tempDir, rm, write, noteMarkdown } from './helpers.mjs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** 起一个只在内存里用的处理器：临时库 + 两条虚构笔记。 */
@@ -132,13 +135,14 @@ test('requestedVersion：modern 走 _meta、legacy 走 params，都没有就 nul
   assert.equal(requestedVersion({}), null);
 });
 
-test('工具面：默认只读 4 条，--allow-write 才多出 remember（5 条仍在 5±2 内）', () => {
+test('工具面：默认只读 4 条，--allow-write 才多出 remember / capture（6 条仍在 5±2 内）', () => {
   const readOnly = listTools().map((t) => t.name);
   assert.deepEqual(readOnly, [...READ_TOOLS]);
-  assert.ok(!readOnly.includes(WRITE_TOOL), '默认只读：不该挂写工具');
+  assert.ok(!readOnly.includes(WRITE_TOOL), '默认只读：不该挂 remember');
+  assert.ok(!readOnly.includes(CAPTURE_TOOL), '默认只读：不该挂 capture');
 
   const withWrite = listTools({ allowWrite: true }).map((t) => t.name);
-  assert.deepEqual(withWrite, [...READ_TOOLS, WRITE_TOOL]);
+  assert.deepEqual(withWrite, [...READ_TOOLS, WRITE_TOOL, CAPTURE_TOOL]);
   assert.ok(withWrite.length <= 7, '工具面要守住 5±2');
 
   for (const tool of listTools({ allowWrite: true })) {
@@ -148,7 +152,7 @@ test('工具面：默认只读 4 条，--allow-write 才多出 remember（5 条�
     assert.equal(typeof tool.annotations?.readOnlyHint, 'boolean', `${tool.name} 要带行为提示`);
     assert.equal(
       tool.annotations.readOnlyHint,
-      !(tool.name === WRITE_TOOL),
+      !WRITE_TOOLS.includes(tool.name),
       `${tool.name} 的 readOnlyHint 必须如实`,
     );
   }
@@ -299,6 +303,73 @@ test('remember：默认只读时明确拒绝（不是假装成功），--allow-w
     const empty = callTool('remember', { content: '  ' }, { ctx: writable.ctx, allowWrite: true });
     assert.equal(empty.isError, true);
     assert.equal(writable.ctx.scan().notes.length, before + 1);
+  } finally {
+    writable.dispose();
+  }
+});
+
+test('capture：只写候选、不写主库；重复/超长是正常判定，非法输入才是 isError', () => {
+  const readOnly = makeHandler();
+  try {
+    const blocked = callTool('capture', { content: '内部代号是青鸟。' }, { ctx: readOnly.ctx });
+    assert.equal(blocked.isError, true);
+    assert.equal(blocked.structuredContent.error, 'write_disabled');
+    assert.equal(readOnly.ctx.scan().candidates.length, 0, '只读模式不能留下候选');
+  } finally {
+    readOnly.dispose();
+  }
+
+  const writable = makeHandler({ allowWrite: true });
+  try {
+    const beforeNotes = writable.ctx.scan().notes.length;
+    const content = '# 项目代号\n\n内部代号是青鸟，只在周会里说。';
+    const first = callTool(
+      'capture',
+      { content, source: 'session:2026-10-18', tags: ['codename'] },
+      { ctx: writable.ctx, allowWrite: true },
+    );
+    assert.equal(first.isError, false);
+    assert.equal(first.structuredContent.ok, true);
+    assert.match(first.structuredContent.id, /^[0-9A-HJKMNP-TV-Z]{26}$/);
+    assert.equal(first.structuredContent.title, '项目代号');
+    assert.equal(first.structuredContent.source, 'session:2026-10-18');
+    assert.ok(first.structuredContent.path.endsWith('.md'));
+    assert.ok(first.content[0].text.includes('tabellio inbox'), '返回里要告诉人下一步去哪批准');
+
+    const scan = writable.ctx.scan();
+    assert.equal(scan.notes.length, beforeNotes, 'capture 不能直接写主库');
+    assert.equal(scan.candidates.length, 1);
+    assert.equal(status(writable.ctx).candidates, 1);
+    assert.equal(search(writable.ctx, '青鸟').refused, true, '候选不能进检索面');
+
+    const saved = readFileSync(first.structuredContent.path, 'utf8');
+    assert.match(saved, /status: draft/);
+    assert.match(saved, /trust: system_derived/);
+    assert.match(saved, /written_by: "?capture:mcp"?/);
+
+    const dupe = callTool('capture', { content }, { ctx: writable.ctx, allowWrite: true });
+    assert.equal(dupe.isError, false, '重复是正常判定，不是红色工具失败');
+    assert.equal(dupe.structuredContent.ok, false);
+    assert.equal(dupe.structuredContent.reason, 'duplicate');
+    assert.equal(writable.ctx.scan().candidates.length, 1);
+
+    const tooLarge = callTool('capture', { content: '青'.repeat(3000) }, { ctx: writable.ctx, allowWrite: true });
+    assert.equal(tooLarge.isError, false);
+    assert.equal(tooLarge.structuredContent.reason, 'too_large');
+
+    const empty = callTool('capture', { content: '  ' }, { ctx: writable.ctx, allowWrite: true });
+    assert.equal(empty.isError, true);
+    assert.equal(empty.structuredContent.error, 'invalid_params');
+
+    const badId = callTool('capture', { content: '另一条', id: '../escape' }, { ctx: writable.ctx, allowWrite: true });
+    assert.equal(badId.isError, true);
+    assert.equal(badId.structuredContent.reason, 'invalid_id');
+
+    // 批准后才进主库：候选队列与 CLI inbox 是同一个队列。
+    const accepted = reviewCandidates(writable.ctx, { accept: [first.structuredContent.id] });
+    assert.equal(accepted.ok, true, JSON.stringify(accepted.failed));
+    assert.equal(writable.ctx.scan().candidates.length, 0);
+    assert.equal(search(writable.ctx, '青鸟').hits.length, 1, '批准后才可检索');
   } finally {
     writable.dispose();
   }
