@@ -114,21 +114,28 @@ function sameCommandArgs(current, desired) {
   );
 }
 
+/** 同一个 bin/store，只是差一个开关（比如 --auto-consolidate）时，允许原地更新。 */
+function sameBaseCommandArgs(current, desired) {
+  if (current?.type !== 'command' || current?.command !== desired.command) return false;
+  const strip = (args) => (Array.isArray(args) ? args.filter((arg) => arg !== '--auto-consolidate') : args);
+  return sameArray(strip(current?.args), strip(desired.args));
+}
+
 function sameHook(current, desired) {
   return sameCommandArgs(current, desired) && current?.timeout === desired.timeout;
 }
 
-function desiredHook({ command, bin, store, event }) {
+function desiredHook({ command, bin, store, event, autoConsolidate = false }) {
   const meta = HOOK_EVENT_META[event];
   return {
     type: 'command',
     command,
-    args: [bin, 'hook', meta.command, '--store', store],
+    args: [bin, 'hook', meta.command, '--store', store, ...(autoConsolidate && event === 'session-end' ? ['--auto-consolidate'] : [])],
     timeout: HOOK_TIMEOUT_SECONDS,
   };
 }
 
-function normalizeEvents(events, sessionStart = false) {
+function normalizeEvents(events, sessionStart = false, autoConsolidate = false) {
   const raw = Array.isArray(events) ? events : events ? [events] : ['session-end'];
   const wanted = new Set();
   for (const item of raw) {
@@ -136,7 +143,7 @@ function normalizeEvents(events, sessionStart = false) {
     if (HOOK_EVENTS.includes(name)) wanted.add(name);
   }
   if (wanted.size === 0) wanted.add('session-end');
-  if (sessionStart) wanted.add('session-start');
+  if (sessionStart || autoConsolidate) wanted.add('session-start');
   return HOOK_EVENTS.filter((name) => wanted.has(name));
 }
 
@@ -212,6 +219,7 @@ export function planHookInstall({
   now = Date.now(),
   events = ['session-end'],
   sessionStart = false,
+  autoConsolidate = false,
 } = {}) {
   if (!HOOK_HOSTS.includes(host)) {
     return {
@@ -225,7 +233,7 @@ export function planHookInstall({
     };
   }
   const path = claudeSettingsPath(home);
-  const wanted = normalizeEvents(events, sessionStart);
+  const wanted = normalizeEvents(events, sessionStart, autoConsolidate);
   if (!uninstall && (typeof bin !== 'string' || !bin || typeof store !== 'string' || !store)) {
     return invalidPlan(host, path, 'E_ARGS', '缺少 bin / store', { reason: 'missing_target' });
   }
@@ -285,11 +293,11 @@ export function planHookInstall({
     if (!got.ok) return invalidPlan(host, path, 'E_CONFIG_INVALID', got.message);
     const ours = collectOurs(got.groups);
     const remaining = withoutOurs(got.groups);
-    const desired = desiredHook({ command, bin, store, event });
+    const desired = desiredHook({ command, bin, store, event, autoConsolidate });
     let action;
     if (ours.length === 0) action = read.exists ? 'append' : 'create';
     else if (ours.length === 1 && sameHook(ours[0].hook, desired)) action = 'unchanged';
-    else if (!force && !ours.every((item) => sameCommandArgs(item.hook, desired))) action = 'conflict';
+    else if (!force && !ours.every((item) => sameCommandArgs(item.hook, desired) || sameBaseCommandArgs(item.hook, desired))) action = 'conflict';
     else action = 'update';
 
     if (action === 'conflict') {

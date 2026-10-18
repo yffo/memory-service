@@ -171,6 +171,29 @@ test('hook install --session-start：两个事件都装，uninstall 都清掉', 
   }
 });
 
+test('hook install --auto-consolidate：SessionEnd 带开关，SessionStart 一并装上', () => {
+  const home = tempDir('memory-cli-hook-auto-install-');
+  try {
+    const store = join(home, 'store');
+    const installed = cli(
+      ['hook', 'install', '--home', home, '--store', store, '--auto-consolidate', '--write', '--json'],
+      { store },
+    );
+    assert.equal(installed.code, 0, installed.stderr);
+    assert.equal(installed.json.written, true);
+    const config = JSON.parse(readFileSync(settingsPath(home), 'utf8'));
+    assert.deepEqual(config.hooks.SessionEnd[0].hooks[0].args.slice(0, 3), [CLI, 'hook', 'claude-session-end']);
+    assert.equal(config.hooks.SessionEnd[0].hooks[0].args.at(-1), '--auto-consolidate');
+    assert.deepEqual(config.hooks.SessionStart[0].hooks[0].args.slice(0, 3), [CLI, 'hook', 'claude-session-start']);
+
+    const removed = cli(['hook', 'uninstall', '--home', home, '--store', store, '--write', '--json'], { store });
+    assert.equal(removed.code, 0, removed.stderr);
+    assert.equal(removed.json.removed, 2);
+  } finally {
+    rm(home);
+  }
+});
+
 test('SessionStart 内部命令：只提示候选数，不写库；无候选/坏事件都退 0', () => {
   const home = tempDir('memory-cli-hook-start-');
   try {
@@ -288,6 +311,69 @@ test('SessionEnd 内部命令：只写候选，不写主库；重复事件不重
     const statusAfter = cli(['status', '--store', store, '--json'], { store });
     assert.equal(statusAfter.json.notes, 1);
     assert.equal(statusAfter.json.candidates, 0);
+  } finally {
+    rm(home);
+  }
+});
+
+test('SessionEnd --auto-consolidate：没有可抓线索也自动发现近似笔记，只写提案', () => {
+  const home = tempDir('memory-cli-hook-auto-sweep-');
+  try {
+    const store = join(home, 'store');
+    const common =
+      '项目约定：所有构建都从仓库根目录执行，安装依赖统一用 pnpm，提交前必须跑全量测试，发布走 GitHub Actions。';
+    const notes = [
+      ['a.md', '构建约定 A', common + ' 文档统一放 docs 目录。'],
+      ['b.md', '构建约定 B', common + ' 文档统一放 docs 目录，变更写 CHANGELOG。'],
+    ];
+    for (const [name, title, body] of notes) {
+      const file = join(home, name);
+      writeFileSync(
+        file,
+        ['---', 'kind: semantic', 'trust: user_stated', '---', '', '# ' + title, '', body, ''].join('\n'),
+      );
+      const remembered = cli(['remember', '--file', file, '--store', store, '--json'], { store });
+      assert.equal(remembered.code, 0, remembered.stderr);
+    }
+
+    const transcript = join(home, 'transcript.jsonl');
+    writeFileSync(
+      transcript,
+      JSON.stringify({
+        type: 'user',
+        sessionId: 's-auto-sweep',
+        message: { role: 'user', content: '今天先把 README 看一遍。' },
+      }) + '\n',
+    );
+    const event = {
+      session_id: 's-auto-sweep',
+      transcript_path: transcript,
+      hook_event_name: 'SessionEnd',
+      reason: 'other',
+    };
+    const r = cli(['hook', 'claude-session-end', '--store', store, '--auto-consolidate', '--json'], {
+      store,
+      input: JSON.stringify(event),
+    });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.json.ok, true);
+    assert.equal(r.json.captured.length, 0, '闲聊不产生候选');
+    assert.equal(r.json.proposals.created, 1);
+    assert.equal(r.json.proposals.failed, 0);
+
+    const status = cli(['status', '--store', store, '--json'], { store });
+    assert.equal(status.json.notes, 2, '自动发现不改正式笔记');
+    assert.equal(status.json.candidates, 0);
+    assert.equal(status.json.proposals, 1);
+
+    const start = cli(['hook', 'claude-session-start', '--store', store], {
+      store,
+      input: JSON.stringify({ session_id: 's-auto-sweep', hook_event_name: 'SessionStart' }),
+    });
+    assert.equal(start.code, 0, start.stderr);
+    const protocol = JSON.parse(start.stdout);
+    assert.match(protocol.hookSpecificOutput.additionalContext, /1 条自动巩固提案/);
+    assert.match(protocol.hookSpecificOutput.additionalContext, /tabellio inbox/);
   } finally {
     rm(home);
   }

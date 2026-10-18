@@ -149,22 +149,24 @@
 
 ### 3.0.1 会话钩子（只有 Claude Code，默认不装）
 
-`setup` 只写 MCP server 配置，不写会话钩子；自动生成候选是单独的一步：
+`setup` 只写 MCP server 配置，不写会话钩子；自动生成候选、自动发现合并提案是单独的一步：
 
 ```bash
 tabellio hook install --host claude            # 默认 dry-run
 tabellio hook install --host claude --write    # 写 ~/.claude/settings.json（SessionEnd）
 tabellio hook install --host claude --session-start --write  # 另加 SessionStart 待批准提示
+tabellio hook install --host claude --auto-consolidate --write  # 另加自动发现提案（隐含 SessionStart）
 tabellio hook uninstall --host claude --write
 ```
 
 - **为什么只有 Claude Code**：Claude Code 有稳定的 `SessionEnd` 钩子，事件里带 `transcript_path`；Cursor 没有等价的无头钩子契约，Codex 也没有会话结束钩子。没有实机契约就不伪造，装其他宿主直接退 1。
-- **写什么**：默认只合并 `hooks.SessionEnd` 里 tabellio 自己的 command hook；`--session-start` 时同时合并 `hooks.SessionStart`。用 exec form（`command` + `args`），`timeout:15` 秒；保留用户其他钩子、`env` 与 settings 其他字段。写前备份成 `settings.json.tabellio-backup-<时间戳>`，JSON 原子写，新文件 mode `0600`；已有指向别的 store 的 tabellio 钩子先 `conflict`，`--force` 才替换；坏 JSON / 不认识的结构整份不写。
+- **写什么**：默认只合并 `hooks.SessionEnd` 里 tabellio 自己的 command hook；`--session-start` 时同时合并 `hooks.SessionStart`；`--auto-consolidate` 也会装 `SessionStart`（否则新提案没人提示），并给 SessionEnd 的 args 加 `--auto-consolidate`。用 exec form（`command` + `args`），`timeout:15` 秒；保留用户其他钩子、`env` 与 settings 其他字段。写前备份成 `settings.json.tabellio-backup-<时间戳>`，JSON 原子写，新文件 mode `0600`；已有指向别的 store 的 tabellio 钩子先 `conflict`，`--force` 才替换；坏 JSON / 不认识的结构整份不写。
 - **抓什么**：宿主调用的是内部命令 `tabellio hook claude-session-end`，它只读事件给的当前 transcript，只取真实用户发言，跳过 sidechain / meta / compact summary / tool_result / system-reminder；按显式线索（「记住」「以后都」「我偏好」「我们决定」「默认用」「改用」等中英文）切句，排除问句/假设句和命中密钥模式的整句；每会话最多 3 条。**不调用模型、不联网、不摘要、不自动合并。**
-- **SessionStart 提示什么**：`--session-start` 装的内部命令 `tabellio hook claude-session-start` **只读候选数**；>0 时按 Claude 的 hook 协议向 stdout 输出 `hookSpecificOutput`（`hookEventName:"SessionStart"` + `additionalContext`），提示用户运行 `tabellio inbox`；=0 时不输出。**不写库、不批准、不删除**，批准权不变。
+- **自动发现提案**：带 `--auto-consolidate` 时，SessionEnd 收完候选后再跑一次近似重复扫描，把结果写进 `runs/proposals/` 的 pending 提案（默认阈值 0.62、每组最多 4 条、每次最多 20 组）。**只写提案**，不合并、不关源、不进检索面；批准仍在 CLI `inbox`，通过后才走内容类执行层。自动发现失败不影响已收候选，命令仍退 0。
+- **SessionStart 提示什么**：`--session-start` 装的内部命令 `tabellio hook claude-session-start` **只读候选数与提案数**；任一 >0 时按 Claude 的 hook 协议向 stdout 输出 `hookSpecificOutput`（`hookEventName:"SessionStart"` + `additionalContext`），提示用户运行 `tabellio inbox`；都为 0 时不输出。**不写库、不批准、不删除**，批准权不变。
 - **写到哪**：只写 `notes/candidates/`，不重建主索引、不进默认检索面；`written_by:capture:hook`，`source:claude:session-end:<session_id>`。批准仍在 CLI `tabellio inbox`，走与 `remember` 同一条闸门。
 - **失败语义**：两个内部命令的任何事件/读取/store 错误都退 0（不能阻塞宿主退出或开始）；安装/卸载冲突、坏配置、未知宿主退 1，参数缺值退 2。
-- **证据与边界**：真实 Claude Code 2.1.142 的 `-p` 会话已实测 `SessionEnd` 触发、exec form 被接受、候选落盘且主库 `notes=0`；SessionStart 用并排的 marker 钩子证明事件确实触发，且提示没有写库；可复核的 gated 测试是 `test/hook-claude-e2e.test.mjs`（`TABELLIO_HOOK_E2E=1` 才跑）。未登录时 API 会报错，但两个事件仍触发——说明钩子不依赖模型回答。**不伪造** additionalContext 已被模型看到（需要已登录会话）。没有定时/后台触发，没有自动巩固，也不承诺「记住一切」；过滤是尽力而为，不是 DLP。
+- **证据与边界**：真实 Claude Code 2.1.142 的 `-p` 会话已实测 `SessionEnd` 触发、exec form 被接受、候选落盘且主库 `notes=0`；SessionStart 用并排的 marker 钩子证明事件确实触发，且提示没有写库；可复核的 gated 测试是 `test/hook-claude-e2e.test.mjs`（`TABELLIO_HOOK_E2E=1` 才跑）。未登录时 API 会报错，但两个事件仍触发——说明钩子不依赖模型回答。**不伪造** additionalContext 已被模型看到（需要已登录会话）。没有定时/后台触发；`--auto-consolidate` 只在 SessionEnd 扫描一次、只产提案，不自动执行合并；也不承诺「记住一切」；过滤是尽力而为，不是 DLP。
 
 ### 3.1 Claude Code（最完整，也最会在细节上咬人）
 

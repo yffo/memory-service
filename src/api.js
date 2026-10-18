@@ -64,6 +64,14 @@ import {
 } from './core/consolidate.js';
 import { writeRunPlan, writeRunReceipt, readRunReceipt, readAnyRunReceipt, writeContentRunPlan, writeContentRunReceipt, writeUndoRecord, readUndoRecord } from './store/consolidate.js';
 import { planContentConsolidation, materializeContentDraft } from './core/propose.js';
+import { discoverConsolidationProposals, AUTO_CONSOLIDATE_SCHEMA } from './core/auto-consolidate.js';
+import {
+  PROPOSAL_SCHEMA,
+  writeConsolidationProposal,
+  readConsolidationProposal,
+  listConsolidationProposals,
+  moveConsolidationProposal,
+} from './store/proposals.js';
 import { buildContentReceipt, contentReceiptIntegrity, CONTENT_RECEIPT_SCHEMA } from './core/content-receipt.js';
 import { writeReceipt, readReceipt } from './store/receipt.js';
 import { estimateTokens } from './core/tokenize.js';
@@ -219,6 +227,7 @@ export function status(ctx, options = {}) {
   const stats = readStats(ctx.store);
   const ledger = ctx.readLedger({ limit: 0 });
   const malformed = ledger.filter((e) => e.kind === 'malformed').length;
+  const proposalList = listConsolidationProposals(ctx.store);
 
   const oversizeChars = scan.notes.filter((n) => [...String(n.body)].length > MAX_NOTE_CHARS).length;
   const oversizeTokens = scan.notes.filter((n) => estimateTokens(n.body) > MAX_NOTE_TOKENS).length;
@@ -261,6 +270,8 @@ export function status(ctx, options = {}) {
     indexListFiles: tree.files,
     indexStale: index.exists ? indexed !== total : false,
     candidates: scan.candidates.length,
+    proposals: proposalList.count,
+    proposalFailures: proposalList.failures,
     failures: scan.failures.map((f) => ({
       id: f.id,
       path: f.path,
@@ -276,17 +287,18 @@ export function status(ctx, options = {}) {
     ledgerMalformed: malformed,
     lastScan: stats,
     indexWrite: indexWrite ? compact(indexWrite) : null,
-    warnings: buildWarnings({ scan, index, total, oversizeChars, oversizeTokens, indexListed, indexed }),
+    warnings: buildWarnings({ scan, index, total, oversizeChars, oversizeTokens, indexListed, indexed, proposals: proposalList.count }),
   };
   return result;
 }
 
-function buildWarnings({ scan, index, total, oversizeChars, oversizeTokens, indexListed = 0, indexed = null }) {
+function buildWarnings({ scan, index, total, oversizeChars, oversizeTokens, indexListed = 0, indexed = null, proposals = 0 }) {
   const w = [];
   if (scan.failures.length) w.push(`${scan.failures.length} 个文件解析失败（fail-closed，已退出检索面）`);
   if (oversizeChars) w.push(`${oversizeChars} 条笔记超过 ${MAX_NOTE_CHARS} 字（检索按 400 字切桶）`);
   if (oversizeTokens) w.push(`${oversizeTokens} 条笔记超过 ${MAX_NOTE_TOKENS} token`);
   if (scan.candidates.length) w.push(`${scan.candidates.length} 条候选待处理（\`tabellio inbox\`）`);
+  if (proposals) w.push(`${proposals} 条自动巩固提案待确认（\`tabellio inbox\`）`);
   if (index.exists && indexListed < total) {
     // 分层索引之后这句警告的含义变了：不再是「索引装不下」，而是「有笔记没有路可走」。
     // 路由树把容量从 ~190 条提到 ~76000 条，正常库里**不该**再看到这句；
@@ -944,6 +956,233 @@ export function reviewCandidates(ctx, input = {}) {
 
   if (indexDirty) store.rebuildIndex();
   if (wrote) invalidateStore(store);
+  return {
+    ok: failed.length === 0,
+    reason: failed.length ? 'partial_failure' : null,
+    dry_run: dry,
+    accepted,
+    rejected,
+    failed,
+    accepted_count: accepted.length,
+    rejected_count: rejected.length,
+    failed_count: failed.length,
+  };
+}
+
+/** 自动巩固提案的稳定视图（CLI/JSON 共用）。 */
+function proposalView(proposal) {
+  const stats = proposal.stats ?? {};
+  return {
+    id: proposal.proposal_id,
+    mode: proposal.mode ?? 'merge',
+    created: proposal.created_at ?? null,
+    source_count: Array.isArray(proposal.source_ids) ? proposal.source_ids.length : 0,
+    source_ids: Array.isArray(proposal.source_ids) ? proposal.source_ids : [],
+    source_titles: Array.isArray(proposal.source_titles) ? proposal.source_titles : [],
+    similarity: proposal.similarity ?? null,
+    target_id: proposal.target_id ?? null,
+    estimated_saved_tokens: stats.saved_tokens ?? null,
+    estimated_saved_chars: stats.saved_chars ?? null,
+    warnings: Array.isArray(proposal.warnings) ? proposal.warnings : [],
+  };
+}
+
+/**
+ * 自动巩固的**发现入口**：找出近似重复组，默认把「待人工确认的提案」写到
+ * runs/proposals/。它不写任何笔记、不调用 remember、不重建索引。
+ *
+ * 为什么允许写文件：自动发现本身如果只在终端打印，用户下次会话就丢了；
+ * 提案文件只是待办清单（不是真相源），批准后仍由内容类执行层重算并写回执。
+ * 默认 dry-run 只预览；`--write`/定时钩子才落盘。
+ */
+export function sweepConsolidation(ctx, options = {}) {
+  const store = ctx?.scan ? ctx : openStore(ctx.store);
+  const nowMs = options.nowMs ?? clockNow();
+  const dry = Boolean(options.dry);
+  const discovery = discoverConsolidationProposals({
+    entries: store.scan().notes,
+    nowMs,
+    minSimilarity: options.minSimilarity,
+    maxGroup: options.maxGroup,
+    maxProposals: options.maxProposals,
+  });
+  const items = [];
+  const created = [];
+  const existing = [];
+  const failed = [];
+  if (!dry) store.ensure();
+  for (const group of discovery.groups) {
+    const prior = readConsolidationProposal(store.store, group.proposal_id);
+    const already = prior.ok ? prior.proposal : null;
+    const plan = planContentConsolidation({
+      entries: store.scan().notes,
+      mode: 'merge',
+      ids: group.source_ids,
+      nowMs,
+      targetId: already?.target_id ?? null,
+    });
+    if (!plan.ok) {
+      failed.push({ proposal_id: group.proposal_id, source_ids: group.source_ids, reason: plan.reason });
+      continue;
+    }
+    const sourceHashes = Object.fromEntries((plan.sources ?? []).map((s) => [s.id, s.body_sha256]));
+    const sameHashes =
+      already &&
+      already.mode === plan.mode &&
+      JSON.stringify(already.source_hashes ?? {}) === JSON.stringify(sourceHashes);
+    if (sameHashes) {
+      existing.push({ ...proposalView(already), path: prior.path });
+      continue;
+    }
+    const proposal = {
+      schema: PROPOSAL_SCHEMA,
+      proposal_id: group.proposal_id,
+      created_at: isoLocal(nowMs),
+      mode: 'merge',
+      source_ids: group.source_ids,
+      source_titles: group.source_titles,
+      source_hashes: sourceHashes,
+      similarity: group.similarity,
+      target_id: plan.target_id,
+      stats: plan.stats,
+      warnings: plan.warnings,
+      next_action: '人工审阅后运行 tabellio inbox --accept ' + group.proposal_id,
+    };
+    const view = proposalView(proposal);
+    if (dry) {
+      items.push({ ...view, dry_run: true });
+      continue;
+    }
+    const written = writeConsolidationProposal(store.store, proposal, { replace: Boolean(already) });
+    if (!written.ok) {
+      failed.push({ ...view, reason: written.reason, error: written.error ?? null });
+      continue;
+    }
+    if (already) existing.push({ ...view, path: written.path, updated: true });
+    else created.push({ ...view, path: written.path });
+    items.push({ ...view, path: written.path, updated: Boolean(already) });
+  }
+  return {
+    ok: failed.length === 0,
+    schema: AUTO_CONSOLIDATE_SCHEMA,
+    dry_run: dry,
+    scanned: discovery.scanned,
+    eligible: discovery.eligible,
+    discovered: discovery.groups.length,
+    created_count: created.length,
+    existing_count: existing.length,
+    failed_count: failed.length,
+    created,
+    existing,
+    items,
+    failed,
+    truncated: discovery.truncated,
+    skipped: discovery.skipped,
+    thresholds: discovery.thresholds,
+  };
+}
+
+/** `tabellio inbox` 中的自动巩固提案列表（只读）。 */
+export function listProposals(ctx) {
+  const store = ctx?.scan ? ctx : openStore(ctx.store);
+  const listed = listConsolidationProposals(store.store);
+  return {
+    ok: true,
+    count: listed.count,
+    proposals: listed.proposals.map(proposalView),
+    failures: listed.failures,
+  };
+}
+
+/**
+ * 自动巩固提案的批准/拒绝。
+ *
+ * 批准不是「相信扫描结果」：执行前逐条核对提案里的正文 hash，任何人手改过源
+ * 都会让整单 stale（提案保留，不写任何笔记）。批准后执行层仍会重算 plan 并写
+ * 回执；自动层不绕开显式执行层的闸门。
+ */
+export function reviewProposals(ctx, input = {}) {
+  const store = ctx?.scan ? ctx : openStore(ctx.store);
+  const dry = Boolean(input.dry);
+  const accept = normalizeIds(input.accept);
+  const reject = normalizeIds(input.reject);
+  const overlap = accept.filter((id) => reject.includes(id));
+  if (overlap.length) {
+    return { ok: false, reason: 'accept_reject_overlap', ids: overlap, dry_run: dry, accepted: [], rejected: [], failed: [] };
+  }
+  const accepted = [];
+  const rejected = [];
+  const failed = [];
+
+  for (const id of accept) {
+    const got = readConsolidationProposal(store.store, id);
+    if (!got.ok) {
+      failed.push({ id, action: 'accept', reason: got.reason === 'not_found' ? 'proposal_not_found' : got.reason });
+      continue;
+    }
+    const proposal = got.proposal;
+    const stale = [];
+    for (const sourceId of proposal.source_ids ?? []) {
+      const fresh = readNote(store.store, sourceId);
+      if (!fresh.ok) {
+        stale.push({ id: sourceId, reason: 'missing' });
+        continue;
+      }
+      const expected = proposal.source_hashes?.[sourceId] ?? null;
+      if (expected && sha256(fresh.body, 32) !== expected) stale.push({ id: sourceId, reason: 'body_changed' });
+    }
+    if (stale.length) {
+      failed.push({ id, action: 'accept', reason: 'proposal_stale', sources: stale });
+      continue;
+    }
+    const result = applyContentConsolidation(ctx, {
+      mode: proposal.mode,
+      ids: proposal.source_ids,
+      apply: !dry,
+      targetId: proposal.target_id,
+      // 用户已经逐条看过这份固定清单；保险丝保护的是「扫描后批量动未知条目」，
+      // 不该把一次显式批准的 2 条合并挡在 5% 外面。
+      maxChangeRatio: 1,
+    });
+    if (dry) {
+      if (result.ok) accepted.push({ id, action: 'accept', status: 'planned', target_id: result.target_id, run_id: result.run_id });
+      else failed.push({ id, action: 'accept', status: result.status, reason: result.reason, details: result.details ?? null });
+      continue;
+    }
+    if (!result.ok) {
+      failed.push({ id, action: 'accept', status: result.status, reason: result.reason, run_id: result.run_id, details: result.details ?? null });
+      continue;
+    }
+    const moved = moveConsolidationProposal(store.store, id, 'accepted');
+    if (!moved.ok) {
+      // 内容已经写入且有回执；只是提案文件没归档。如实报告，不重试写入。
+      failed.push({ id, action: 'accept', reason: 'proposal_move_failed', run_id: result.run_id, receipt_path: result.receipt_path, error: moved.error ?? null });
+      continue;
+    }
+    store.ledger({ kind: 'auto_consolidation_accepted', id, run_id: result.run_id, sources: proposal.source_ids });
+    accepted.push({ id, action: 'accept', status: 'applied', run_id: result.run_id, target_id: result.target.id, receipt_path: result.receipt_path, proposal_path: moved.path });
+  }
+
+  for (const id of reject) {
+    const got = readConsolidationProposal(store.store, id);
+    if (!got.ok) {
+      failed.push({ id, action: 'reject', reason: got.reason === 'not_found' ? 'proposal_not_found' : got.reason });
+      continue;
+    }
+    if (dry) {
+      rejected.push({ id, action: 'reject', status: 'planned' });
+      continue;
+    }
+    const moved = moveConsolidationProposal(store.store, id, 'rejected');
+    if (!moved.ok) {
+      failed.push({ id, action: 'reject', reason: 'proposal_move_failed', error: moved.error ?? null });
+      continue;
+    }
+    store.ledger({ kind: 'auto_consolidation_rejected', id, sources: got.proposal.source_ids });
+    rejected.push({ id, action: 'reject', status: 'rejected', proposal_path: moved.path });
+  }
+
+  if (accepted.length || rejected.length) invalidateStore(store);
   return {
     ok: failed.length === 0,
     reason: failed.length ? 'partial_failure' : null,

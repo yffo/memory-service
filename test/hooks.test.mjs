@@ -263,6 +263,53 @@ test('planHookInstall：--session-start 同时装两个事件，保留别人的 
   }
 });
 
+test('planHookInstall：--auto-consolidate 隐含 SessionStart，关掉时原地 update 而不是冲突', () => {
+  const home = tempDir('memory-hook-auto-consolidate-');
+  try {
+    const on = planHookInstall({
+      home,
+      bin: '/tmp/memory',
+      store: '/tmp/store',
+      command: '/usr/bin/node',
+      autoConsolidate: true,
+    });
+    assert.equal(on.ok, true);
+    assert.deepEqual(on.events.map((item) => item.event), [...HOOK_EVENTS]);
+    assert.deepEqual(on.events[0].desired.args.slice(-1), ['--auto-consolidate']);
+    assert.equal(on.events[1].desired.args.includes('--auto-consolidate'), false, '提示事件不带开关');
+    assert.equal(applyHookInstall(on).written, true);
+
+    const stillOn = planHookInstall({
+      home,
+      bin: '/tmp/memory',
+      store: '/tmp/store',
+      command: '/usr/bin/node',
+      autoConsolidate: true,
+    });
+    assert.equal(stillOn.action, 'unchanged');
+
+    // 从开到关：底座命令没变，只差一个开关，应该原地 update 而不是要求 --force。
+    const off = planHookInstall({
+      home,
+      bin: '/tmp/memory',
+      store: '/tmp/store',
+      command: '/usr/bin/node',
+      autoConsolidate: false,
+    });
+    assert.equal(off.ok, true);
+    assert.equal(off.action, 'update');
+    assert.equal(off.events.length, 1, '关掉自动发现只改 SessionEnd；提示事件由 uninstall 负责清');
+    assert.equal(off.events[0].desired.args.includes('--auto-consolidate'), false);
+    assert.equal(applyHookInstall(off).written, true);
+    const config = JSON.parse(readFileSync(claudeSettingsPath(home), 'utf8'));
+    assert.equal(config.hooks.SessionEnd[0].hooks[0].args.includes('--auto-consolidate'), false);
+    // 提示事件仍在：已产生的提案还需要被 session-start 提示，清理由 uninstall 做。
+    assert.equal(config.hooks.SessionStart.length, 1);
+  } finally {
+    rm(home);
+  }
+});
+
 test('planHookInstall：已有指向别处的 tabellio 钩子先冲突，--force 才替换', () => {
   const home = tempDir('memory-hook-conflict-');
   try {

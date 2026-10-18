@@ -5,12 +5,20 @@
 
 ## 未发布
 
+### 巩固：自动发现近似重复，只产 inbox 提案
+
+- **修的问题**：内容类执行层已经能安全地合并，但源 id 仍要人自己去读库、找重复、抄 id；「每次都要用户提醒沉淀」的问题只解决了一半——发现了也没有入口，普通人不会主动做近似重复排查。自动执行又违背「不静默写正式库」的边界。
+- **做法**：新增 `src/core/auto-consolidate.js` 与 `src/store/proposals.js`。`consolidate --auto` 扫描 active、未过期、未被取代、正文至少 40 字的笔记，按 `scope` / `kind` / `trust` 分组，用 8-gram 字符 n-gram 的 Jaccard 相似度找近似重复（默认阈值 0.62，每组最多 4 条，每次最多 20 组）。发现结果只写成 `runs/proposals/<proposal_id>.json` 的 pending 提案，不写笔记、不建索引、不进检索面。`--write` 才落提案，默认 dry-run；重复扫描同一组会复用已有提案，不重复创建。
+- **行为**：`inbox` 同时列候选与自动巩固提案；`--accept prop_...` 才调用内容类执行层合并（写目标、关闭源、写内容回执，可 `--undo`），`--reject` 把提案移到 `runs/proposals/rejected/`。批准前逐源比对提案里的正文 hash，源被改过就整单 `proposal_stale`，不写任何文件。因为人已经逐条看过固定清单，批准路径把 5% 保险丝显式放开为 `maxChangeRatio:1`；执行层自己的 hash、字段、目标存在检查一条不少。两类 id 可在同一次 `inbox` 调用里混批。
+- **行为（钩子）**：`hook install --host claude --auto-consolidate --write` 让 SessionEnd 在抓候选之后顺带跑一次 sweep（只写提案），并隐含安装 SessionStart 提示；关闭开关只把 SessionEnd 改回原命令，不删除已装的 SessionStart，避免已有提案没人提示。sweep 失败不阻塞会话结束，命令仍退 0。
+- **边界**：只做 merge 近似重复，不做自动 summarize / promote / 误报判定，也不自动执行；提案未批准前不进检索面。没有后台进程或定时触发——要么显式跑 `consolidate --auto`，要么装 Claude Code 钩子。相似度是字面 8-gram，不是语义模型；跨语言、改写较大的重复会漏。提案里的 source hash 只证明「批准时源没变」，不是签名。
+
 ### 巩固：内容类 merge / summarize / promote 可 `--apply`，回执与撤销成对
 
 - **修的问题**：内容类操作此前只到提案层：人看完草稿还得手动复制成新 note、手动给源写 `valid_to`，或者干脆放弃。架构里「没有 receipt 的写入是 bug」「内容类必须有撤销」两条都空着；`docs/06` 的 §4.2 也因此把执行层标成未实现。
 - **做法**：新增 `src/core/content-receipt.js` 与 `src/api.js` 的 `applyContentConsolidation` / `undoContentConsolidation`。默认仍是 dry-run；`--apply` 后按模式执行：merge / summarize 写一条 `active` 目标，再把源写成 `valid_to` + `superseded_by`（**正文不改**）；promote 只写 `notes/candidates/` 的 `draft`，**不关闭源**，批准仍走 `inbox`。内容类 run 写 `runs/<run>.plan.json`、`runs/<run>.json`（schema `tabellio.consolidate.content/1`，只存目标与源的 hash、不存正文）与 `.undo.json`。`--undo` 先预检目标全文 hash 和每个源的正文 hash/字段，任一冲突整单拒绝；通过后先恢复源字段、再删除目标。
 - **行为**：`consolidate --merge/--summarize/--promote` 现在接受 `--apply` 与 `--max-change-ratio`；默认 5% 保险丝对内容类按「动到多少条现有笔记」算（merge = 源数，summarize = 1，promote = 0），不按写文件次数算，否则两条库上 merge 会被算成 150%。dry-run 的 `apply_supported` 变为 `true`，并带 `run_id` 与「加 --apply 执行」的 `next_action`；apply 成功返回目标、源、回执路径；中止原因包括 `change_ratio_exceeded`、`target_exists`、`source_changed`、写失败与 `receipt_write_failed`（后两者会回滚）。`--undo` 对内容类 run 返回 `target_deleted:true`。
-- **边界**：仍不接受 `--scope` / `--kinds`，不能和 `--archive` / `--undo` / 其他内容模式同用；没有自动发现、没有 LLM 摘要（merge 是去重拼接、summarize 是抽取式首句、promote 是脚手架）。回执 hash 是防误改，不是签名；promote 的候选被 `inbox --accept` 批准后，内容回执指向的候选 id 已不在候选目录，再 undo 会按 `target_missing` 拒绝。写入回执、replay、`diff.jsonl`、后台自动巩固仍未做。
+- **边界**：仍不接受 `--scope` / `--kinds`，不能和 `--archive` / `--undo` / 其他内容模式同用；执行层本身不接受自动选源；自动发现见上一节，只产合并提案、仍需人在 `inbox` 批准。没有 LLM 摘要（merge 是去重拼接、summarize 是抽取式首句、promote 是脚手架）。回执 hash 是防误改，不是签名；promote 的候选被 `inbox --accept` 批准后，内容回执指向的候选 id 已不在候选目录，再 undo 会按 `target_missing` 拒绝。写入回执、replay、`diff.jsonl`、后台定时自动巩固仍未做。
 
 ## 0.1.3（2026-10-18）
 

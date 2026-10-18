@@ -1,6 +1,6 @@
 # 架构设计：tabellio
 
-- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）。M2 已开工：**读取回执**（recall receipt + `explain` + `verify`）与**显式巩固**（`consolidate` 的 `invalidate` / `archive` + 巩固回执 + `undo`）已实现；三种内容类操作（`merge` / `summarize` / `promote`）的**提案层与执行层**（默认 dry-run，`--apply` 写目标/关源，内容类回执 + `undo`）已实现；Claude Code `SessionEnd` 钩子（默认不装、只写候选）与 `SessionStart` 待批准提示（`--session-start`，只读候选数）已实现；MCP 读工具已补预算感知的 `recall`。自动衰减、写入回执、replay、后台自动巩固未实现。本文的目录、五原语 JSON、巩固 operation 表是**目标架构**，不是现状；已实现模块见 §2.2。
+- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）。M2 已开工：**读取回执**（recall receipt + `explain` + `verify`）与**显式巩固**（`consolidate` 的 `invalidate` / `archive` + 巩固回执 + `undo`）已实现；三种内容类操作（`merge` / `summarize` / `promote`）的**提案层与执行层**（默认 dry-run，`--apply` 写目标/关源，内容类回执 + `undo`）已实现；**自动发现近似重复**（`consolidate --auto` 或 Claude 钩子 `--auto-consolidate`，只产待批准提案、不直接改库）已实现；Claude Code `SessionEnd` 钩子（默认不装、只写候选）与 `SessionStart` 待批准提示（`--session-start`，只读候选数与提案数）已实现；MCP 读工具已补预算感知的 `recall`。自动衰减、写入回执、replay、后台定时自动巩固未实现。本文的目录、五原语 JSON、巩固 operation 表是**目标架构**，不是现状；已实现模块见 §2.2。
 - 上游文档：`00-brief.md`（立项书）· `01-landscape-systems.md`（竞品与接口层）· `02-evaluation.md`（评测方法）· `03-hosts-and-interfaces.md`（宿主与接口）· `04-cost-model.md`（成本）· `05-agi-direction.md`（长期方向）
 - 基线：`~/yffto/dsh-engramory-recall`（第一条线，必须赢过它，而不是取代它）
 - 读者：出资方（看 §1 §8 §10 就够）与实现者（§2–§7 §9）
@@ -11,7 +11,7 @@
 
 ## 1. 一句话定位与边界
 
-**tabellio 是一个跨宿主的本地长期记忆服务**（目标形态）：一份纯文本事实库 + 一个 MCP 服务 + 一个空闲期巩固进程（后台自动巩固尚未实现；显式 `consolidate` 已可用）；任何 CLI / IDE / 自研 agent 通过 MCP 工具按需读写它，拿到的是带来源、带有效期、带信任等级的记忆内容。
+**tabellio 是一个跨宿主的本地长期记忆服务**（目标形态）：一份纯文本事实库 + 一个 MCP 服务 + 一个空闲期巩固进程（后台定时自动巩固尚未实现；显式 `consolidate` 与自动发现提案已可用）；任何 CLI / IDE / 自研 agent 通过 MCP 工具按需读写它，拿到的是带来源、带有效期、带信任等级的记忆内容。
 
 三个词各自落到实处。**跨宿主**：唯一一等接口是 MCP，DSH 插件与 CLI 都只是壳；靠「读同一批文件 + 同一套工具语义」保持一致，不靠同步。**服务而不是插件**：插件可以只服务一个宿主、可以深挖那个宿主的私有能力；服务要在 11 个宿主里至少 3 个上跑通同一套语义（宿主清单见 `03-hosts-and-interfaces.md`）。**本地长期**：默认零 API 成本、纯文本落盘、`cat` 得出、git 管得住、随时带走。
 
@@ -198,14 +198,14 @@ index/groups/<nnn>-<组名>.md 清单层：一组一行指针（每文件 ≤ 40
 
 热路径**不做**：不改旧记录、不做冲突消解、不合并、不摘要、不调模型。三条独立证据指向同一结论（mem0 2026-04 起单次 LLM 调用只 ADD；Letta 把整理放 sleep-time；dsh-mneme 冲突冻结进人工队列），见 `01-landscape-systems.md`。
 
-### 4.2 空闲期巩固（唯一的「改」入口；M2：`invalidate` / `archive` + 内容类 apply/undo 已实现）
+### 4.2 空闲期巩固（唯一的「改」入口；M2：`invalidate` / `archive` + 内容类 apply/undo + 自动发现提案已实现）
 
 > **现状（2026-10-18）**：落地两种只动元数据的操作：`invalidate` 与 `archive`；三种内容类操作（`merge` / `summarize` / `promote`）也已补执行层。`dry_run` 是默认值：只出计划，不落盘、不改库。
 > `apply` 先写 `runs/<run>.plan.json`，再逐条改目标笔记：invalidate 写 `valid_to` / `superseded_by`；archive 只把 `status` 改成 `archived`（**不写** `valid_to` / `superseded_by`）。正文逐字节不动，最后写 `runs/<run>.json`；回执写不进去就回滚已改字段。`consolidate --undo <run>` 先全量预检再恢复元数据，写 `runs/<run>.undo.json`。
 > archive 必须由人显式点名，不是自动衰减；默认检索面（含当前 `as_of` 路径）会排除 `archived`，而 invalidate 的旧记录仍可按 `as_of` 查到。
-> `merge` / `summarize` / `promote` 由人显式点名源 id，默认仍只出提案（`dry_run:true`、`apply_supported:true`、`would_write:false`）；`--apply` 后：merge / summarize 写一条 `active` 目标、把源改成 `valid_to` + `superseded_by`（正文不动），promote 只写 `notes/candidates/` 草稿、不关源。内容类 run 写 `runs/<run>.plan.json`、`runs/<run>.json`（schema `tabellio.consolidate.content/1`，只存 hash 不存正文）与可选的 `.undo.json`；`--undo` 预检目标全文 hash 与每个源的字段/正文 hash，通过后恢复源字段再删目标。`promote` 的候选仍需 `inbox` 批准。自动衰减、`diff.jsonl`、replay、`forget`、后台自动巩固**仍未实现**。
+> `merge` / `summarize` / `promote` 由人显式点名源 id，默认仍只出提案（`dry_run:true`、`apply_supported:true`、`would_write:false`）；`--apply` 后：merge / summarize 写一条 `active` 目标、把源改成 `valid_to` + `superseded_by`（正文不动），promote 只写 `notes/candidates/` 草稿、不关源。内容类 run 写 `runs/<run>.plan.json`、`runs/<run>.json`（schema `tabellio.consolidate.content/1`，只存 hash 不存正文）与可选的 `.undo.json`；`--undo` 预检目标全文 hash 与每个源的字段/正文 hash，通过后恢复源字段再删目标。`promote` 的候选仍需 `inbox` 批准。`consolidate --auto` 会按 8-gram Jaccard 相似度发现近似重复，只写 `runs/proposals/` 的 pending 提案；`inbox --accept prop_...` 批准后才复用内容类执行层，逐源 hash 过期则整单 `proposal_stale`。自动衰减、`diff.jsonl`、replay、`forget`、后台定时自动巩固**仍未实现**。
 
-触发：显式 `consolidate`（已实现）；空闲期后台或每晚一次（未实现，可关）。巩固分两步，**决策与执行分离**：
+触发：显式 `consolidate`（已实现）；Claude Code `SessionEnd` 的 `--auto-consolidate`（已实现，只产提案）；空闲期后台或每晚一次（未实现，可关）。巩固分两步，**决策与执行分离**：
 
 ```
 consolidate(dry_run=true)  → 产出 operations[]（纯决策，不落盘）
@@ -223,7 +223,8 @@ operation 类型与护栏：
 | `archive` ✅ | 显式点名仍 `active`、时间有效的记录 → `status=archived` | 不删除，不写 `valid_to` / `superseded_by`；默认检索面（含 `as_of`）排除；`undo` 只恢复 `status` |
 
 > 三种内容类操作都先出提案，`--apply` 才写；执行后一定有 receipt，撤销走同一个 `--undo`。
-> 仍没有自动发现、定时触发或自动批准；`promote` 的候选批准权在 `inbox`。
+> 自动发现（`--auto` / 钩子）只产 `merge` 提案，不自动执行；仍没有定时触发或自动批准；
+> `promote` 的候选与自动提案的批准权都在 `inbox`。
 
 **护栏（写进代码，不靠模型自觉）**：
 
@@ -579,7 +580,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 | M3 | 三宿主实机验证 + npm/MCP registry 分发 | 三宿主各有端到端录屏/日志（`00-brief.md §7`） | — |
 | M4 | 黄页/市场/文档站，第一个外部用户 | 外部用户装上并留下反馈（`00-brief.md §7`） | — |
 
-**现状（2026-10-18）**：M0 / M1 完成；M2 已开工（读取回执 + `explain` + `verify` + 显式巩固 `consolidate`（`invalidate` / `archive`）+ `undo`；`merge` / `summarize` / `promote` 的提案层与执行层（`--apply` + 内容类回执 + `undo`）已做，自动衰减、后台自动巩固未做；`setup` + `capture` / `inbox` 上手闭环已做；Claude Code `SessionEnd` 钩子已做，默认不装、只抓用户显式线索、只写候选；`--session-start` 可在会话开始只读提示待批准候选数）；M3 分发侧完成（npm + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐；M4 未开始。
+**现状（2026-10-18）**：M0 / M1 完成；M2 已开工（读取回执 + `explain` + `verify` + 显式巩固 `consolidate`（`invalidate` / `archive`）+ `undo`；`merge` / `summarize` / `promote` 的提案层与执行层（`--apply` + 内容类回执 + `undo`）已做；自动发现近似重复（`consolidate --auto` / 钩子）只产待批准提案；自动衰减、后台定时自动巩固未做；`setup` + `capture` / `inbox` 上手闭环已做；Claude Code `SessionEnd` 钩子已做，默认不装、只抓用户显式线索、只写候选；`--session-start` 可在会话开始只读提示待批准候选数与提案数）；M3 分发侧完成（npm + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐；M4 未开始。
 
 每期结束必须留下数字，没有数字的里程碑不算完成（`00-brief.md §7` 与 §8 风险表第一条）。
 
@@ -589,7 +590,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 
 五个操作，收敛到 5±2 个（`03-hosts-and-interfaces.md` 的结论）。默认只读；写操作带行为提示（`read-only` / `idempotent` / `destructive`，照抄 Basic Memory 的渐进式工具发现做法）。下面保留关键字段与全部返回形态（成功 / 幂等 / 拒绝 / 跳过 / 错误），实现者按此签名建类型。
 
-> **现状**：`remember` / `recall` / `explain` / `verify` / `consolidate`（`invalidate` / `archive`）/ `undo` 已实现（CLI；MCP 工具面为 recall/search/read/list/status，加 `--allow-write` 后多 `remember` 与 `capture`，后者只写候选）。`recall` 在 MCP 侧是只读的预算感知读接口：文本结果给正文，`structuredContent` 只给元数据（不重复正文），拒答不是错误。`explain` / `verify` 目前只服务 **recall 回执**：`explain` 接受 `--query` 或 `--receipt`，`verify` 只接受 `--receipt`，不接受 `id` / `turn_id`，也不返回 `ledger_events`。`consolidate --merge/--summarize/--promote` 默认只出**提案**，`--apply` 会写目标、merge/summarize 关闭源，并写内容类回执；`--undo` 对内容类 run 做全量预检后恢复源并删除目标。`forget`、写入回执、replay 仍未实现；下面的 JSON 是目标接口，`consolidate` 的实际返回以其后标注为准。
+> **现状**：`remember` / `recall` / `explain` / `verify` / `consolidate`（`invalidate` / `archive`）/ `undo` 已实现（CLI；MCP 工具面为 recall/search/read/list/status，加 `--allow-write` 后多 `remember` 与 `capture`，后者只写候选）。`recall` 在 MCP 侧是只读的预算感知读接口：文本结果给正文，`structuredContent` 只给元数据（不重复正文），拒答不是错误。`explain` / `verify` 目前只服务 **recall 回执**：`explain` 接受 `--query` 或 `--receipt`，`verify` 只接受 `--receipt`，不接受 `id` / `turn_id`，也不返回 `ledger_events`。`consolidate --merge/--summarize/--promote` 默认只出**提案**，`--apply` 会写目标、merge/summarize 关闭源，并写内容类回执；`--undo` 对内容类 run 做全量预检后恢复源并删除目标。`consolidate --auto` 自动发现近似重复，只写 `runs/proposals/` 的待批准提案，`inbox --accept prop_...` 才走执行层。`consolidate --auto` 自动发现近似重复，只写 `runs/proposals/` 的待批准提案；`inbox --accept prop_...` 才走执行层，`proposal_stale` 会整单拒绝。`forget`、写入回执、replay 仍未实现；下面的 JSON 是目标接口，`consolidate` 的实际返回以其后标注为准。
 
 ```js
 // ── remember：写入。热路径，零 LLM 调用。幂等（同 scope 同内容返回已有 id）
@@ -702,6 +703,18 @@ consolidate({
 { ok: true, status: "undone" | "already_undone", run_id, receipt_path, undo_path,
   restored: n, skipped: n, target_deleted: boolean }
 { ok: false, status: "conflict" | "tampered" | "wrong_schema" | "partial" | "unreadable", ... }
+
+// ── 自动发现提案（CLI: consolidate --auto [--write] --json）
+// 纯扫描，不改笔记；dry-run 不写 runs/proposals/。--write 后每组建一个 pending 提案。
+{ ok: true, schema: "tabellio.consolidate.auto/1", dry_run: boolean,
+  scanned, eligible, discovered, created_count, existing_count, failed_count,
+  created: [proposal_id...], existing: [proposal_id...],
+  items: [ { proposal_id, mode: "merge", source_ids: [...], source_titles: [...],
+             similarity, source_chars, estimated_saved_tokens } ],
+  failed: [ { proposal_id?, reason } ], truncated, skipped,
+  thresholds: { min_similarity, max_group, max_proposals } }
+// 提案文件：runs/proposals/<proposal_id>.json（schema tabellio.consolidate.auto.proposal/1）；
+// inbox --accept prop_... 才调用内容类执行层，--reject 移到 runs/proposals/rejected/。
 
 // 目标但未实现：replay、diff.jsonl、budget_tokens、forget
 

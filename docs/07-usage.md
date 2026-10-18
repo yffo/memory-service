@@ -1,6 +1,6 @@
 # 07 · 用法
 
-`tabellio` 当前（M1 + M2：读取回执 / 巩固 / 撤销 / 候选闭环）是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
+`tabellio` 当前（M1 + M2：读取回执 / 巩固 / 撤销 / 候选闭环 / 自动发现提案）是**命令行 + MCP**，没有后台进程、没有数据库、没有网络调用。
 零运行时依赖：`node bin/memory` 直接就能跑，不需要 `npm install`。
 
 - 要求：Node ≥ 20.11（实测 Node 25.8）。
@@ -10,7 +10,7 @@
 ```bash
 git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
 node bin/memory status                 # 建库 + 看一眼
-node --test 'test/**/*.test.mjs'       # 全绿才继续（447 条）
+node --test 'test/**/*.test.mjs'       # 全绿才继续（506 条）
 ```
 
 ## 一条事实一个文件
@@ -36,7 +36,7 @@ aliases: [acme-editor, 编辑器]  # 可选：作者给的同义说法，只参�
 
 `setup` / `status` / `index` / `search` / `recall` / `explain` / `verify` / `consolidate` / `read` / `remember` / `capture` / `inbox` / `hook` / `import`（另有 `paths` 查路径）。
 
-`setup` 只写宿主的 MCP 配置，不碰记忆库；`hook` 把 Claude Code 的会话结束事件接到候选箱（默认不装）；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改库的入口**：默认只出计划，`--apply` 才动；元数据操作只改字段，内容类操作会写目标并关闭源，两者都能 `--undo`。`--merge` / `--summarize` / `--promote` 默认只出**内容类提案**，`--apply` 才执行。
+`setup` 只写宿主的 MCP 配置，不碰记忆库；`hook` 把 Claude Code 的会话结束事件接到候选箱（默认不装）；`capture` / `inbox` 是候选的**写入与批准**两端。`explain` / `verify` 是**回执（receipt）的读取端**：`recall` 可以把一次判断落成可核验的回执，之后再解释或复核，不需要重跑检索、不需要模型。`consolidate` 是**批量改库的入口**：默认只出计划，`--apply` 才动；元数据操作只改字段，内容类操作会写目标并关闭源，两者都能 `--undo`。`--merge` / `--summarize` / `--promote` 默认只出**内容类提案**，`--apply` 才执行；`--auto` 自动发现近似重复，但只写待批准提案，不直接改库。
 
 `search` 与 `recall` 的分工：前者给**指针**（pull，读哪条由调用方决定），后者一步给出
 **可直接进上下文**的正文（按 token 预算裁剪、带拒答）；两者都零模型调用。
@@ -349,7 +349,7 @@ node bin/memory verify --receipt runs/rcp_....json --json
 
 ### 10. `consolidate` —— 巩固：默认只出计划，改了账，能撤销
 
-巩固是**唯一的「改」入口**，但热路径永远不调用它。当前实现两种**元数据**操作，正文一个字不改；另有三种内容类操作（merge / summarize / promote）：默认只出提案，`--apply` 才写目标（merge / summarize 还会关闭源），见本节末尾。
+巩固是**唯一的「改」入口**，但热路径永远不调用它。当前实现两种**元数据**操作，正文一个字不改；另有三种内容类操作（merge / summarize / promote）：默认只出提案，`--apply` 才写目标（merge / summarize 还会关闭源）；`--auto` 则只自动发现近似重复、写待批准提案，不执行。见本节后半。
 
 - `invalidate`：B 的 frontmatter 里有 `supersedes: [A]`，A 还 `active`、没有 `valid_to`、没有 `superseded_by`、
   且在 now 之前已生效 → 把 A 的 `valid_to` 写成当前时间、`superseded_by` 写成 B 的 id。**正文一个字不改**；
@@ -409,7 +409,8 @@ archive 的 undo 只把 `status` 恢复成 `active`；它本来就没写过 `val
 #### 内容类执行层：`--merge` / `--summarize` / `--promote` + `--apply`
 
 这三种操作会新增或压缩事实，所以默认仍只出**显式源 id 的提案**：读库、出草稿，不写任何文件。
-人审阅后加 `--apply` 才落盘。源必须由人点名，没有自动发现。
+人审阅后加 `--apply` 才落盘。执行层只接受人点名的源；自动发现是另一条路径（`--auto`），
+只产合并提案，批准后仍复用这里的执行层。
 
 ```bash
 node bin/memory consolidate --merge <id>,<id>          # 至少 2 条；同 scope、同 kind；默认 dry-run
@@ -465,13 +466,47 @@ dry-run 的 `--json` 返回：
 `partial` / `unreadable`），区别是 `undone` 还会 `target_deleted:true`。
 
 **边界**：`--apply` 不能和 `--archive` / `--undo` / 其他内容模式同用；仍不接受
-`--scope` / `--kinds`。没有自动发现、没有 LLM 摘要（merge 是去重拼接、summarize 是抽取式首句、
-promote 是脚手架）。promote 的候选一旦被 `inbox --accept` 批准，候选文件会移到
+`--scope` / `--kinds`。这是显式选源路径，不会自动挑源；自动发现见下一小节，且只产提案。
+没有 LLM 摘要（merge 是去重拼接、summarize 是抽取式首句、promote 是脚手架）。promote 的候选一旦被 `inbox --accept` 批准，候选文件会移到
 `notes/candidates/decided/` 并生成一条正式 note；此时内容回执指向的候选 id 已不在候选目录，
 再 `--undo` 会按 `target_missing` 拒绝。回执 hash 不是签名，能写库的人仍可改文件与回执。
 
-**还没做**：replay、forget、写入回执、后台自动巩固、`diff.jsonl`；
-内容类操作也没有自动触发，必须由人点名源 id。
+#### 自动发现：`--auto` 只产提案，批准后才合并
+
+`--auto` 解决「谁来找重复」：它扫描 active、未过期、未被取代、正文至少 40 字的笔记，
+按 `scope` / `kind` / `trust` 分组，用 8-gram 字符 n-gram 的 Jaccard 相似度找近似重复。
+**只写待批准提案，不改笔记、不建索引、不进检索面。**
+
+```bash
+node bin/memory consolidate --auto                  # 默认 dry-run：只报告发现了几组
+node bin/memory consolidate --auto --write          # 写 runs/proposals/<proposal_id>.json
+node bin/memory consolidate --auto --write --min-similarity 0.7 --max-proposals 10
+node bin/memory inbox                               # 候选与自动巩固提案一起列
+node bin/memory inbox --accept prop_...             # 批准：走内容类执行层合并
+node bin/memory inbox --reject prop_...             # 拒绝：归档，不改库
+node bin/memory consolidate --undo run_...          # 合并后可撤销
+```
+
+- 默认阈值 **0.62**，每组最多 **4 条**，每次最多 **20 组**；`--min-similarity` 取 0..1，
+  `--max-proposals` 取正整数，越界退 2。
+- 默认 **dry-run**；`--write` 才落提案。重复扫描同一组会复用已有提案（`existing`），
+  不会重复创建；同一组的 `proposal_id` 由排序后的源 id 决定，可复现。
+- 提案只写 `runs/proposals/<proposal_id>.json`（schema `tabellio.consolidate.auto.proposal/1`），
+  `status` 固定 `pending`；批准/拒绝后分别移到 `runs/proposals/accepted/` 与
+  `runs/proposals/rejected/`，不覆盖已有决策。
+- `inbox --accept prop_...` 不是简单改状态：它先逐源比对提案里的正文 hash，源被改过就整单
+  `proposal_stale`，不写任何文件；通过后调用与 `--merge --apply` 相同的内容执行层，
+  写目标、把源写成 `valid_to` + `superseded_by`、写内容回执。因为人已经逐条看过固定清单，
+  批准路径显式把 5% 保险丝放开为 `maxChangeRatio:1`；执行层的 hash、字段与目标检查一条不少。
+- 候选 id 与提案 id 可以在同一次 `inbox` 调用里混批；`--dry` 只返回 `planned`。
+- `--auto` 与 `--apply` / `--dry-run` / `--merge` / `--summarize` / `--promote` /
+  `--archive` / `--undo` / `--scope` / `--kinds` 互斥。
+- **边界**：只做 merge 近似重复，不做自动 summarize / promote，不自动执行；相似度是字面
+  8-gram，不是语义模型，跨语言或改写较大的重复会漏。没有后台进程或定时触发——要么显式跑
+  `consolidate --auto`，要么用下一节的 Claude 钩子 `--auto-consolidate`。
+
+**还没做**：replay、forget、写入回执、后台定时自动发现/自动巩固、`diff.jsonl`；
+自动发现本身已可用（显式 `--auto` 或 Claude 钩子触发），但只产提案、执行仍要人批准。
 
 ### 11. `setup` —— 一条命令给宿主写 MCP 配置
 
@@ -557,22 +592,43 @@ $ printf '%s\n' '# 发布流程' '' '发版前跑 npm test 和 node bench/run-ev
 ### 13. `inbox` —— 人批准后才进主库
 
 ```bash
-$ node bin/memory inbox                          # 只读列表
+$ node bin/memory inbox                          # 只读列表：候选 + 自动巩固提案
 候选 2 条（notes/candidates，默认不进检索面）：
   [01M...] 发布流程 — session:2026-10-18 / 38 字 / 2026-10-18T...
+自动巩固提案 1 条（runs/proposals，未批准不进检索面）：
+  [prop_...] 2 条近似笔记 / 相似度 0.79 / 预计省 120 token
 批准：tabellio inbox --accept <id>   拒绝：--reject <id>
 
-$ node bin/memory inbox --accept 01M... --json   # 走 remember 同一条闸门
-$ node bin/memory inbox --reject 01N... --dry    # 只预览
+$ node bin/memory inbox --accept 01M... --json    # 候选：走 remember 同一条闸门
+$ node bin/memory inbox --accept prop_... --json  # 提案：走内容类执行层合并
+$ node bin/memory inbox --reject prop_...,01N... --dry  # 两类 id 可混批，只预览
 ```
 
-- 不带 `--accept` / `--reject` 时只读列候选，按创建时间倒序；JSON 是 `{ok:true,count,candidates:[{id,title,created,source,chars,kind,trust,scope,path}]}`。
-- `--accept` / `--reject` 可重复或逗号分隔；同一 id 同时出现在两边时整单拒绝（`accept_reject_overlap`）。
-- 批准时把候选改成 `active`，走与 `remember` **同一条写入闸门**（去重/400 字/200 token/信任分级），通过后写 `notes/<id>.md`、候选移到 `notes/candidates/decided/`；拒绝只移到 `notes/candidates/rejected/`。两边都保留审计，不删文件。
-- 批量里的失败**不中断**其余项；只要有失败就 `ok:false`、退 1，并在 `failed` 里给 `{id,action,reason,details?,note_stored?}`。`note_stored:true` 表示「笔记已入库，但候选归档失败」，重试会走出覆盖更新，不会产生第二份。
-- `--dry` 用同一套闸门返回 `planned`，不写 note、不移动候选。
-- JSON 是 `{ok,dry_run,accepted,rejected,failed,accepted_count,rejected_count,failed_count}`；`accepted[]` 的 `status` 是 `stored|planned`，`rejected[]` 是 `rejected|planned`。
-- 索引只在真有批准写入时重建一次；只拒绝不重建。`status` 的「候选」计数与「N 条候选待处理」警告读的就是这个目录。
+**候选**与**自动巩固提案**共用这个闸门，但批准后的动作不同：
+
+- 不带 `--accept` / `--reject` 时只读列出两类待办，各按创建时间倒序。JSON 是
+  `{ok:true,count,candidates:[...],proposal_count,proposals:[...],proposal_failures}`；
+  提案字段是 `{id,mode,created,source_count,source_ids,source_titles,similarity,target_id,estimated_saved_tokens,estimated_saved_chars,warnings}`。
+- `--accept` / `--reject` 可重复或逗号分隔；同一 id 同时出现在两边时整单拒绝
+  （`accept_reject_overlap`）。`prop_` 前缀的 id 走提案，其余走候选，可在同一次调用里混批。
+- **批准候选**：把候选改成 `active`，走与 `remember` **同一条写入闸门**
+  （去重/400 字/200 token/信任分级），通过后写 `notes/<id>.md`、候选移到
+  `notes/candidates/decided/`；拒绝只移到 `notes/candidates/rejected/`。两边都保留审计，不删文件。
+- **批准提案**：先逐源比对提案里的正文 hash，任一源被改过就整单 `proposal_stale`，
+  不写任何文件；通过后调用内容类执行层写合并目标、把源写成 `valid_to` +
+  `superseded_by`、写内容回执，提案移到 `runs/proposals/accepted/`。返回里有
+  `run_id` / `receipt_path` / `target`，可用 `consolidate --undo run_...` 撤销。
+  因为人已逐条看过固定清单，批准路径把 5% 保险丝显式放开为 `maxChangeRatio:1`；
+  执行层自己的检查不变。拒绝只把提案移到 `runs/proposals/rejected/`，不动笔记。
+- 批量里的失败**不中断**其余项；只要有失败就 `ok:false`、退 1，并在 `failed` 里给
+  `{id,action,reason,details?,note_stored?}`。`note_stored:true` 表示「笔记已入库，但候选归档失败」，
+  重试会走出覆盖更新，不会产生第二份。
+- `--dry` 只返回 `planned`：候选不写 note、不移文件；提案不合并、不移文件。
+- 合并结果的 JSON 是 `{ok,dry_run,accepted,rejected,failed,accepted_count,rejected_count,failed_count}`；
+  候选 `accepted[]` 的 `status` 是 `stored|planned`，提案是 `applied|planned` 并带
+  `run_id` / `receipt_path`；`rejected[]` 是 `rejected|planned`。
+- 索引只在真有候选批准写入时重建一次；只拒绝或只处理提案不重建。`status` 的「候选」
+  「提案」计数与对应警告读的就是这两个目录。
 
 ### 14. `hook` —— Claude Code 会话结束时生成候选、会话开始时提示待批准（默认不装）
 
@@ -580,6 +636,7 @@ $ node bin/memory inbox --reject 01N... --dry    # 只预览
 $ node bin/memory hook install --host claude            # 默认 dry-run：只打印会改哪个文件
 $ node bin/memory hook install --host claude --write    # 写入 ~/.claude/settings.json（只装 SessionEnd）
 $ node bin/memory hook install --host claude --session-start --write  # 再加 SessionStart 待批准提示
+$ node bin/memory hook install --host claude --auto-consolidate --write  # 再加自动发现提案（隐含 SessionStart）
 $ node bin/memory hook uninstall --host claude --write  # 移除 tabellio 自己的两个钩子
 ```
 
@@ -587,14 +644,20 @@ $ node bin/memory hook uninstall --host claude --write  # 移除 tabellio 自己
 （含 `transcript_path`）交给 `tabellio hook claude-session-end`，后者从**本次会话的用户发言**
 里找显式线索，生成候选。**不写正式库**，批准仍在 `inbox`。
 
+加 `--auto-consolidate` 时，SessionEnd 在收完候选后再跑一次 `consolidate --auto` 的扫描，
+把近似重复写成 `runs/proposals/` 的待批准提案；同样**不改笔记**，批准后才走内容类执行层。
+它隐含 `--session-start`——否则新提案没人提示。
+
 `--session-start` 是可选的通知环：下次会话开始时，宿主调用
-`tabellio hook claude-session-start`，它**只读**候选数，把「有 N 条候选待确认、用
-`tabellio inbox` 查看」注入会话上下文。不写库、不批准、不删除，也不改变批准权。
+`tabellio hook claude-session-start`，它**只读**候选数与自动巩固提案数，把「有 N 条候选、
+M 条提案待确认，用 `tabellio inbox` 查看」注入会话上下文。不写库、不批准、不删除，
+也不改变批准权。
 
 - **只支持 Claude Code**（本机 2.1.142 实测）。Cursor 没有等价的无头会话结束钩子，Codex 也没有；
   不伪造支持，装其他宿主会退 1。
 - **默认不装、默认 dry-run**；默认只改 `<home>/.claude/settings.json` 的 `hooks.SessionEnd`，
-  加 `--session-start` 才同时写 `hooks.SessionStart`；保留用户的其他钩子、`env` 和其他字段。写前备份成
+  加 `--session-start` 才同时写 `hooks.SessionStart`；`--auto-consolidate` 也会写它。
+保留用户的其他钩子、`env` 和其他字段。写前备份成
   `settings.json.tabellio-backup-<紧凑 ISO 时间戳>`；JSON 原子写；新文件 mode `0600`。
 - 钩子用 exec form：`{type:"command", command:<当前 node>, args:[<bin/memory>, "hook",
   "claude-session-end" | "claude-session-start", "--store", <库>], timeout:15}`。
@@ -602,6 +665,8 @@ $ node bin/memory hook uninstall --host claude --write  # 移除 tabellio 自己
 - 已有指向**别的 store**的 tabellio 钩子时默认 `conflict`、一份不写；确认替换加 `--force`。
   坏 JSON / 不认识的 `hooks.SessionEnd` / `hooks.SessionStart` 结构整份不写。
 - `uninstall` 会同时清掉两个事件里的 tabellio 钩子；用户自己的 SessionStart 钩子保留。
+  关闭 `--auto-consolidate` 只把 SessionEnd 改回不带该参数的命令，**不删除**已装的
+  SessionStart——已经产生的提案还需要提示；要彻底移除用 `uninstall`。
 - `--json` 输出计划/结果；**不会输出整份 settings**（里面可能有宿主 env 凭据）。
   `action` 取值：`create|append|update|unchanged|uninstall|conflict|invalid|unsupported`。
 
@@ -626,10 +691,12 @@ $ node bin/memory hook uninstall --host claude --write  # 移除 tabellio 自己
 两个内部命令都是给宿主调用的，不面向日常使用：
 
 - `tabellio hook claude-session-end`：从 stdin 读 `SessionEnd` 事件，读 transcript、生成候选；
-  只有 `--json` 才输出调试结果，默认静默。
-- `tabellio hook claude-session-start`：从 stdin 读 `SessionStart` 事件；候选数 > 0 时向 stdout
-  输出 Claude 的 hook 协议 JSON（`hookSpecificOutput.hookEventName=SessionStart` +
-  `additionalContext`），候选数为 0 时不输出。**只读候选数**，不写库、不改变候选状态。
+  带 `--auto-consolidate` 时再扫描一次近似重复、只写提案。只有 `--json` 才输出调试结果，
+  默认静默。自动发现失败只记在 `proposal_error`，不阻塞已收候选，命令仍退 0。
+- `tabellio hook claude-session-start`：从 stdin 读 `SessionStart` 事件；候选数与提案数
+  任一 > 0 时向 stdout 输出 Claude 的 hook 协议 JSON
+  （`hookSpecificOutput.hookEventName=SessionStart` + `additionalContext`），都为 0 时静默。
+  **只读计数**，不写库、不改变候选或提案状态。
 - 事件坏、没有 `transcript_path`、文件不存在/读不了、库读不了：`ok:false` + `reason`，
   **始终退 0**——钩子不能阻塞宿主退出或开始；用法错误才退 2。
 - 有候选时才打开库并逐条 `addCandidate`；重复/超长是正常 `rejected`，不算命令失败。
@@ -646,7 +713,8 @@ SessionStart 用一条并排的 marker 钩子证明宿主确实触发了事件�
 
 **边界**
 
-只有 Claude Code；没有定时/后台触发，没有跨会话批量重放，没有自动巩固；它不是「自动记住一切」，
+只有 Claude Code；没有定时/后台触发，没有跨会话批量重放；`--auto-consolidate` 只在
+SessionEnd 时扫描一次、只产提案，不会自动执行合并；它不是「自动记住一切」，
 只是把「会话结束该问要不要记」变成候选箱里的一条待审记录，并在下次会话开始时提醒一次。
 提示只在候选数 > 0 时出现，不是每次会话都打扰；卸载只移除 tabellio 的钩子，不删候选、
 不删已有记忆。

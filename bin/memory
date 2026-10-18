@@ -34,6 +34,9 @@ import {
   addCandidate,
   listCandidates,
   reviewCandidates,
+  sweepConsolidation,
+  listProposals,
+  reviewProposals,
   indexReport,
   defaultStorePath,
   INDEX_CAPS,
@@ -63,11 +66,12 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio remember --file <path.md> [--dry] [--json]
                    [--kind k] [--trust t] [--scope s] [--tags a,b] [--id ULID]
   tabellio capture  --file <path.md|-> [--source REF] [--kind k] [--tags a,b] [--dry] [--json]
-  tabellio inbox    [--accept <id[,id]>]... [--reject <id[,id]>]... [--dry] [--json]
+  tabellio inbox    [--accept <id[,id]>]... [--reject <id[,id]>]... [--dry] [--json]  # 候选和自动巩固提案都能批
+
   tabellio setup    [--host claude,cursor,codex|all] [--write] [--verify] [--force] [--read-only] [--json]
-  tabellio hook install   --host claude [--session-start] [--write] [--force] [--json]  # 默认只装 SessionEnd
+  tabellio hook install   --host claude [--session-start] [--auto-consolidate] [--write] [--force] [--json]  # 默认只装 SessionEnd
   tabellio hook uninstall --host claude [--write] [--json]
-  tabellio hook claude-session-end [--json]          # 内部：宿主 SessionEnd 调用，只写候选
+  tabellio hook claude-session-end [--json] [--auto-consolidate]  # 内部：只写候选/提案
   tabellio hook claude-session-start [--json]        # 内部：宿主 SessionStart 调用，只提示待批准
   tabellio import --from <旧 Engramory 库目录> [--dry] [--json]
   tabellio recall --query "<词>" [--receipt|--save-receipt] [--budget-tokens N] [--json]
@@ -75,6 +79,7 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio verify --receipt <id|path> [--json]
   tabellio consolidate [--dry-run|--apply] [--max-change-ratio F] [--scope S] [--kinds a,b]
                     [--archive <id[,id]>]... [--json]
+  tabellio consolidate --auto [--write] [--min-similarity F] [--max-proposals N] [--json]  # 只写待确认提案，不改笔记
   tabellio consolidate --merge <id[,id]>... [--apply] [--json]       # 默认只出提案
   tabellio consolidate --summarize <id> [--apply] [--json]            # 默认只出提案
   tabellio consolidate --promote <id[,id]>... [--apply] [--json]      # 只写候选，不关源
@@ -540,6 +545,47 @@ export async function main(argv, io = {}) {
           err.write('consolidate 的 --apply 和 --dry-run 只能选一个\n');
           return 2;
         }
+        if (args.auto) {
+          if (
+            args.apply ||
+            args['dry-run'] ||
+            args.merge !== undefined ||
+            args.summarize !== undefined ||
+            args.promote !== undefined ||
+            args.archive !== undefined ||
+            args.undo !== undefined ||
+            args.scope !== undefined ||
+            args.kinds !== undefined
+          ) {
+            err.write('consolidate --auto 不能和 --apply/--dry-run/--merge/--summarize/--promote/--archive/--undo/--scope/--kinds 同时用\n');
+            return 2;
+          }
+          let minSimilarity;
+          if (args['min-similarity'] !== undefined) {
+            const n = numArg(args['min-similarity'], NaN);
+            if (!Number.isFinite(n) || n < 0 || n > 1) {
+              err.write('consolidate --auto 的 --min-similarity 需要 0 到 1 之间的数（默认 0.62）\n');
+              return 2;
+            }
+            minSimilarity = n;
+          }
+          let maxProposals;
+          if (args['max-proposals'] !== undefined) {
+            const n = numArg(args['max-proposals'], NaN);
+            if (!Number.isInteger(n) || n < 1) {
+              err.write('consolidate --auto 的 --max-proposals 需要正整数\n');
+              return 2;
+            }
+            maxProposals = n;
+          }
+          if (args.write && args['dry-run']) {
+            err.write('consolidate --auto 的 --write 和 --dry-run 只能选一个\n');
+            return 2;
+          }
+          const r = sweepConsolidation(ctx, { dry: !args.write, minSimilarity, maxProposals });
+          emit(r, { json, human: renderSweep(r) });
+          return r.ok ? 0 : 1;
+        }
         const contentModes = ['merge', 'summarize', 'promote'].map((name) => ({ name, ...flagArgValues(argv, args, name) }));
         const selectedModes = contentModes.filter((m) => m.provided);
         if (selectedModes.length > 0) {
@@ -686,18 +732,53 @@ export async function main(argv, io = {}) {
           return 2;
         }
         if (!accept.provided && !reject.provided) {
-          const result = listCandidates(ctx);
+          const candidates = listCandidates(ctx);
+          const proposals = listProposals(ctx);
+          const result = {
+            ...candidates,
+            proposals: proposals.proposals,
+            proposal_count: proposals.count,
+            proposal_failures: proposals.failures,
+          };
           emit(result, { json, human: renderInbox(result) });
           return 0;
         }
-        const result = reviewCandidates(ctx, {
-          accept: accept.values,
-          reject: reject.values,
-          dry: Boolean(args.dry),
-          force: Boolean(args.force),
-        });
+        const proposalIds = (ids) => ids.filter((id) => id.startsWith('prop_'));
+        const candidateIds = (ids) => ids.filter((id) => !id.startsWith('prop_'));
+        const acceptedIn = candidateIds(accept.values);
+        const rejectedIn = candidateIds(reject.values);
+        const acceptedProps = proposalIds(accept.values);
+        const rejectedProps = proposalIds(reject.values);
+        const results = [];
+        if (acceptedIn.length || rejectedIn.length) {
+          results.push(reviewCandidates(ctx, {
+            accept: acceptedIn,
+            reject: rejectedIn,
+            dry: Boolean(args.dry),
+            force: Boolean(args.force),
+          }));
+        }
+        if (acceptedProps.length || rejectedProps.length) {
+          results.push(reviewProposals(ctx, {
+            accept: acceptedProps,
+            reject: rejectedProps,
+            dry: Boolean(args.dry),
+          }));
+        }
+        const result = {
+          ok: results.every((r) => r.ok),
+          reason: results.map((r) => r.reason).filter(Boolean).join(',') || null,
+          dry_run: Boolean(args.dry),
+          accepted: results.flatMap((r) => r.accepted ?? []),
+          rejected: results.flatMap((r) => r.rejected ?? []),
+          failed: results.flatMap((r) => r.failed ?? []),
+          accepted_count: results.reduce((n, r) => n + (r.accepted_count ?? 0), 0),
+          rejected_count: results.reduce((n, r) => n + (r.rejected_count ?? 0), 0),
+          failed_count: results.reduce((n, r) => n + (r.failed_count ?? 0), 0),
+        };
         emit(result, { json, human: renderReview(result) });
         return result.ok ? 0 : 1;
+
       }
       case 'setup': {
         if (args.host === true || args.command === true || args['mcp-bin'] === true) {
@@ -744,6 +825,7 @@ export async function main(argv, io = {}) {
             uninstall: sub === 'uninstall',
             force: Boolean(args.force),
             sessionStart: Boolean(args['session-start']),
+            autoConsolidate: Boolean(args['auto-consolidate']),
           });
           if (!args.write) {
             const result = { ...plan, dry_run: true };
@@ -789,9 +871,13 @@ export async function main(argv, io = {}) {
           const captured = [];
           const rejected = [];
           let storeError = null;
+          let proposalStats = null;
+          let proposalError = null;
+          const wantsSweep = Boolean(args['auto-consolidate']);
+          let hookCtx = null;
           if (extracted.candidates.length > 0) {
             try {
-              const hookCtx = openStore(storePath);
+              hookCtx = openStore(storePath);
               for (const candidate of extracted.candidates) {
                 const r = addCandidate(
                   hookCtx,
@@ -806,13 +892,31 @@ export async function main(argv, io = {}) {
               storeError = String(e?.message ?? e);
             }
           }
+          if (wantsSweep) {
+            try {
+              hookCtx = hookCtx ?? openStore(storePath);
+              const swept = sweepConsolidation(hookCtx, { dry: false });
+              proposalStats = {
+                discovered: swept.discovered,
+                created: swept.created_count,
+                existing: swept.existing_count,
+                failed: swept.failed_count,
+              };
+              if (!swept.ok) proposalError = 'proposal_partial_failure';
+            } catch (e) {
+              // 自动发现失败不阻塞宿主退出，也不影响已经收下的候选。
+              proposalError = String(e?.message ?? e);
+            }
+          }
           const result = {
-            ok: storeError === null,
+            ok: storeError === null && proposalError === null,
             event: 'SessionEnd',
             ...(storeError ? { reason: 'store_write_failed', error: storeError } : { reason: typeof event?.reason === 'string' ? event.reason : null }),
+            ...(proposalError ? { proposal_error: proposalError } : {}),
             session_id: sessionId,
             captured,
             rejected,
+            ...(proposalStats ? { proposals: proposalStats } : {}),
             stats: extracted.stats,
             truncated: extracted.truncated,
           };
@@ -828,18 +932,24 @@ export async function main(argv, io = {}) {
             if (json) out.write(JSON.stringify({ ok: false, reason: 'invalid_event' }) + '\n');
             return 0;
           }
-          let count;
+          let candidateCount;
+          let proposalCount;
           try {
             // 库路径存在但不是目录，是明确的配置错误；不要静默当成「没有候选」。
             if (existsSync(storePath) && !statSync(storePath).isDirectory()) throw new Error('store 不是目录：' + storePath);
-            count = listCandidates(openStore(storePath)).count;
+            const hookCtx = openStore(storePath);
+            candidateCount = listCandidates(hookCtx).count;
+            proposalCount = listProposals(hookCtx).count;
           } catch (e) {
             if (json) out.write(JSON.stringify({ ok: false, reason: 'store_unreadable', error: String(e?.message ?? e) }) + '\n');
             return 0;
           }
+          const parts = [];
+          if (candidateCount > 0) parts.push(candidateCount + ' 条候选');
+          if (proposalCount > 0) parts.push(proposalCount + ' 条自动巩固提案');
           const additionalContext =
-            count > 0
-              ? '[tabellio] 有 ' + count + ' 条候选待确认。运行 `tabellio inbox` 查看；批准用 `tabellio inbox --accept <id>`。'
+            parts.length > 0
+              ? '[tabellio] 有 ' + parts.join('、') + '待确认。运行 `tabellio inbox` 查看；批准用 `tabellio inbox --accept <id>`。'
               : null;
           if (json) {
             out.write(
@@ -847,8 +957,9 @@ export async function main(argv, io = {}) {
                 ok: true,
                 event: 'SessionStart',
                 source: typeof event?.source === 'string' ? event.source : null,
-                candidates: count,
-                prompted: count > 0,
+                candidates: candidateCount,
+                proposals: proposalCount,
+                prompted: additionalContext !== null,
                 ...(additionalContext ? { additionalContext } : {}),
               }) + '\n',
             );
@@ -923,24 +1034,70 @@ function renderCapture(r) {
   return line;
 }
 
-function renderInbox(r) {
-  if (r.count === 0) return '候选箱是空的。用 tabellio capture --file - 把候选丢进来，批准后才进主库。';
-  const lines = ['候选 ' + r.count + ' 条（notes/candidates，默认不进检索面）：'];
-  for (const c of r.candidates) {
-    lines.push('  [' + c.id + '] ' + c.title + ' — ' + (c.source ?? '（无来源）') + ' / ' + c.chars + ' 字' + (c.created ? ' / ' + c.created : ''));
+function renderSweep(r) {
+  const head = r.dry_run
+    ? '[dry-run] 自动发现：扫描 ' + r.scanned + ' 条，找到 ' + r.discovered + ' 组近似重复；没有写任何文件'
+    : '自动发现：扫描 ' + r.scanned + ' 条，发现 ' + r.discovered + ' 组；新提案 ' + r.created_count + ' 条，已有 ' + r.existing_count + ' 条';
+  const lines = [head];
+  for (const item of r.items ?? []) {
+    const saved = item.estimated_saved_tokens === null ? '?' : item.estimated_saved_tokens;
+    lines.push('  [' + item.id + '] ' + item.source_count + ' 条近似重复（最低重叠 ' + item.similarity + '，预计省 ' + saved + ' token）');
+    lines.push('    源：' + (item.source_titles ?? []).join(' / '));
   }
-  lines.push('批准：tabellio inbox --accept <id>   拒绝：--reject <id>');
+  for (const f of r.failed ?? []) lines.push('  ! ' + (f.proposal_id ?? f.id ?? '?') + '：' + (f.reason ?? '失败'));
+  if (r.truncated) lines.push('  … 还有 ' + r.skipped + ' 组超过本轮上限，下次再处理');
+  if (!r.dry_run && (r.created_count ?? 0) > 0) lines.push('下一步：tabellio inbox 查看；批准：tabellio inbox --accept <prop_id>');
+  if (r.dry_run) lines.push('要落成待确认提案，加 --write。');
+  return lines.join('\n');
+}
+
+function renderInbox(r) {
+  const candidateCount = r.count ?? 0;
+  const proposalCount = r.proposal_count ?? 0;
+  if (candidateCount === 0 && proposalCount === 0) {
+    return '候选箱是空的。用 tabellio capture --file - 把候选丢进来，批准后才进主库；\n自动巩固提案会在 tabellio consolidate --auto --write 后出现在这里。';
+  }
+  const lines = [];
+  if (candidateCount > 0) {
+    lines.push('候选 ' + candidateCount + ' 条（notes/candidates，默认不进检索面）：');
+    for (const c of r.candidates) {
+      lines.push('  [' + c.id + '] ' + c.title + ' — ' + (c.source ?? '（无来源）') + ' / ' + c.chars + ' 字' + (c.created ? ' / ' + c.created : ''));
+    }
+  }
+  if (proposalCount > 0) {
+    if (lines.length) lines.push('');
+    lines.push('自动巩固提案 ' + proposalCount + ' 条（只待确认，未改任何笔记）：');
+    for (const p of r.proposals) {
+      const saved = p.estimated_saved_tokens === null ? '?' : p.estimated_saved_tokens;
+      lines.push('  [' + p.id + '] ' + p.source_count + ' 条近似重复（重叠 ' + p.similarity + '，预计省 ' + saved + ' token）');
+      lines.push('    源：' + (p.source_titles ?? []).join(' / '));
+    }
+  }
+  for (const f of r.proposal_failures ?? []) lines.push('  ! 提案读取失败：' + (f.path ?? f.id ?? '?') + ' — ' + (f.reason ?? '未知错误'));
+  lines.push('批准：tabellio inbox --accept <id>   拒绝：--reject <id>（两类 id 都能直接填）');
   return lines.join('\n');
 }
 
 function renderReview(r) {
   const lines = [r.dry_run ? '[dry-run] 只预览，不落盘' : '处理完成'];
-  for (const a of r.accepted) lines.push('  ✓ 批准 ' + a.id + (a.status === 'planned' ? '（会入库）' : '（已入库）'));
+  for (const a of r.accepted) {
+    const isProposal = String(a.id).startsWith('prop_');
+    if (isProposal) {
+      if (a.status === 'planned') lines.push('  ✓ 批准提案 ' + a.id + '（会合并，未落盘）');
+      else lines.push('  ✓ 批准提案 ' + a.id + '（已合并，run ' + (a.run_id ?? '?') + '，目标是 ' + (a.target_id ?? '?') + '）');
+    } else {
+      lines.push('  ✓ 批准 ' + a.id + (a.status === 'planned' ? '（会入库）' : '（已入库）'));
+    }
+  }
   for (const x of r.rejected) lines.push('  ✗ 拒绝 ' + x.id);
-  for (const f of r.failed) lines.push('  ! ' + f.id + '：' + (f.reason ?? '失败') + (f.note_stored ? '（笔记已入库，但候选归档失败）' : ''));
+  for (const f of r.failed) {
+    const why = f.reason === 'proposal_stale' ? '提案过期（源已被改动）' : (f.reason ?? '失败');
+    lines.push('  ! ' + f.id + '：' + why + (f.note_stored ? '（笔记已入库，但候选归档失败）' : ''));
+  }
   lines.push('批准 ' + r.accepted_count + ' / 拒绝 ' + r.rejected_count + ' / 失败 ' + r.failed_count);
   return lines.join('\n');
 }
+
 
 function renderVerification(v) {
   const mark = { connected: '✓', configured: '=', unverified: '?', unavailable: '-', failed: '!', missing: '!' };

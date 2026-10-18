@@ -61,7 +61,7 @@ test('planContentConsolidation merge：去重拼接、带源 id，目标只是 d
   assert.equal(plan.status, 'proposed');
   assert.equal(plan.schema, CONTENT_PROPOSAL_SCHEMA);
   assert.equal(plan.dry_run, true);
-  assert.equal(plan.apply_supported, false);
+  assert.equal(plan.apply_supported, true);
   assert.equal(plan.would_write, false);
   assert.equal(plan.target_id, TARGET);
   assert.equal(plan.target.path, `notes/${TARGET}.md`);
