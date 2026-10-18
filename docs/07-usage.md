@@ -788,14 +788,14 @@ node bin/memory doctor --verify            # 额外让宿主 CLI 自查连接（
 它回答「现在到底哪一环没接上」，不要求你先读一堆文档：
 
 - **库**：有没有内容、核心档条数、索引是否生成/陈旧、解析失败数、超长条数、待批准候选/提案数。
-- **宿主**：检测到哪些宿主；每个宿主的 MCP 配置是已配置、待写、冲突还是读不了；不会输出配置正文。
+- **宿主**：检测到哪些宿主；每个宿主的 MCP 配置是已配置、待写、冲突还是读不了；还会检查配置里的 Node 与 MCP 入口绝对路径是否还在（nvm 升级/仓库搬走后常见），不存在时是 `error`，不让 `unchanged` 伪装健康。不会输出配置正文。
 - **Claude 钩子**：SessionEnd / SessionStart / `--auto-consolidate` 各自装没装，是否与当前 bin/store 匹配。
 - **定时发现**：plist 在不在、launchd 加载没有；`launchctl` 不可用时只说无法确认，不猜。
 - **建议**：按 `error` / `warn` / `info` 列出要处理的事和可直接复制的下一步命令。
 
 **只读**：不 `ensure`、不重建索引、不写宿主配置、不写提案、不批准候选。空库跑完仍然没有目录；只有 `--verify` 会调用宿主 CLI（用配置临时副本，见 §11 的 `--verify`），而且只在该宿主的配置已经指向当前 bin/store 时才真正验证——否则宿主验的是旧配置，`connected` 会误导。
 
-**退出码**：没有 `error` 级问题退 0（待批准候选、索引陈旧、未装钩子都只是 warn/info，不会让脚本失败）；库解析失败、宿主配置冲突/损坏、钩子或 plist 读不了退 1；`--home` 等参数缺值退 2。
+**退出码**：没有 `error` 级问题退 0（待批准候选、索引陈旧、未装钩子都只是 warn/info，不会让脚本失败）；库解析失败、宿主配置冲突/损坏、配置里的 Node/MCP 入口不存在、钩子或 plist 读不了退 1；`--home` 等参数缺值退 2。
 
 **JSON 形状**（开发用）：
 
@@ -803,8 +803,9 @@ node bin/memory doctor --verify            # 额外让宿主 CLI 自查连接（
 {
   "ok": true,
   "store": {"path":"…","exists":true,"notes":12,"core":2,"index_exists":true,"index_stale":false,
-            "parse_failures":0,"oversize_chars":0,"oversize_tokens":0,"candidates":1,"proposals":0},
-  "hosts": {"detected":["claude"],"items":[{"host":"claude","action":"unchanged","ok":true}],
+            "parse_failures":0,"failures":[],"oversize_chars":0,"oversize_tokens":0,"candidates":1,"proposals":0},
+  "hosts": {"detected":["claude"],"items":[{"host":"claude","action":"unchanged","ok":true,
+            "checks":{"command":"…","command_exists":true,"mcp_bin":"…","mcp_bin_exists":true}}],
             "setup_ok":true,"setup_reason":null},
   "hook": {"ok":true,"session_end":true,"session_start":false,"auto_consolidate":false,"matches_current":true},
   "schedule": {"ok":true,"supported":true,"installed":false,"loaded":false,"checked":false},

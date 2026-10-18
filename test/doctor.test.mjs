@@ -99,21 +99,43 @@ test('doctor：宿主配置已指向当前库时不再提 setup；冲突时报�
   try {
     const store = join(dir, 'store');
     const home = join(dir, 'home');
-    const server = { command: '/usr/bin/node', args: ['/tmp/tabellio-mcp', '--store', store, '--allow-write'] };
+    const mcpBin = join(dir, 'memory-mcp');
+    writeFileSync(mcpBin, '#!/bin/sh\n');
+    const server = { command: process.execPath, args: [mcpBin, '--store', store, '--allow-write'] };
     writeServerConfig(home, store, server);
 
-    const okReport = reportOf(dir, { command: '/usr/bin/node' });
+    const okReport = reportOf(dir, { command: process.execPath, mcpBin });
     assert.deepEqual(okReport.hosts.detected, ['claude']);
     assert.equal(okReport.hosts.items[0].action, 'unchanged');
     assert.equal(okReport.actions.some((a) => a.id === 'host:claude'), false);
 
-    writeServerConfig(home, store, { command: '/usr/bin/node', args: ['/tmp/other-mcp', '--store', '/tmp/other'] });
-    const conflict = reportOf(dir, { command: '/usr/bin/node', verify: true, run: () => { throw new Error('不应验证旧配置'); } });
+    writeServerConfig(home, store, { command: process.execPath, args: [join(dir, 'other-mcp'), '--store', '/tmp/other'] });
+    const conflict = reportOf(dir, { command: process.execPath, mcpBin, verify: true, run: () => { throw new Error('不应验证旧配置'); } });
     assert.equal(conflict.ok, false);
     assert.equal(conflict.hosts.verification, undefined, '配置不匹配时不应拿旧配置去验证');
     const action = conflict.actions.find((a) => a.id === 'host:claude');
     assert.equal(action?.severity, 'error');
     assert.match(action.command, /--force/);
+  } finally {
+    rm(dir);
+  }
+});
+
+
+test('doctor：配置指向的 MCP 入口不存在时报错，不把 unchanged 当健康', () => {
+  const dir = tempDir('memory-doctor-missing-bin-');
+  try {
+    const store = join(dir, 'store');
+    const home = join(dir, 'home');
+    const missing = join(dir, 'gone-mcp');
+    writeServerConfig(home, store, { command: process.execPath, args: [missing, '--store', store, '--allow-write'] });
+    const report = reportOf(dir, { command: process.execPath, mcpBin: missing });
+    assert.equal(report.hosts.items[0].action, 'unchanged');
+    assert.equal(report.hosts.items[0].checks.mcp_bin_exists, false);
+    assert.equal(report.ok, false);
+    const action = report.actions.find((a) => a.id === 'host:claude:mcp-bin');
+    assert.equal(action?.severity, 'error');
+    assert.match(action.detail, /gone-mcp/);
   } finally {
     rm(dir);
   }
@@ -153,7 +175,9 @@ test('doctor --verify：只在显式要求时调用宿主 CLI，并沿用 connec
   try {
     const store = join(dir, 'store');
     const home = join(dir, 'home');
-    writeServerConfig(home, store, { command: '/usr/bin/node', args: ['/tmp/tabellio-mcp', '--store', store, '--allow-write'] });
+    const mcpBin = join(dir, 'memory-mcp');
+    writeFileSync(mcpBin, '#!/bin/sh\n');
+    writeServerConfig(home, store, { command: process.execPath, args: [mcpBin, '--store', store, '--allow-write'] });
     let calls = 0;
     const run = (bin, args) => {
       calls += 1;
@@ -161,7 +185,7 @@ test('doctor --verify：只在显式要求时调用宿主 CLI，并沿用 connec
       assert.deepEqual(args, ['mcp', 'list']);
       return { status: 0, stdout: 'tabellio: /usr/bin/node /tmp/tabellio-mcp - ✓ Connected\n', stderr: '' };
     };
-    const report = reportOf(dir, { command: '/usr/bin/node', verify: true, env: { TABELLIO_CLAUDE_BIN: '/bin/sh' }, run });
+    const report = reportOf(dir, { command: process.execPath, mcpBin, verify: true, env: { TABELLIO_CLAUDE_BIN: '/bin/sh' }, run });
     assert.equal(calls, 1);
     assert.equal(report.hosts.verification.ok, true);
     assert.equal(report.hosts.verification.hosts[0].level, 'connected');
@@ -201,6 +225,7 @@ test('doctor CLI：解析失败算错误，退 1；建议里直接给 status 命
     assert.equal(r.code, 1, r.stderr);
     assert.equal(r.json.ok, false);
     assert.equal(r.json.store.parse_failures, 1);
+    assert.match(r.json.store.failures[0].path, /bad\.md$/);
     const action = r.json.actions.find((a) => a.id === 'store:parse-failures');
     assert.equal(action?.severity, 'error');
     assert.match(action.command, /tabellio status/);

@@ -11,6 +11,7 @@
  */
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { isAbsolute } from 'node:path';
 
 import { status } from './api.js';
 import { planHookInstall, claudeSettingsPath } from './hooks.js';
@@ -30,24 +31,60 @@ function attempt(fn) {
   }
 }
 
+function localChecks(host) {
+  const desired = host.desired;
+  if (!desired || typeof desired.command !== 'string' || !Array.isArray(desired.args)) return null;
+  const check = (p) => (typeof p === 'string' && isAbsolute(p) ? existsSync(p) : null);
+  return {
+    command: desired.command,
+    command_exists: check(desired.command),
+    mcp_bin: desired.args[0] ?? null,
+    mcp_bin_exists: check(desired.args[0]),
+  };
+}
+
 function hostAction(host) {
+  // 冲突/坏配置先说，避免被「入口不存在」盖掉真正要先处理的事。
+  if (host.action === 'conflict') {
+    return {
+      id: 'host:' + host.host,
+      severity: 'error',
+      title: host.label + ' 的 tabellio 配置指向别处',
+      detail: '已有不同的 command/args（可能是旧路径或别的库）。确认替换再写。',
+      command: 'tabellio setup --host ' + host.host + ' --write --force',
+    };
+  }
+  if (host.action === 'invalid') {
+    return {
+      id: 'host:' + host.host,
+      severity: 'error',
+      title: host.label + ' 的配置文件读不了',
+      detail: host.error?.message ?? 'JSON/TOML 解析失败；先手工修好，setup 不会写半份。',
+      command: null,
+    };
+  }
+
+  const checks = host.checks;
+  if (checks?.command_exists === false) {
+    return {
+      id: 'host:' + host.host + ':command',
+      severity: 'error',
+      title: host.label + ' 配置里的 Node 不存在',
+      detail: '指向 ' + checks.command + '；常见于 nvm 升级或换机器后。重写配置即可。',
+      command: 'tabellio setup --host ' + host.host + ' --write',
+    };
+  }
+  if (checks?.mcp_bin_exists === false) {
+    return {
+      id: 'host:' + host.host + ':mcp-bin',
+      severity: 'error',
+      title: host.label + ' 配置里的 MCP 入口不存在',
+      detail: '指向 ' + checks.mcp_bin + '；宿主会启动失败。重写配置即可。',
+      command: 'tabellio setup --host ' + host.host + ' --write',
+    };
+  }
+
   switch (host.action) {
-    case 'conflict':
-      return {
-        id: 'host:' + host.host,
-        severity: 'error',
-        title: host.label + ' 的 tabellio 配置指向别处',
-        detail: '已有不同的 command/args（可能是旧路径或别的库）。确认替换再写。',
-        command: 'tabellio setup --host ' + host.host + ' --write --force',
-      };
-    case 'invalid':
-      return {
-        id: 'host:' + host.host,
-        severity: 'error',
-        title: host.label + ' 的配置文件读不了',
-        detail: host.error?.message ?? 'JSON/TOML 解析失败；先手工修好，setup 不会写半份。',
-        command: null,
-      };
     case 'create':
     case 'append':
       return {
@@ -84,11 +121,12 @@ function buildActions({ storeExists, health, setup, hostItems, hook, schedule })
   }
 
   if (health.parseFailures > 0) {
+    const sample = (health.failures ?? []).slice(0, 3).map((f) => f.path);
     actions.push({
       id: 'store:parse-failures',
       severity: 'error',
       title: health.parseFailures + ' 个笔记文件解析失败，已退出检索面',
-      detail: 'fail-closed 是故意的；修好 frontmatter 或把坏文件移出 notes/ 后重试。',
+      detail: 'fail-closed 是故意的；修好 frontmatter 或把坏文件移出 notes/ 后重试。' + (sample.length ? ' 先看：' + sample.join('、') : ''),
       command: 'tabellio status --json',
     });
   }
@@ -251,6 +289,7 @@ export function buildDoctorReport({
     action: host.action,
     ok: host.ok,
     error: host.error ?? null,
+    checks: localChecks(host),
   }));
 
   // 只有配置已经指向当前 bin/store 时才验证：否则宿主 CLI 验的是旧配置，
@@ -320,6 +359,7 @@ export function buildDoctorReport({
     index_lines: health.indexLines,
     index_bytes: health.indexBytes,
     parse_failures: health.parseFailures,
+    failures: (health.failures ?? []).slice(0, 20),
     oversize_chars: health.oversizeChars,
     oversize_tokens: health.oversizeTokens,
     candidates: health.candidates,

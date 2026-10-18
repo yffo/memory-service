@@ -41,7 +41,7 @@ DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自�
 （只读，不写库）。钩子只支持 Claude Code、默认不装、不联网、最多 3 条/会话；
 它可能漏、也可能误，也不常驻后台、不会自动改笔记。macOS 上可以再装一个可选的 launchd 定时任务
 （`tabellio schedule install --write`），每 6 小时跑一次自动发现；它同样只产提案，执行仍要人批准。
-`tabellio doctor` 是只读体检：把库的解析失败/索引陈旧/待批准候选、宿主 MCP 配置是否指向当前库、Claude 钩子和定时任务的状态一次列出来，并给下一步命令；它不会替你修任何东西。
+`tabellio doctor` 是只读体检：把库的解析失败/索引陈旧/待批准候选、宿主 MCP 配置是否指向当前库、配置里的 Node/MCP 入口是否还存在、Claude 钩子和定时任务的状态一次列出来，并给下一步命令；它不会替你修任何东西。
 
 ## 它到底是什么
 

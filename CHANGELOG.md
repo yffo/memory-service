@@ -9,8 +9,8 @@
 
 - **修的问题**：安装链路已经有 `setup` / `setup --verify` / `hook` / `schedule`，但用户出问题时得分别跑 `status`、`setup`、`hook install`（dry-run）、`schedule status` 才能拼出全貌；「配置写对了」和「宿主真能连上」仍然容易混。没有体检入口，支持成本会落回到读文档。
 - **做法**：新增 `src/doctor.js` 与 `tabellio doctor [--verify] [--json]`。它只读地聚合：库（`status` 的解析失败/索引是否陈旧/超长/待批准候选与提案）、宿主（`planSetup` 的检测与冲突/损坏状态，不输出配置正文）、Claude 钩子（SessionEnd/SessionStart/`--auto-consolidate` 是否与当前 bin/store 匹配）、macOS 定时任务（`scheduleStatus` 的已安装/已加载）。`--verify` 才调用宿主 CLI，沿用 `hostverify` 的六级分级。
-- **行为**：建议分 `error` / `warn` / `info`；解析失败、宿主配置冲突/损坏、钩子或 plist 读不了退 1，待批准候选/索引陈旧/未装钩子只是提醒退 0。空库跑完不建目录；`--json` 的 `hosts.items` 不含 `preview`，不会把别的 MCP server 的 env/token 再打印出来。`doctor` 不自动修，`setup` / `hook install` / `schedule install` 仍要用户确认。
-- **边界**：不检查 Cursor 的 GUI 连接，不把配置文件存在说成已连接；不做网络探测、不启动 MCP server；`launchctl` 不可用时只说「无法确认」，不猜已加载。证据见 `test/doctor.test.mjs`（空库、候选、宿主冲突、钩子、`--verify`、CLI 退出码）。
+- **行为**：建议分 `error` / `warn` / `info`；解析失败、宿主配置冲突/损坏、配置里的 Node/MCP 入口绝对路径不存在、钩子或 plist 读不了退 1，待批准候选/索引陈旧/未装钩子只是提醒退 0。空库跑完不建目录；`--json` 的 `hosts.items` 不含 `preview`，不会把别的 MCP server 的 env/token 再打印出来。`doctor` 不自动修，`setup` / `hook install` / `schedule install` 仍要用户确认。
+- **边界**：不检查 Cursor 的 GUI 连接，不把配置文件存在说成已连接；不做网络探测、不启动 MCP server；`launchctl` 不可用时只说「无法确认」，不猜已加载。证据见 `test/doctor.test.mjs`（空库、候选、宿主冲突、失效入口、钩子、`--verify`、CLI 退出码）。
 
 ### 安全：`setup --json` 不再回显宿主配置全文
 
