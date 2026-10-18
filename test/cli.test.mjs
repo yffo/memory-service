@@ -409,7 +409,7 @@ test('memory-mcp：默认只读 —— 工具面没有 remember，硬调也拒',
       { store: dir },
     );
     const names = r.messages[0].result.tools.map((t) => t.name);
-    assert.deepEqual([...names].sort(), ['list', 'read', 'search', 'status'], `只读工具面：${names}`);
+    assert.deepEqual([...names].sort(), ['list', 'read', 'recall', 'search', 'status'], `只读工具面：${names}`);
     // 不在工具面 ≠ 不存在：直接点名调用必须被明确拒掉
     const second = r.messages[1];
     assert.ok(second.error || second.result?.isError, `只读模式下调 remember 必须失败：${r.out}`);

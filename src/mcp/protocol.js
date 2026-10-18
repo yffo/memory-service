@@ -24,6 +24,7 @@
  * `--allow-write` 才把它们挂上去——「工具在但写不进去」是最糟的失败形态，宁可不暴露。
  * `remember` 直接写正式记忆，仍过同一道闸门（`gate/`）；`capture` 只写候选，
  * 不重建主索引，等人在 CLI `inbox` 里批准后才可能进正式记忆。
+ * `recall` 是只读的预算感知读接口：一次返回正文，证据不足时拒答（不是错误）。
  */
 import { openStore, status, search, read, remember, addCandidate, recallQuery, INDEX_CAPS } from '../api.js';
 
@@ -44,12 +45,24 @@ export const RPC = Object.freeze({
   UNSUPPORTED_PROTOCOL_VERSION: -32002,
 });
 
-/** 工具面：`search` / `read` / `list` / `status`（+ 可选 `remember` / `capture`）。5±2 条（§6.3）。 */
-export const READ_TOOLS = Object.freeze(['search', 'read', 'list', 'status']);
+/** 工具面：`recall` / `search` / `read` / `list` / `status`（+ 可选 `remember` / `capture`）。5±2 条（§6.3）。 */
+export const READ_TOOLS = Object.freeze(['recall', 'search', 'read', 'list', 'status']);
 export const WRITE_TOOL = 'remember';
 /** 只写候选、不写正式记忆的写工具；和 `remember` 一起受 `--allow-write` 控制。 */
 export const CAPTURE_TOOL = 'capture';
 export const WRITE_TOOLS = Object.freeze([WRITE_TOOL, CAPTURE_TOOL]);
+
+const RECALL_INPUT = {
+  type: 'object',
+  properties: {
+    query: { type: 'string', description: '想回忆的问题或关键词' },
+    budget_tokens: { type: 'integer', minimum: 1, description: '本次返回正文的 token 预算（默认 500）' },
+    kinds: { type: 'array', items: { type: 'string', enum: ['core', 'semantic', 'episodic', 'procedural'] } },
+    trusts: { type: 'array', items: { type: 'string', enum: ['user_stated', 'system_derived', 'external'] } },
+  },
+  required: ['query'],
+  additionalProperties: false,
+};
 
 const SEARCH_INPUT = {
   type: 'object',
@@ -116,9 +129,20 @@ function tool(name, description, inputSchema, annotations) {
   return { name, description, inputSchema, annotations };
 }
 
-/** 工具清单。`allowWrite=false` 时只有只读四件套；为 true 才挂 `remember` / `capture`。 */
+/** 工具清单。`allowWrite=false` 时只有只读五件套；为 true 才挂 `remember` / `capture`。 */
 export function listTools({ allowWrite = false } = {}) {
   const tools = [
+    tool(
+      'recall',
+      '按查询召回可直接使用的记忆正文（受 token 预算约束），一次调用就能拿到内容而不是指针。证据不足时 refused=true 且 items 为空——这是正常返回，不是错误。需要逐条审计时再用 search + read。',
+      RECALL_INPUT,
+      {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    ),
     tool('search', '按词法检索记忆，返回命中的笔记 id/标题/分数与 token 估算。没有证据时 refused=true（正常返回，不是错误）。', SEARCH_INPUT, {
       readOnlyHint: true,
       destructiveHint: false,
@@ -192,6 +216,61 @@ function fail(text, structured) {
 export function callTool(name, args, { ctx, allowWrite = false, ledger = false } = {}) {
   const a = args ?? {};
   switch (name) {
+    case 'recall': {
+      if (typeof a.query !== 'string' || a.query.trim() === '') {
+        return fail('recall 需要非空的 query', { error: 'invalid_params' });
+      }
+      const r = recallQuery(ctx, a.query, {
+        budgetTokens: a.budget_tokens,
+        kinds: a.kinds,
+        trusts: a.trusts,
+        ledger,
+      });
+      const full = r.items ?? [];
+      const requested =
+        r.budget?.requested ??
+        (Number.isFinite(Number(a.budget_tokens)) && Number(a.budget_tokens) > 0 ? Number(a.budget_tokens) : 500);
+      const items = full.map((item) => ({
+        id: item.id,
+        title: item.title,
+        chars: [...String(item.content ?? '')].length,
+        kind: item.kind,
+        trust: item.trust,
+        confidence: item.confidence,
+        scope: item.scope,
+        valid_from: item.valid_from,
+        valid_to: item.valid_to,
+        via: item.via,
+        cost: item.cost,
+        score: item.score?.total ?? (typeof item.score === 'number' ? item.score : null),
+        relevance: item.relevance,
+        why: item.why,
+      }));
+      const structured = {
+        ok: true,
+        status: r.status,
+        refused: Boolean(r.refused),
+        reason: r.reason ?? null,
+        query: r.query,
+        tokens: r.tokens ?? 0,
+        budget: { requested, used: r.tokens ?? 0, max_notes: r.budget?.maxNotes ?? null },
+        items,
+        dropped_count: r.droppedCount ?? 0,
+        truncated: Boolean(r.truncated),
+      };
+      if (r.refused) {
+        return ok(
+          `没有足够证据（${r.reason ?? 'insufficient_evidence'}：${recallReasonText(r.reason)}）——拒答是正常结果，不是错误。这次没有注入任何记忆正文。`,
+          structured,
+        );
+      }
+      const header = `召回 ${full.length} 条，约 ${r.tokens ?? 0} / ${requested} token${r.truncated ? '（有截断）' : ''}。`;
+      const blocks = full.map((item) => {
+        const meta = `[${item.id}] ${item.kind ?? '?'} / ${item.trust ?? '?'} · ${item.cost ?? '?'} token`;
+        return `${meta}\n${item.content ?? ''}`;
+      });
+      return ok(`${header}\n\n${blocks.join('\n\n---\n\n')}`, structured);
+    }
     case 'search': {
       if (typeof a.query !== 'string' || a.query.trim() === '') {
         return fail('search 需要非空的 query', { error: 'invalid_params' });
@@ -320,6 +399,25 @@ export function callTool(name, args, { ctx, allowWrite = false, ledger = false }
   }
 }
 
+function recallReasonText(reason) {
+  switch (reason) {
+    case 'no_informative_term':
+      return '查询里没有可检索的实词';
+    case 'only_external_low_trust':
+      return '只有低信任的外部来源，不能当证据';
+    case 'cooccurrence_required_pair_missing':
+      return '候选各缺一部分，没有一条同时覆盖';
+    case 'top_score_below_threshold':
+      return '最高分低于阈值';
+    case 'all_hits_expired':
+      return '命中的记忆都已过期';
+    case 'insufficient_evidence':
+      return '证据不足';
+    default:
+      return '低于拒答阈值';
+  }
+}
+
 function captureReasonText(r) {
   switch (r.reason) {
     case 'empty':
@@ -356,8 +454,9 @@ export function initializeResult({ requested, allowWrite, instructions }) {
     serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
     instructions:
       instructions ??
-      `本地记忆库（pull 检索，默认${allowWrite ? '**可写**' : '只读'}）。用 search 找、read 取正文；` +
-        `没有证据时 search 会 refused=true，那是正常返回，不要重试同一个查询。` +
+      `本地记忆库（pull 检索，默认${allowWrite ? '**可写**' : '只读'}）。用 recall 直接取回预算内的记忆正文；` +
+        `要指针和逐条核对时用 search 找、read 取正文。没有证据时 recall / search 会 refused=true，` +
+        `那是正常返回，不要重试同一个查询。` +
         (allowWrite ? ` 觉得值得记但不确定该不该入库时，用 capture 提交候选；人会在 tabellio inbox 里批准。` : ''),
   };
 }

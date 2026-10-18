@@ -1,6 +1,6 @@
 # 架构设计：tabellio
 
-- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）。M2 已开工：**读取回执**（recall receipt + `explain` + `verify`）与**显式巩固**（`consolidate` 的 `invalidate` / `archive` + 巩固回执 + `undo`）已实现；三种内容类操作（`merge` / `summarize` / `promote`）的**提案层**（dry-run，不落盘）已实现；Claude Code `SessionEnd` 钩子（默认不装、只写候选）与 `SessionStart` 待批准提示（`--session-start`，只读候选数）已实现，执行层、自动衰减、写入回执、replay、后台自动巩固未实现。本文的目录、五原语 JSON、巩固 operation 表是**目标架构**，不是现状；已实现模块见 §2.2。
+- 状态：M1 已实现（检索 / 闸门 / MCP / 导入）。M2 已开工：**读取回执**（recall receipt + `explain` + `verify`）与**显式巩固**（`consolidate` 的 `invalidate` / `archive` + 巩固回执 + `undo`）已实现；三种内容类操作（`merge` / `summarize` / `promote`）的**提案层**（dry-run，不落盘）已实现；Claude Code `SessionEnd` 钩子（默认不装、只写候选）与 `SessionStart` 待批准提示（`--session-start`，只读候选数）已实现；MCP 读工具已补预算感知的 `recall`。执行层、自动衰减、写入回执、replay、后台自动巩固未实现。本文的目录、五原语 JSON、巩固 operation 表是**目标架构**，不是现状；已实现模块见 §2.2。
 - 上游文档：`00-brief.md`（立项书）· `01-landscape-systems.md`（竞品与接口层）· `02-evaluation.md`（评测方法）· `03-hosts-and-interfaces.md`（宿主与接口）· `04-cost-model.md`（成本）· `05-agi-direction.md`（长期方向）
 - 基线：`~/yffto/dsh-engramory-recall`（第一条线，必须赢过它，而不是取代它）
 - 读者：出资方（看 §1 §8 §10 就够）与实现者（§2–§7 §9）
@@ -589,7 +589,7 @@ M5 把缺的机制指名到一行（§5.5.2 第 3 点：**判定命中之后再�
 
 五个操作，收敛到 5±2 个（`03-hosts-and-interfaces.md` 的结论）。默认只读；写操作带行为提示（`read-only` / `idempotent` / `destructive`，照抄 Basic Memory 的渐进式工具发现做法）。下面保留关键字段与全部返回形态（成功 / 幂等 / 拒绝 / 跳过 / 错误），实现者按此签名建类型。
 
-> **现状**：`remember` / `recall` / `explain` / `verify` / `consolidate`（`invalidate` / `archive`）/ `undo` 已实现（CLI；MCP 工具面为 search/read/list/status，加 `--allow-write` 后多 `remember` 与 `capture`，后者只写候选）。`explain` / `verify` 目前只服务 **recall 回执**：`explain` 接受 `--query` 或 `--receipt`，`verify` 只接受 `--receipt`，不接受 `id` / `turn_id`，也不返回 `ledger_events`。`consolidate --merge/--summarize/--promote` 只有**提案层**：出草稿、不落盘、`--apply` 退 2。`forget`、写入回执、replay、内容类执行层尚未实现；下面的 JSON 是目标接口，`consolidate` 的实际返回以其后标注为准。
+> **现状**：`remember` / `recall` / `explain` / `verify` / `consolidate`（`invalidate` / `archive`）/ `undo` 已实现（CLI；MCP 工具面为 recall/search/read/list/status，加 `--allow-write` 后多 `remember` 与 `capture`，后者只写候选）。`recall` 在 MCP 侧是只读的预算感知读接口：文本结果给正文，`structuredContent` 只给元数据（不重复正文），拒答不是错误。`explain` / `verify` 目前只服务 **recall 回执**：`explain` 接受 `--query` 或 `--receipt`，`verify` 只接受 `--receipt`，不接受 `id` / `turn_id`，也不返回 `ledger_events`。`consolidate --merge/--summarize/--promote` 只有**提案层**：出草稿、不落盘、`--apply` 退 2。`forget`、写入回执、replay、内容类执行层尚未实现；下面的 JSON 是目标接口，`consolidate` 的实际返回以其后标注为准。
 
 ```js
 // ── remember：写入。热路径，零 LLM 调用。幂等（同 scope 同内容返回已有 id）

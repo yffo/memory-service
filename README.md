@@ -23,7 +23,7 @@ tabellio-mcp                             # 给宿主用的 MCP stdio 服务器
 
 零运行时依赖，Node ≥ 20.11，不需要 `npm install`。
 
-`tabellio-mcp` 默认只读；加 `--allow-write` 才挂两个写工具：`remember` 直接写正式记忆，`capture` 只写候选、由人在 CLI 批准。
+`tabellio-mcp` 默认只读，工具面是 `recall` / `search` / `read` / `list` / `status`；`recall` 一次返回预算内的记忆正文，`search` 只给指针。加 `--allow-write` 才挂两个写工具：`remember` 直接写正式记忆，`capture` 只写候选、由人在 CLI 批准。
 
 `setup` 只认 Claude Code / Cursor / Codex 三家，写前备份、默认只预览，已有的不同配置要显式 `--force`；
 `--verify` 会调用宿主自己的 CLI：Claude Code 报 `Connected` 才算连上；Codex 只接受配置、不做连接检查；

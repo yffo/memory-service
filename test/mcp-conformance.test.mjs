@@ -3,7 +3,7 @@
  *
  * 为什么要它：`docs/02-evaluation.md §4.6` 把「宿主看到的接口」当交付面之一，
  * 协议对不对不能靠读代码，得让官方客户端真连一次——initialize、tools/list、
- * 再逐个调 search / read / status / list，最后拿一个越界的 id 去读，必须被拒。
+ * 再逐个调 recall / search / read / status / list，最后拿一个越界的 id 去读，必须被拒。
  *
  * ── 依赖从哪来 ────────────────────────────────────────────────────
  * 本仓库**不装依赖**（离线裸跑），SDK 从宿主进程已有的 node_modules 里借：
@@ -128,10 +128,10 @@ test('MCP 一致性：initialize → tools/list → search/read/status/list → 
     assert.equal(typeof info.name, 'string');
     t.diagnostic(`serverInfo：${info.name} ${info.version ?? ''}`);
 
-    // ── 2. tools/list：默认只读，面是 search/read/list/status ──
+    // ── 2. tools/list：默认只读，面是 recall/search/read/list/status ──
     const listed = await client.listTools();
     const names = listed.tools.map((x) => x.name).sort();
-    assert.deepEqual(names, ['list', 'read', 'search', 'status']);
+    assert.deepEqual(names, ['list', 'read', 'recall', 'search', 'status']);
     for (const tool of listed.tools) {
       assert.equal(tool.inputSchema?.type, 'object', `${tool.name} 应该有 object 型 inputSchema`);
       assert.equal(tool.annotations?.readOnlyHint, true, `${tool.name} 应该声明 readOnlyHint`);
@@ -151,7 +151,21 @@ test('MCP 一致性：initialize → tools/list → search/read/status/list → 
     assert.equal(status.structuredContent?.notes, store.copied, 'status 报的笔记数应等于语料篇数');
     assert.equal(status.structuredContent?.parseFailures, 0, '语料库不该有解析失败');
 
-    // ── 4. search：命中语料里的一篇，且返回的是指针（id/score），不是整篇正文 ──
+    // ── 4. recall：一次拿到正文，且预算受限；这是 agent 真正用得上的读接口 ──
+    const recalled = await client.callTool({
+      name: 'recall',
+      arguments: { query: 'Orchid 的生产环境监听哪个端口？' },
+    });
+    assert.equal(recalled.isError, false);
+    assert.equal(recalled.structuredContent?.refused, false);
+    assert.ok(recalled.structuredContent?.items?.length > 0, '这道题应该能召回至少一条');
+    assert.ok(
+      recalled.structuredContent.items[0].content === undefined,
+      'structuredContent 不重复正文，正文只在给模型看的 content 里',
+    );
+    assert.match(recalled.content[0].text, /\[/, '文本里应带可追溯的笔记 id');
+
+    // ── 5. search：命中语料里的一篇，且返回的是指针（id/score），不是整篇正文 ──
     const found = await client.callTool({
       name: 'search',
       arguments: { query: 'Orchid 的生产环境监听哪个端口？' },
@@ -163,19 +177,19 @@ test('MCP 一致性：initialize → tools/list → search/read/status/list → 
     assert.equal(typeof hit.id, 'string');
     assert.ok(!('body' in hit), 'search 只给指针，正文要用 read 取');
 
-    // ── 5. read：用 search 给的 id 能读到完整正文 ──
+    // ── 6. read：用 search 给的 id 能读到完整正文 ──
     const full = await client.callTool({ name: 'read', arguments: { id: hit.id } });
     assert.equal(full.isError, false);
     assert.match(full.content[0].text, /^# /, 'read 返回标题 + 正文');
     assert.ok(full.structuredContent.body.length > 0);
 
-    // ── 6. list：分页指针可用 ──
+    // ── 7. list：分页指针可用 ──
     const page = await client.callTool({ name: 'list', arguments: { limit: 5 } });
     assert.equal(page.isError, false);
     assert.equal(page.structuredContent.items.length, 5);
     assert.equal(page.structuredContent.total, store.copied);
 
-    // ── 7. 越界读必须被拒：不许顺着 id 走出库房 ──
+    // ── 8. 越界读必须被拒：不许顺着 id 走出库房 ──
     for (const bad of ['../../../../etc/passwd', '/etc/passwd', 'notes/../index/MEMORY.md', 'nope-does-not-exist']) {
       const r = await client.callTool({ name: 'read', arguments: { id: bad } });
       assert.equal(r.isError, true, `越界/不存在的 id 必须被拒：${bad}`);
@@ -183,7 +197,7 @@ test('MCP 一致性：initialize → tools/list → search/read/status/list → 
       assert.ok(!/root:x?:/.test(text), `不许把 /etc/passwd 读出来：${bad}`);
     }
 
-    // ── 8. 参数错也不行：search 缺 query ──
+    // ── 9. 参数错也不行：search 缺 query ──
     const bad = await client.callTool({ name: 'search', arguments: {} }).catch((e) => ({ thrown: e }));
     if (bad.thrown) {
       assert.ok(bad.thrown, 'SDK 侧 schema 校验直接抛错也算拒绝');
@@ -211,7 +225,7 @@ test('MCP 一致性：--allow-write 才挂 remember / capture，capture 不直�
     const listed = await client.listTools();
     const names = listed.tools.map((x) => x.name).sort();
     t.diagnostic(`--allow-write 工具面：${names.join(', ')}`);
-    assert.deepEqual(names, ['capture', 'list', 'read', 'remember', 'search', 'status']);
+    assert.deepEqual(names, ['capture', 'list', 'read', 'recall', 'remember', 'search', 'status']);
     const write = listed.tools.find((x) => x.name === 'remember');
     assert.equal(write.annotations?.readOnlyHint, false);
     assert.equal(write.inputSchema?.type, 'object');

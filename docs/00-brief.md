@@ -1,6 +1,6 @@
 # 立项书：通用记忆服务
 
-- 状态：M1（垂直切片 + 判据 1 评测）已完成；M2 已开工（读取回执 + `explain` + `verify` + 显式巩固 `consolidate`（invalidate / archive）+ `undo` 已实现；合并/摘要/提升的**提案层**已实现、执行层未做；上手闭环 `setup`（三宿主 MCP 配置）+ `capture` / `inbox`（显式候选 → 人工批准）已实现；Claude Code `SessionEnd` 钩子已实现（默认不装、只抓用户显式线索、只写候选），`--session-start` 可在会话开始只读提示待批准候选数；自动抽取的其余部分、自动衰减与后台自动巩固未做）；M3 分发侧完成（npm 包 + MCP registry）；Claude Code 真连接、Codex 配置解析已用 `setup --verify` 实测，Cursor 无无头检查、仍需 GUI 确认，三宿主录屏/日志未齐
+- 状态：M1（垂直切片 + 判据 1 评测）已完成；M2 已开工（读取回执 + `explain` + `verify` + 显式巩固 `consolidate`（invalidate / archive）+ `undo` 已实现；合并/摘要/提升的**提案层**已实现、执行层未做；上手闭环 `setup`（三宿主 MCP 配置）+ `capture` / `inbox`（显式候选 → 人工批准）已实现；Claude Code `SessionEnd` 钩子已实现（默认不装、只抓用户显式线索、只写候选），`--session-start` 可在会话开始只读提示待批准候选数；MCP 读工具补了预算感知的 `recall`（一次返回正文，拒答是正常返回）；自动抽取的其余部分、自动衰减与后台自动巩固未做）；M3 分发侧完成（npm 包 + MCP registry）；Claude Code 真连接、Codex 配置解析已用 `setup --verify` 实测，Cursor 无无头检查、仍需 GUI 确认，三宿主录屏/日志未齐
 - 决策时间：2026-10-16
 - 决策人：作者（「另起一个项目，要做通用」）
 - 产品名：**tabellio**（2026-10-17 定名，见 `09-naming.md`）；仓库目录仍叫 `memory-service`
@@ -87,7 +87,7 @@
 | M3 多宿主与分发 | Claude Code / Cursor / DSH 三宿主实机验证；npm + MCP registry | 三个宿主各有一条端到端录屏/日志 |
 | M4 推广 | 黄页、插件市场、文档站、外部用户可自装 | 第一个外部用户装上并留下反馈 |
 
-**现状（2026-10-18）**：M0 / M1 完成；M2 已开工（读取回执 + `explain` + `verify` + 显式巩固 `consolidate`（invalidate / archive）+ `undo`；合并/摘要/提升的提案层已做，执行层未做；`setup` + `capture` / `inbox` 的上手闭环已做；Claude Code `SessionEnd` 钩子已做，但**默认不装、只抓显式线索、只写候选**；`--session-start` 可在会话开始只读提示待批准候选数；其余自动抽取、自动衰减、后台自动巩固未做）；M3 分发侧完成（npm + MCP registry）；Claude Code 已实测 `setup --verify` → `connected`，Codex 实测配置解析 → `configured`（不做连接检查），Cursor 标 `unverified`、仍需 GUI 确认，三宿主录屏/日志未齐；M4 未开始。
+**现状（2026-10-18）**：M0 / M1 完成；M2 已开工（读取回执 + `explain` + `verify` + 显式巩固 `consolidate`（invalidate / archive）+ `undo`；合并/摘要/提升的提案层已做，执行层未做；`setup` + `capture` / `inbox` 的上手闭环已做；Claude Code `SessionEnd` 钩子已做，但**默认不装、只抓显式线索、只写候选**；`--session-start` 可在会话开始只读提示待批准候选数；MCP 读工具补了预算感知的 `recall`；其余自动抽取、自动衰减、后台自动巩固未做）；M3 分发侧完成（npm + MCP registry）；Claude Code 已实测 `setup --verify` → `connected`，Codex 实测配置解析 → `configured`（不做连接检查），Cursor 标 `unverified`、仍需 GUI 确认，三宿主录屏/日志未齐；M4 未开始。
 
 ## 8. 风险与对策
 

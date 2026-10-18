@@ -656,12 +656,17 @@ $ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover"}' \
 for l in sys.stdin:
     d=json.loads(l)
     if d.get("id")==2: print([t["name"] for t in d["result"]["tools"]])'
-['search', 'read', 'list', 'status']
+['recall', 'search', 'read', 'list', 'status']
 ```
 
-- 工具面：`search` / `read` / `list` / `status`（默认只读，四个都带
+- 工具面：`recall` / `search` / `read` / `list` / `status`（默认只读，五个都带
   `annotations.readOnlyHint:true`）；加 `--allow-write` 才多出 `remember` 与 `capture`
-  （共 6 条，仍在「5±2」预算内）。
+  （共 7 条，仍在「5±2」预算内）。
+- `recall` 是给 agent 的主读接口：一次调用返回预算内的**记忆正文**（不是指针），
+  默认 500 token，可传 `budget_tokens`；证据不足时 `refused:true`、`items:[]`，
+  仍是正常返回，不是错误。文本结果里有每条的 id / kind / trust 和正文；
+  `structuredContent` 里只放元数据（不重复正文），避免宿主把同一段内容算两遍 token。
+  要审计分数或拿单篇完整正文，再用 `search` + `read`。
 - `remember` 直接写正式记忆；`capture` **只写候选**，不重建主索引、不进检索面，
   返回候选 id 并提示人运行 `tabellio inbox` 批准。Agent 可以主动丢候选，但批准权不交给它。
 - `search` 只回指针（不含 `body`），正文用 `read` 取 —— 与 CLI 同一套语义。

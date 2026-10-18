@@ -5,6 +5,12 @@
 
 ## M2（未发布）
 
+### MCP：`recall` 一次返回正文，预算感知且可拒答
+
+- **修的问题**：MCP 的读接口只有 `search` + `read`：`search` 只给指针，agent 得再逐条 `read` 才能拿到内容。很多宿主不会自动链式调用，模型看到一串 id 也不会自己补第二步，结果「有记忆」和「用上记忆」之间卡着两次工具调用。更根本的是，CLI 的核心读原语 `recall`（预算感知、拒答是一等结果）一直没暴露给宿主。
+- **做法**：`src/mcp/protocol.js` 新增只读工具 `recall`（`RECALL_INPUT`：`query` 必填，可选 `budget_tokens` / `kinds` / `trusts`），底层复用 `recallQuery`。默认预算 500 token；文本结果给每条 `id` / `kind` / `trust` 和正文，`structuredContent` 只给元数据（`items` 里**不重复正文**，避免宿主把同一段内容算两遍 token）。工具面变成默认 5 条只读（`recall` / `search` / `read` / `list` / `status`），`--allow-write` 后 7 条，仍在 5±2 内。
+- **行为**：命中时一次调用就能拿到预算内的正文；证据不足时 `refused:true`、`items:[]`，`isError:false`——拒答是正常判定，不是工具故障。空 / 缺 `query` 才是 `isError:true` 的 `invalid_params`。`recall` 始终只读，不受 `--allow-write` 影响；`initialize` / `server/discover` 的 instructions 也改成优先引导 `recall`，需要指针或逐条核对时再用 `search` + `read`。
+- **边界**：没有把 `explain` / `verify` / 回执 / `as_of` 暴露给 MCP；`structuredContent` 故意不含正文，程序化调用方需要正文时仍应 `read`；没有自动巩固、后台任务或从对话自动抽取。
 ### 钩子：Claude Code 会话开始时提示待批准候选（默认不装）
 
 - **修的问题**：SessionEnd 钩子会把候选放进 `notes/candidates/`，但用户不主动跑 `tabellio inbox` 就永远看不到；自动捕获与人工批准之间缺一个通知环，等于仍要用户自己想起去查。

@@ -276,7 +276,7 @@ tabellio hook uninstall --host claude --write
 
 1. **只做 MCP + CLI 两个对外面**：不为任何宿主写代码适配；宿主差异最大只能影响我们「文档里的配置片段」和「首屏体验」，不能影响数据模型。
 2. **协议栈必须 Dual-era**：`server/discover` 必做、legacy `initialize` 必留、2026-07-28 的新语义（`_meta` 版本协商 / `resultType` / MRTR）必须实现但不依赖客户端支持；Tools 是唯一所有宿主都认的特性，Resources/Prompts 只当加分项。
-3. **工具 5±2、默认只读、输出可截断**：`search` / `read` / `remember`(写) / `capture`(写候选) / `list` / `status`，写工具独立且带 scope 与来源字段；任何返回都可能被宿主截断（Claude Code 25k token / 50k 字符，Gemini CLI 10 分钟超时），所以必须分页、必须给出「还有多少」。
+3. **工具 5±2、默认只读、输出可截断**：`recall` / `search` / `read` / `remember`(写) / `capture`(写候选) / `list` / `status`，写工具独立且带 scope 与来源字段；`recall` 一次返回预算内的正文，`search` 只回指针。任何返回都可能被宿主截断（Claude Code 25k token / 50k 字符，Gemini CLI 10 分钟超时），所以必须分页、必须给出「还有多少」。
 4. **进程模型走混合，先把「写」的语义钉死**：常驻核心串行写 + stdio 薄壳；锁/并发/退化行为写进设计文档，不留给实现阶段临时决定。
 5. **分发按主线+增量**：主线 = npm 包（stdio MCP）+ MCP registry 的 `server.json` 元数据（含 `mcp-name` 归属注释）；增量 = Claude Code 插件市场（自建 git，无审核）、DSH 黄页 `awesome-dsh-plugin`（PR + 逐条源码核对）、VS Code 市场（需要原生二进制时才值得做）。密钥一律走环境变量引用，永远不进配置文件明文。
 

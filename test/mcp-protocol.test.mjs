@@ -135,7 +135,7 @@ test('requestedVersion：modern 走 _meta、legacy 走 params，都没有就 nul
   assert.equal(requestedVersion({}), null);
 });
 
-test('工具面：默认只读 4 条，--allow-write 才多出 remember / capture（6 条仍在 5±2 内）', () => {
+test('工具面：默认只读 5 条，--allow-write 才多出 remember / capture（7 条仍在 5±2 内）', () => {
   const readOnly = listTools().map((t) => t.name);
   assert.deepEqual(readOnly, [...READ_TOOLS]);
   assert.ok(!readOnly.includes(WRITE_TOOL), '默认只读：不该挂 remember');
@@ -188,6 +188,48 @@ test('search 工具：命中给指针（不给整篇正文）、没命中是正�
     assert.equal(miss.isError, false, '没证据是正常返回；报错会诱使调用方重试或编造');
     assert.equal(miss.structuredContent.refused, true);
     assert.equal(miss.structuredContent.hits.length, 0);
+  } finally {
+    dispose();
+  }
+});
+
+test('recall 工具：一次给正文、预算受限、没证据是拒答而不是错误', () => {
+  const { ctx, dispose } = makeHandler();
+  try {
+    const r = callTool('recall', { query: 'acme-widget 的构建命令' }, { ctx });
+    assert.equal(r.isError, false);
+    assert.equal(r.structuredContent.refused, false);
+    assert.ok(r.structuredContent.items.length >= 1);
+    const first = r.structuredContent.items[0];
+    assert.equal(typeof first.id, 'string');
+    assert.equal(typeof first.title, 'string');
+    assert.ok(first.chars > 0);
+    assert.equal(first.content, undefined, 'structuredContent 不重复塞正文，避免宿主把同一段内容算两遍 token');
+    assert.ok(r.content[0].text.includes('pnpm run build'), '正文应该出现在给模型看的文本里');
+    assert.ok(r.structuredContent.tokens <= r.structuredContent.budget.requested);
+
+    const tight = callTool('recall', { query: 'acme-widget 的构建命令', budget_tokens: 20 }, { ctx });
+    assert.equal(tight.isError, false);
+    assert.ok(tight.structuredContent.tokens <= 20, '预算必须真的被执行，不是装饰');
+
+    const miss = callTool('recall', { query: '量子色动力学里的胶子禁闭' }, { ctx });
+    assert.equal(miss.isError, false, '拒答是正常结果；报错会诱使调用方重试或编造');
+    assert.equal(miss.structuredContent.refused, true);
+    assert.equal(miss.structuredContent.items.length, 0);
+    assert.ok(miss.content[0].text.includes('拒答是正常结果'));
+  } finally {
+    dispose();
+  }
+});
+
+test('recall 缺 query / 空 query 走 isError 而不是抛异常', () => {
+  const { ctx, dispose } = makeHandler();
+  try {
+    for (const args of [{}, { query: '   ' }]) {
+      const r = callTool('recall', args, { ctx });
+      assert.equal(r.isError, true);
+      assert.equal(r.structuredContent.error, 'invalid_params');
+    }
   } finally {
     dispose();
   }
@@ -466,6 +508,7 @@ test('非对象消息 → -32600（null / 数组元素 / 字符串都不能让�
 test('instructions 里必须写清「没证据是正常返回」，否则宿主会教模型重试', () => {
   const ro = initializeResult({ requested: '2025-11-25', allowWrite: false });
   assert.match(ro.instructions, /refused|没有证据/);
+  assert.match(ro.instructions, /recall/);
   const rw = initializeResult({ requested: '2025-11-25', allowWrite: true });
   assert.match(rw.instructions, /可写/);
   assert.match(discoverResult({ allowWrite: false }).instructions, /只读/);
