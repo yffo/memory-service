@@ -14,6 +14,7 @@
  *    2 = 用法错误。脚本里可以只判 `$?`。
  */
 import { existsSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import {
@@ -41,6 +42,7 @@ import {
 } from '../src/api.js';
 import { readSourceIndex } from '../src/import/engramory.js';
 import { planSetup, applySetup } from '../src/setup.js';
+import { verifyHosts } from '../src/hostverify.js';
 import { finiteOr } from '../src/util/text.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -58,7 +60,7 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
                    [--kind k] [--trust t] [--scope s] [--tags a,b] [--id ULID]
   tabellio capture  --file <path.md|-> [--source REF] [--kind k] [--tags a,b] [--dry] [--json]
   tabellio inbox    [--accept <id[,id]>]... [--reject <id[,id]>]... [--dry] [--json]
-  tabellio setup    [--host claude,cursor,codex|all] [--write] [--force] [--read-only] [--json]
+  tabellio setup    [--host claude,cursor,codex|all] [--write] [--verify] [--force] [--read-only] [--json]
   tabellio import --from <旧 Engramory 库目录> [--dry] [--json]
   tabellio recall --query "<词>" [--receipt|--save-receipt] [--budget-tokens N] [--json]
   tabellio explain (--query "<词>" | --receipt <id|path>) [--json]
@@ -664,9 +666,10 @@ export async function main(argv, io = {}) {
           err.write('setup 的参数缺值：--host / --command / --mcp-bin\n');
           return 2;
         }
+        const home = args.home ? resolve(String(args.home)) : homedir();
         const plan = planSetup({
           hosts: args.host ?? 'all',
-          home: args.home ? resolve(String(args.home)) : undefined,
+          home,
           command: args.command ? String(args.command) : undefined,
           mcpBin: args['mcp-bin'] ? resolve(String(args['mcp-bin'])) : resolve(join(HERE, 'memory-mcp')),
           store: storePath,
@@ -674,13 +677,18 @@ export async function main(argv, io = {}) {
           force: Boolean(args.force),
         });
         if (!args.write) {
-          emit(plan, { json, human: renderSetup(plan) });
-          return plan.ok ? 0 : 1;
+          const verification = args.verify && plan.ok ? verifyHosts({ hosts: plan.hosts.map((h) => h.host), home }) : null;
+          const result = verification ? { ...plan, verification } : plan;
+          const human = renderSetup(plan) + (verification ? '\n\n' + renderVerification(verification) : '');
+          emit(result, { json, human });
+          return plan.ok && (!verification || verification.ok) ? 0 : 1;
         }
         const applied = applySetup(plan);
-        const result = { ...plan, dry_run: false, ...applied };
-        emit(result, { json, human: renderSetupApplied(plan, applied) });
-        return applied.ok ? 0 : 1;
+        const verification = args.verify && plan.ok && applied.ok ? verifyHosts({ hosts: plan.hosts.map((h) => h.host), home }) : null;
+        const result = { ...plan, dry_run: false, ...applied, ...(verification ? { verification } : {}) };
+        const human = renderSetupApplied(plan, applied) + (verification ? '\n\n' + renderVerification(verification) : '');
+        emit(result, { json, human });
+        return applied.ok && (!verification || verification.ok) ? 0 : 1;
       }
       case 'import': {
         const from = args.from ?? args._[1];
@@ -759,6 +767,24 @@ function renderReview(r) {
   for (const x of r.rejected) lines.push('  ✗ 拒绝 ' + x.id);
   for (const f of r.failed) lines.push('  ! ' + f.id + '：' + (f.reason ?? '失败') + (f.note_stored ? '（笔记已入库，但候选归档失败）' : ''));
   lines.push('批准 ' + r.accepted_count + ' / 拒绝 ' + r.rejected_count + ' / 失败 ' + r.failed_count);
+  return lines.join('\n');
+}
+
+function renderVerification(v) {
+  const mark = { connected: '✓', configured: '=', unverified: '?', unavailable: '-', failed: '!', missing: '!' };
+  const label = {
+    connected: '已连接',
+    configured: '配置已接受（未做连接检查）',
+    unverified: '未验证',
+    unavailable: '宿主 CLI 未找到',
+    failed: '验证失败',
+    missing: '配置未生效',
+  };
+  const lines = ['验证（宿主自己的视角）：'];
+  for (const h of v.hosts) {
+    lines.push('  ' + (mark[h.level] ?? '?') + ' ' + h.label + '：' + (label[h.level] ?? h.level) + (h.detail ? ' — ' + h.detail : ''));
+  }
+  if (!v.ok) lines.push('有宿主明确失败：配置已写，但宿主没连上。');
   return lines.join('\n');
 }
 

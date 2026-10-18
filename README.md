@@ -9,7 +9,7 @@
 
 ```bash
 npm i -g tabellio
-tabellio setup --write                   # 给已装的 Claude Code / Cursor / Codex 写 MCP 配置（默认 dry-run）
+tabellio setup --write --verify          # 写 MCP 配置，再用宿主自己的命令验证（默认 dry-run）
 tabellio status                          # 建库 + 看一眼
 tabellio recall --query "编辑器偏好"      # 按预算取回记忆
 printf '%s\n' '# 发布流程' '' '发版前跑 npm test 和 node bench/run-eval.mjs。' \
@@ -23,6 +23,8 @@ tabellio-mcp                             # 给宿主用的 MCP stdio 服务器
 `tabellio-mcp` 默认只读；加 `--allow-write` 才挂两个写工具：`remember` 直接写正式记忆，`capture` 只写候选、由人在 CLI 批准。
 
 `setup` 只认 Claude Code / Cursor / Codex 三家，写前备份、默认只预览，已有的不同配置要显式 `--force`；
+`--verify` 会调用宿主自己的 CLI：Claude Code 报 `Connected` 才算连上；Codex 只接受配置、不做连接检查；
+Cursor 没有无头检查，需要 GUI 确认。找不到宿主 CLI 不会误报成配置失败。
 DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自动记忆」的诚实版本：
 **当前不会从对话里自动抽取**，宿主或脚本调用 `capture` 把候选丢进来，人在 `inbox` 里批准，
 批准时才走与 `remember` 同一条写入闸门。自动生成候选、自动巩固和后台进程仍在路线图里，

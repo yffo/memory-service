@@ -448,6 +448,8 @@ replay、forget、写入回执、后台自动巩固、`diff.jsonl`。已实现�
 ```bash
 $ node bin/memory setup                          # 默认 dry-run：只打印会改哪些文件
 $ node bin/memory setup --write                  # 真写；写前备份
+$ node bin/memory setup --write --verify         # 写完用宿主自己的命令验证
+$ node bin/memory setup --verify                 # 只验证现状，不改配置
 $ node bin/memory setup --host cursor --read-only --write
 ```
 
@@ -464,9 +466,45 @@ $ node bin/memory setup --host cursor --read-only --write
 - **默认 dry-run**；`--write` 才落盘。JSON 原子写，TOML 只替换 `[mcp_servers.tabellio]` 及其子表，其他段和注释保留。
 - 写入前备份成 `<文件>.tabellio-backup-<紧凑 ISO 时间戳>`；已经是同一份配置则 `unchanged`，不重复备份。
 - 已有**不同**的 `tabellio` 配置：默认整单 `conflict`、一份都不写；`--force` 才覆盖。JSON/TOML 解析失败也是整单 `invalid_config`，不写半份。
-- 退出码：成功/已存在 0；冲突、无宿主、解析失败、写失败 1；参数缺值 2。
+- 退出码：成功/已存在 0；冲突、无宿主、解析失败、写失败、`--verify` 明确失败 1；参数缺值 2。
 
 `--json` 的计划里有 `{ok, reason, dry_run:true, hosts:[{host,label,path,kind,action,ok,exists,current,desired,read_only,would_write,backup,preview}], server, store, mcp_bin, command}`；`action` 是 `create|append|update|unchanged|conflict|invalid`。`--write` 后额外有 `{dry_run:false, applied:[{host,path,action,written,backup}], failed:[]}`。
+
+**`--verify`：让宿主自己回答「连上了吗」**
+
+配置写对不等于宿主连上。
+
+- Claude Code：跑 `claude mcp list`，只有宿主输出 `✓ Connected` 才是 `connected`；报 `Failed to connect` 是 `failed`。
+- Codex：跑 `codex mcp list`，看到 `tabellio ... enabled` 只算 `configured`——这条命令不 spawn server，不能冒充「已连接」。
+- Cursor：没有无头 MCP 健康检查，固定报 `unverified`，请到 Cursor 的 MCP 设置里确认。
+- 宿主 CLI 没装/不在 PATH：`unavailable`，**不算配置失败**，退出码仍是 0。
+- `failed` / `missing` 才让退出码变 1；`--verify` 失败**不会回滚**已经写入的配置。
+- 验证时用配置文件的临时副本（Claude Code 的 `mcp list` 会写备份），不碰用户的真实配置。
+
+JSON 里额外多出：
+
+```json
+{
+  "verification": {
+    "ok": true,
+    "checked": 1,
+    "hosts": [
+      {
+        "host": "claude",
+        "label": "Claude Code",
+        "config_path": "~/.claude.json",
+        "level": "connected",
+        "ok": true,
+        "detail": "claude mcp list：✓ Connected",
+        "binary": "/opt/homebrew/bin/claude",
+        "connection_checked": true
+      }
+    ]
+  }
+}
+```
+
+`level` 取值：`connected` / `configured` / `unverified` / `unavailable` / `failed` / `missing`。
 
 > DSH 的 `~/.dsh/cordis.patch.yml` 是 YAML loader patch，零依赖改写的风险高于收益，`setup` 不碰它；要接 DSH 请按 `docs/03` 手工加片段。
 

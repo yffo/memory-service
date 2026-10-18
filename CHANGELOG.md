@@ -5,6 +5,13 @@
 
 ## M2（未发布）
 
+### 宿主：`setup --verify` 用宿主自己的命令验证连接
+
+- **修的问题**：`setup` 只证明「配置文件写对了」，用户在 Claude Code / Codex 里看到的连接状态它不知道；把「写对」说成「连上」是假验证。
+- **做法**：新增 `src/hostverify.js` 与 `tabellio setup --verify`。验证不读 JSON 自证，而是调用宿主自己的 CLI：Claude Code 跑 `claude mcp list`，Codex 跑 `codex mcp list`，Cursor 没有无头命令。结果分级为 `connected` / `configured` / `unverified` / `unavailable` / `failed` / `missing`。`--verify` 可单独用，也可与 `--write` 连用；验证时用配置文件的临时副本，不碰真实配置。
+- **行为**：Claude Code 只有报 `✓ Connected` 才是 `connected`；Codex 报 `enabled` 只算 `configured`（`mcp list` 不 spawn server，不能冒充连接检查）；Cursor 固定 `unverified`；宿主 CLI 找不到是 `unavailable`，不算配置失败。只有 `failed` / `missing` 让退出码变 1，且失败不回滚已写配置。
+- **边界**：Cursor 仍需在 GUI 里确认；Codex 的 `configured` 不是「已连接」；`--verify` 不修配置，也不替代用户在宿主里实际发一次请求。真实宿主 E2E 在 `test/host-e2e.test.mjs`，默认跳过，`TABELLIO_HOST_E2E=1` 才跑。
+
 M2 的既定内容是巩固进程与生命周期。开工时先把 M1 留下的两个洞堵了 ——
 它们都属于「判据说达标了、但真实库上不成立」的那一类，不修掉的话 M2 的判据 3
 （不腐烂、不害人）是在坏地基上盖楼。

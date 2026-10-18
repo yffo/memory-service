@@ -145,7 +145,7 @@
 - `all` 只处理已安装的宿主（配置文件或父目录存在）；`--host` 显式点名可以创建新文件。一个都没检测到返回 `no_host_detected`。
 - 已有不同的 `tabellio` 配置：整单 `conflict`，不写任何一份；`--force` 才替换。JSON/TOML 解析失败：整单 `invalid_config`，不写半份。
 - **不做**：Cline / Zed / VS Code / Windsurf / Continue / Gemini 的自动写（格式分散、且当前无实机验证）；DSH 的 `~/.dsh/cordis.patch.yml` 是 YAML loader patch，零依赖做保真改写风险高，只给片段（§3.11）；Claude Code 项目级作用域、Cursor 项目级配置、Codex `--config` 覆盖也不写。
-- 边界：`setup` 只证明「配置写对了」，不证明宿主真的连上。三家宿主的实机 E2E 仍未做，见 `docs/00` 的 M3。
+- 边界：`setup` 默认只证明「配置写对了」；加 `--verify` 才让宿主自己回答。Claude Code 已实测 `✓ Connected`；Codex 的 `mcp list` 只证明配置被接受（`enabled`），不 spawn server，不算连接检查；Cursor 没有无头健康检查，只能标 `unverified`、需 GUI 确认。可复核的实现见 `test/hostverify.test.mjs`；真实宿主 E2E 在 `test/host-e2e.test.mjs`（默认跳过，`TABELLIO_HOST_E2E=1` 才跑）。
 
 ### 3.1 Claude Code（最完整，也最会在细节上咬人）
 

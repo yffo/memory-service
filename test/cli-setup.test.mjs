@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,11 +17,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
 const CLI = join(ROOT, 'bin', 'memory');
 
-function cli(args, { store, input } = {}) {
+function cli(args, { store, input, env } = {}) {
   const r = spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
     input,
-    env: { ...process.env, ...(store ? { MEMORY_STORE: store } : {}) },
+    env: { ...process.env, ...(store ? { MEMORY_STORE: store } : {}), ...(env ?? {}) },
   });
   let json = null;
   try {
@@ -87,6 +87,42 @@ test('setup --write：写前备份、保留其他 server、二次幂等', () => 
     assert.equal(backupFiles(home, 'claude').length, 1, '未变时不该再产生备份');
   } finally {
     rm(home);
+  }
+});
+
+
+test('setup --verify：宿主报 Connected 才退 0；报失败退 1 但配置已写', () => {
+  const okHome = homeDir('memory-setup-verify-ok-');
+  const badHome = homeDir('memory-setup-verify-bad-');
+  try {
+    const fake = join(okHome, 'fake-claude');
+    writeFileSync(fake, '#!/bin/sh\nprintf \'tabellio: /fake - ✓ Connected\\n\'\n', { mode: 0o755 });
+    chmodSync(fake, 0o755);
+    const ok = cli(['setup', '--home', okHome, '--host', 'claude', '--write', '--verify', '--json'], {
+      store: join(okHome, 'store'),
+      env: { TABELLIO_CLAUDE_BIN: fake },
+    });
+    assert.equal(ok.code, 0, ok.stderr);
+    assert.equal(ok.json.verification.ok, true);
+    assert.equal(ok.json.verification.hosts[0].level, 'connected');
+    assert.equal(ok.json.verification.hosts[0].connection_checked, true);
+    assert.equal(existsSync(configPath(okHome, 'claude')), true);
+
+    const badFake = join(badHome, 'fake-claude');
+    writeFileSync(badFake, '#!/bin/sh\nprintf \'tabellio: /fake - ✗ Failed to connect\\n\'\n', { mode: 0o755 });
+    chmodSync(badFake, 0o755);
+    const bad = cli(['setup', '--home', badHome, '--host', 'claude', '--write', '--verify', '--json'], {
+      store: join(badHome, 'store'),
+      env: { TABELLIO_CLAUDE_BIN: badFake },
+    });
+    assert.equal(bad.code, 1);
+    assert.equal(bad.json.ok, true, 'setup 本身写成功了');
+    assert.equal(bad.json.verification.ok, false);
+    assert.equal(bad.json.verification.hosts[0].level, 'failed');
+    assert.equal(existsSync(configPath(badHome, 'claude')), true, '验证失败不该回滚配置');
+  } finally {
+    rm(okHome);
+    rm(badHome);
   }
 });
 
