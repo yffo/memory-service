@@ -382,4 +382,4 @@ MCP/CLI 决定「能不能用」，生命周期适配决定「会不会被用上
 
 ---
 
-`~/yffto/memory-service/docs/03-hosts-and-interfaces.md` ｜ 行数：383 ｜ 推荐接口形态一句话：**一个 Dual-era 的 MCP 服务器（stdio 薄壳接所有宿主）+ 一个常驻本地核心（唯一写者，走 127.0.0.1 + bearer），工具面 5±2 个、默认只读、写入带 scope；宿主有生命周期钩子时再加一层薄适配器（契约见 §7）。**
+`~/yffto/tabellio/docs/03-hosts-and-interfaces.md` ｜ 行数：383 ｜ 推荐接口形态一句话：**一个 Dual-era 的 MCP 服务器（stdio 薄壳接所有宿主）+ 一个常驻本地核心（唯一写者，走 127.0.0.1 + bearer），工具面 5±2 个、默认只读、写入带 scope；宿主有生命周期钩子时再加一层薄适配器（契约见 §7）。**
