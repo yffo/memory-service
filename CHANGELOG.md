@@ -1,3 +1,9 @@
+## 0.1.11
+
+- **适配器契约变成可执行声明**：新增 `src/conformance.js`（契约名 `tabellio-adapter-contract`、版本 `0.1`、能力表），`tools/conformance.mjs --contract` 直接打印，`--json` 输出里带上契约；新增一条不变量「契约声明的能力计数与真实 MCP 工具面一致」，共 23 项。
+- 明确退出码约定：`0` 全过 / `1` 有失败 / `2` 用法错误（未知参数）。
+- 文档：`docs/12-conformance-and-tuning.md` 增加契约节，`docs/03-hosts-and-interfaces.md` §7.4 指向可执行声明。
+
 # 变更记录
 
 ## 0.1.10（2026-10-21）

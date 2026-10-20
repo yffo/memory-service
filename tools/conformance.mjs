@@ -5,10 +5,11 @@
  * 这是给「宿主适配器」用的契约检查：任何把 tabellio 接进 agent 的适配器（DSH 插件、Claude Code
  * hooks、MCP 客户端……）都应该通过同一组不变量。检查只碰临时库，不联网、不写真实库。
  *
- *   node tools/conformance.mjs            # 全部检查
- *   node tools/conformance.mjs --json     # 机器可读
+ *   node tools/conformance.mjs             # 全部检查
+ *   node tools/conformance.mjs --json      # 机器可读（含契约声明）
+ *   node tools/conformance.mjs --contract  # 只打印适配器契约（版本 + 能力表）
  *
- * 退出码：0 全过；1 有失败。
+ * 退出码：0 全过；1 有失败；2 用法错误（未知参数）。
  *
  * 覆盖的不变量：
  *   1. 空库可读、状态自洽
@@ -42,6 +43,8 @@ import {
   status,
   verifyRecallReceipt,
 } from '../src/api.js';
+import { contractView } from '../src/conformance.js';
+import { READ_TOOLS, SUPPORTED_PROTOCOL_VERSIONS, WRITE_TOOLS } from '../src/mcp/protocol.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -108,7 +111,23 @@ function runNode(args, { input = '', env = {} } = {}) {
 }
 
 async function main() {
-  const json = process.argv.includes('--json');
+  const argv = process.argv.slice(2);
+  const known = new Set(['--json', '--contract', '--help', '-h']);
+  const unknown = argv.filter((arg) => !known.has(arg));
+  if (unknown.length > 0) {
+    process.stderr.write('conformance: unknown argument ' + unknown.join(' ') + '\n');
+    process.exitCode = 2;
+    return;
+  }
+  if (argv.includes('--help') || argv.includes('-h')) {
+    process.stdout.write('usage: conformance [--json] [--contract]\n');
+    return;
+  }
+  if (argv.includes('--contract')) {
+    process.stdout.write(JSON.stringify(contractView(), null, 2) + '\n');
+    return;
+  }
+  const json = argv.includes('--json');
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'tabellio-conformance-'));
   const storePath = path.join(scratch, 'store');
   fs.mkdirSync(path.join(storePath, 'notes'), { recursive: true });
@@ -204,6 +223,14 @@ async function main() {
     if (receiptRun.receiptPath && fs.existsSync(receiptRun.receiptPath) && opened.ok) pass('recall receipt verifies offline');
     else fail('recall receipt verifies offline', JSON.stringify(opened).slice(0, 200));
 
+    // 9.5 契约声明与真实工具面一致
+    const contract = contractView();
+    const mcpSurface = contract.capabilities.mcp;
+    const sameCounts = mcpSurface.readTools === READ_TOOLS.length && mcpSurface.writeTools === WRITE_TOOLS.length;
+    const sameVersions = mcpSurface.protocolVersions.join(',') === SUPPORTED_PROTOCOL_VERSIONS.join(',');
+    if (sameCounts && sameVersions) pass('contract declaration matches the MCP tool surface');
+    else fail('contract declaration matches the MCP tool surface', JSON.stringify({ mcpSurface, read: READ_TOOLS.length, write: WRITE_TOOLS.length }));
+
     // 10. CLI 与 MCP 一致性
     const cli = await runNode([path.join(BIN, 'memory'), 'status', '--store', storePath, '--json']);
     let cliNotes = null;
@@ -247,7 +274,7 @@ async function main() {
 
   const failures = results.filter((result) => !result.ok);
   if (json) {
-    process.stdout.write(JSON.stringify({ ok: failures.length === 0, checks: results }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ ok: failures.length === 0, contract: contractView(), checks: results }, null, 2) + '\n');
   } else {
     for (const result of results) {
       process.stdout.write((result.ok ? 'PASS ' : 'FAIL ') + result.name + (result.ok ? '' : ' — ' + result.detail) + '\n');

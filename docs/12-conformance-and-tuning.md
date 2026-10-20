@@ -5,17 +5,31 @@
 - 一致性自检（conformance）：适配器必须满足的不变量，做成可执行的检查。
 - 评测门控调参（tuning）：阈值可以调，但只能在冻结题集上证明「不退化」之后调，且由人批准。
 
+## 0. 契约声明（adapter contract）
+
+`src/conformance.js` 是契约的唯一真相：契约名 `tabellio-adapter-contract`、版本 `0.1`、能力表
+（读路径 / 写路径 / 生命周期 / 巩固 / 反馈 / 衰减 / 语义注入方式 / MCP 工具面 / 协议版本）。
+
+```bash
+node tools/conformance.mjs --contract   # 只打印契约（版本 + 能力表），便于适配器自检
+```
+
+规则：能力表**只增不删**；删除能力或改变语义必须升 minor，并在 CHANGELOG 里写明。适配器可以
+引用这个版本号声明自己支持到哪一版，而不必靠文档描述猜。
+
 ## 1. 一致性自检
 
 ```bash
-node tools/conformance.mjs          # 22 项检查，临时库，不联网
-node tools/conformance.mjs --json   # 机器可读，CI 用
+node tools/conformance.mjs          # 23 项检查，临时库，不联网
+node tools/conformance.mjs --json   # 机器可读（含契约声明），CI 用
 ```
 
-检查只碰 `/tmp` 下的临时库，不读写真实记忆库。覆盖的九组不变量：
+退出码：`0` 全过、`1` 有失败、`2` 用法错误。检查只碰 `/tmp` 下的临时库，不读写真实记忆库。
+覆盖的不变量：
 
 | 组 | 不变量 |
 | --- | --- |
+| 契约 | 声明的能力计数与真实 MCP 工具面一致 |
 | 空库 | 空库可读、`status` 自洽 |
 | 写入闸 | 过短内容、真实凭据值被拒 |
 | 写入 | `remember` 后 `search` 与 `recall` 都能看到 |

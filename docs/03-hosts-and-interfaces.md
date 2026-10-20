@@ -362,6 +362,8 @@ tabellio hook uninstall --host claude --write
 5. **批准权在人**：适配器没有 accept 路径；批准只走 CLI `tabellio inbox`。
 6. **失败不伤回合**：库损坏/锁冲突时 warn 并继续。
 
+可执行声明：`node node_modules/tabellio/tools/conformance.mjs --contract` 输出 `tabellio-adapter-contract` 的版本与能力表（`src/conformance.js` 是唯一真相），`--json` 跑全部不变量；退出码 `0` 全过 / `1` 失败 / `2` 用法错误。契约版本当前 **0.1**：能力只增不删，改语义须升 minor 并写 CHANGELOG。
+
 ### 7.5 迁移边界（engramory → tabellio）
 
 用 `tabellio import --from ~/memory/engramory --dry` 实测（2026-10-19）：
