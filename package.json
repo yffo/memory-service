@@ -1,6 +1,6 @@
 {
   "name": "tabellio",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "显式记忆服务（CLI + MCP）：markdown 是唯一真相源，词法检索 + 预算感知选片，写入过闸门。零运行时依赖。",
   "type": "module",
   "private": false,
@@ -40,11 +40,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yffo/memory-service.git"
+    "url": "git+https://github.com/yffo/tabellio.git"
   },
-  "homepage": "https://github.com/yffo/memory-service#readme",
+  "homepage": "https://github.com/yffo/tabellio#readme",
   "bugs": {
-    "url": "https://github.com/yffo/memory-service/issues"
+    "url": "https://github.com/yffo/tabellio/issues"
   },
   "scripts": {
     "test": "node --test",

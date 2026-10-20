@@ -1,5 +1,10 @@
 # 变更记录
 
+## 0.1.10（2026-10-21）
+
+- GitHub 仓库由 `yffo/memory-service` 更名为 `yffo/tabellio`（GitHub 自动重定向旧地址）；`package.json` 的 `repository` / `homepage` / `bugs`、`server.json` 与 `docs/07-usage.md` 的仓库地址同步更新。
+- 仅元数据与文档，召回/写入行为无变化。
+
 ## 0.1.9（2026-10-21）
 
 把「适配器契约」和「阈值调参」做成可执行的两条命令，而不是只写在文档里。

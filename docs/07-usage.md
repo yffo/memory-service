@@ -8,7 +8,7 @@
 - 默认库路径：`$MEMORY_STORE` / `$TABELLIO_STORE`，否则 `~/memory/tabellio`（改名前的 `~/memory/memory-service` 若已存在则继续沿用，stderr 会提一句）。
 
 ```bash
-git clone <repo> memory-service && cd memory-service   # 仓库目录名，产品名是 tabellio
+git clone https://github.com/yffo/tabellio.git && cd tabellio   # 仓库名与 npm 包名都是 tabellio
 node bin/memory status                 # 建库 + 看一眼
 node --test 'test/**/*.test.mjs'       # 全绿才继续（521 条）
 ```
