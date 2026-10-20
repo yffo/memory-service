@@ -534,7 +534,7 @@ export async function semanticRecall(ctx, query, { embed, model = '', top = 8, m
 }
 
 /** 语义命中的合并是纯函数（不联网、不写盘），单独导出方便宿主与测试复用。 */
-export { mergeSemanticItems } from './core/semantic.js';
+export { mergeSemanticItems, rankSemantic } from './core/semantic.js';
 
 /**
  * `tabellio recall`（完整形状）。`§9` 的返回：`items` / `budget` / `why_not` / `nearest`。

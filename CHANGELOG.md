@@ -3,6 +3,11 @@
 只记**看得见的行为变化**与**改了的口径**，不记「测试通过数」这类会腐烂的状态
 （要读状态就去跑 `node --test` 与 `node bench/run-eval.mjs`）。
 
+## 0.1.8（2026-10-21）
+
+- 导出 `rankSemantic(index, queryVector, {top, minSimilarity})`：宿主若自己维护内存索引（如 DSH 插件），可与 `indexSemantic` 复用同一套余弦排序，不必在适配层复制实现。
+- 0.1.7 已含 `indexSemantic` / `semanticRecall` / `mergeSemanticItems`（见上一条）；本次只是补齐排序导出，行为不变。
+
 ## 0.1.7（2026-10-21）
 
 把语义召回收进核心：索引格式、可索引条件、相似度排序、与词面结果的合并都由核心提供；embedding 服务由宿主注入 `embed(texts) -> vectors`，核心不联网、不保存 endpoint/Key。

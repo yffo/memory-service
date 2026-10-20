@@ -17,7 +17,7 @@ DSH 插件里，于是：
 ## 接口
 
 ```js
-import { indexSemantic, semanticRecall, mergeSemanticItems } from 'tabellio';
+import { indexSemantic, semanticRecall, mergeSemanticItems, rankSemantic } from 'tabellio';
 
 // 1) 建/刷新索引：embed 是注入的
 await indexSemantic(ctx, { embed: async (texts) => texts.map(embedOne), model: 'qwen3-embedding-0.6b' });
