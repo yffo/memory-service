@@ -1,3 +1,8 @@
+## 0.1.12
+
+- **语义融合改为 RRF（默认）**：`mergeSemanticItems` 不再只把语义命中追加到词面结果之后，而是按 reciprocal rank fusion 合并两路名次（`rrfK` 默认 60，同分词面优先）。原因：词面命中一旦填满 `maxNotes`，追加的语义条目会被整段截掉；真库 30 题复核里，RRF 把核心默认阈值下的命中从 12/20 提到 18/20、插件的宽松档从 17/20 提到 19/20，负例注入数不变（该题集已参与过阈值讨论，数字只用于机制验证，不当独立估计）。需要旧行为时传 `fusion: 'append'`。
+- 文档：`docs/11-semantic-recall.md` 规则与「非目标」同步；`test/semantic.test.mjs` 增 RRF 置换用例。
+
 ## 0.1.11
 
 - **适配器契约变成可执行声明**：新增 `src/conformance.js`（契约名 `tabellio-adapter-contract`、版本 `0.1`、能力表），`tools/conformance.mjs --contract` 直接打印，`--json` 输出里带上契约；新增一条不变量「契约声明的能力计数与真实 MCP 工具面一致」，共 23 项。

@@ -80,10 +80,18 @@ export function rankSemantic(index, queryVector, { top = 8, minSimilarity = 0 } 
 }
 
 /**
- * 把语义命中并进 `recall()` 的结果：词面顺序不动，只追加没出现过的条目，
- * 并且再验一遍生命周期/信任（索引可能比库里状态旧）。`readNote(id)` 由调用方给。
+ * 把语义命中并进 `recall()` 的结果。
+ *
+ * 两种融合方式：
+ * - `rrf`（默认）：按 reciprocal rank fusion 合并词面与语义两路排序
+ *   （`1/(rrfK+lexRank) + 1/(rrfK+semRank)`），同分时词面优先。语义排得足够高的
+ *   条目可以挤掉词面靠后的弱命中——只追加的话，词面一旦填满预算，语义就永远进不来。
+ * - `append`：保留旧行为，词面顺序不动、只追加没出现过的条目。
+ *
+ * 无论哪种方式，合并前都会再验一遍生命周期/信任（索引可能比库里状态旧）。
+ * `readNote(id)` 由调用方给；`rrfK` 默认 60（与常见 RRF 实现一致）。
  */
-export function mergeSemanticItems(result, { hits = [], readNote, maxNotes = 6, allowedTrusts = null } = {}) {
+export function mergeSemanticItems(result, { hits = [], readNote, maxNotes = 6, allowedTrusts = null, fusion = 'rrf', rrfK = 60 } = {}) {
   const items = Array.isArray(result?.items) ? result.items : [];
   if (!Array.isArray(hits) || hits.length === 0 || typeof readNote !== 'function') return result;
   const known = new Set(items.map((item) => item.id));
@@ -115,7 +123,36 @@ export function mergeSemanticItems(result, { hits = [], readNote, maxNotes = 6, 
     if (added.length >= cap) break;
   }
   if (added.length === 0) return result;
-  const merged = [...items, ...added].slice(0, cap);
+
+  let merged = items;
+  if (fusion === 'append') {
+    merged = [...items, ...added].slice(0, cap);
+  } else {
+    const k = Math.max(1, Math.floor(rrfK) || 60);
+    const slots = new Map();
+    items.forEach((item, index) => {
+      slots.set(item.id, { item, lex: index + 1, sem: null });
+    });
+    // 语义命中按原始顺序给名次（rankSemantic 已按相似度降序）。
+    hits.forEach((hit, index) => {
+      const slot = slots.get(hit.id);
+      if (slot) slot.sem = index + 1;
+    });
+    added.forEach((item) => {
+      const index = hits.findIndex((hit) => hit.id === item.id);
+      const slot = slots.get(item.id) ?? { item, lex: null, sem: null };
+      slot.sem = index >= 0 ? index + 1 : Number.MAX_SAFE_INTEGER;
+      slots.set(item.id, slot);
+    });
+    merged = [...slots.values()]
+      .map((slot) => ({
+        slot,
+        score: (slot.lex ? 1 / (k + slot.lex) : 0) + (slot.sem ? 1 / (k + slot.sem) : 0),
+      }))
+      .sort((left, right) => right.score - left.score || (left.slot.lex ?? Infinity) - (right.slot.lex ?? Infinity))
+      .slice(0, cap)
+      .map((entry) => entry.slot.item);
+  }
   const chars = merged.reduce((sum, item) => sum + String(item.title ?? '').length + String(item.content ?? '').length, 0);
   return { ...result, refused: false, reason: null, items: merged, tokens: Math.round(chars / 4) };
 }

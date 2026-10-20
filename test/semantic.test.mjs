@@ -82,6 +82,36 @@ test('mergeSemanticItems appends unseen hits and re-checks lifecycle and trust',
   assert.equal(mergeSemanticItems(result, { hits: [], readNote: () => null }), result);
 });
 
+test('rrf fusion lets a strong semantic hit displace a weak lexical one', () => {
+  const result = {
+    items: [
+      { id: 'lex1', title: 'Lex 1', content: 'strong lexical' },
+      { id: 'lex2', title: 'Lex 2', content: 'medium lexical' },
+      { id: 'lex3', title: 'Lex 3', content: 'weak lexical' },
+    ],
+    refused: false,
+    reason: null,
+    tokens: 12,
+  };
+  const notes = {
+    sem1: { ok: true, title: 'Sem 1', body: 'semantic top', note: { status: 'active', trust: 'user_stated' } },
+  };
+  const merged = mergeSemanticItems(result, {
+    hits: [{ id: 'sem1', similarity: 0.9 }],
+    readNote: (id) => notes[id] ?? { ok: false },
+    maxNotes: 3,
+  });
+  assert.deepEqual(merged.items.map((item) => item.id), ['lex1', 'sem1', 'lex2']);
+  // append 模式保留旧行为，不置换。
+  const appended = mergeSemanticItems(result, {
+    hits: [{ id: 'sem1', similarity: 0.9 }],
+    readNote: (id) => notes[id] ?? { ok: false },
+    maxNotes: 3,
+    fusion: 'append',
+  });
+  assert.deepEqual(appended.items.map((item) => item.id), ['lex1', 'lex2', 'lex3']);
+});
+
 test('semantic index round-trips through the store and only embeds changed notes', async (t) => {
   const { dir, store } = await tempStore(t);
   const first = remember(store, { content: 'alpha 项目的发版流程走 tag 和 CI，不走手工上传。', title: '发版流程' });

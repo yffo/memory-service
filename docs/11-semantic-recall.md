@@ -45,7 +45,10 @@ const merged = mergeSemanticItems(result, {
 2. **索引是派生物**：`runs/semantic-index.json`，模型名写在文件里，换模型自动失效（读回空索引）；
    文件坏掉按空索引处理，下次重建。
 3. **增量**：按正文 sha1 比对，只对新增/变化的笔记调 `embed`；被删/不可召回的从索引移除。
-4. **只追加**：合并时保留词面顺序，语义只补词面没命中的条目，并按 `maxNotes` 截断。
+4. **融合而不是只追加（默认 RRF）**：按 reciprocal rank fusion
+   （`1/(rrfK+词面名次) + 1/(rrfK+语义名次)`，`rrfK` 默认 60）合并两路排序，同分时词面优先。
+   语义排得足够高的条目可以挤掉词面靠后的弱命中——只追加的话，词面一旦填满预算，语义永远进不来。
+   需要旧行为时传 `fusion: 'append'`（只追加、保留词面顺序）。
 5. **合并时再验一次生命周期与信任**：索引可能比库旧；archived / superseded / 过期 / 不在
    `allowedTrusts` 的命中直接丢弃。
 6. **失败不动词面**：embedding 服务不可达时，宿主 catch 后继续用词面结果（`indexSemantic` 会抛，
@@ -54,7 +57,7 @@ const merged = mergeSemanticItems(result, {
 ## 非目标
 
 - 不替你选模型、不自动扫描端口（那是宿主的产品决策）；
-- 不做混合打分（BM25 分与余弦分不同量纲，只做候选补全，不做加权融合）；
+- 不做加权分数融合（BM25 分与余弦分不同量纲）；RRF 只用名次，不用原始分数；
 - 不写回执、不改变 `recall()` 的拒答语义（合并后只是 `refused:false`）。
 
 ## 可验证性
