@@ -74,6 +74,9 @@ import {
 } from './store/proposals.js';
 import { buildContentReceipt, contentReceiptIntegrity, CONTENT_RECEIPT_SCHEMA } from './core/content-receipt.js';
 import { writeReceipt, readReceipt } from './store/receipt.js';
+import { appendFeedback, readFeedbackRows } from './store/feedback.js';
+import { FEEDBACK_SIGNALS, aggregateFeedback, feedbackWeight, feedbackWeights, rankItemsByScore } from './core/feedback.js';
+import { decayWeight, mergeWeights, normalizeDecay } from './core/decay.js';
 import { estimateTokens } from './core/tokenize.js';
 import { finiteOr, sha256 } from './util/text.js';
 import { remember as runRemember, candidateFromMarkdown, buildCandidate, contentFingerprint } from './gate/remember.js';
@@ -421,7 +424,68 @@ export function recallOptions(options = {}) {
     minScore: options.minScore,
     nowMs: options.nowMs ?? clockNow(),
     includeCore: options.includeCore !== false,
+    // 排序增强默认关闭：核心的默认召回仍是纯词面，宿主显式要求才叠加。
+    applyFeedback: options.applyFeedback === true,
+    decay: normalizeDecay(options.decay ?? options.decayDays),
   };
+}
+
+/**
+ * 排序增强：反馈权重 × 遗忘衰减。只在宿主显式开启时生效，且只在**已经通过
+ * 召回闸**的结果上调整顺序——它没有能力把一条笔记从拒绝里救回来。
+ */
+function applyRecallWeights(result, ctx, normalized) {
+  if (!result || result.refused || !Array.isArray(result.items) || result.items.length < 2) return result;
+  if (!normalized.applyFeedback && !normalized.decay) return result;
+  const feedback = new Map();
+  if (normalized.applyFeedback) {
+    const { weights } = feedbackWeights(readFeedbackRows(ctx.store), { now: normalized.nowMs });
+    for (const [id, weight] of weights) feedback.set(id, weight);
+  }
+  const decay = new Map();
+  if (normalized.decay) {
+    for (const item of result.items) {
+      decay.set(String(item.id), decayWeight(item, { ...normalized.decay, now: normalized.nowMs }));
+    }
+  }
+  const merged = mergeWeights(feedback, decay);
+  if (!merged.size) return result;
+  const ranked = rankItemsByScore(result.items, (item) => {
+    const base = Number(item?.score?.total ?? item?.relevance ?? 0);
+    return base * (merged.get(String(item?.id)) ?? 1);
+  });
+  return { ...result, items: ranked };
+}
+
+/**
+ * 记一条反馈/纠正。`noteIds` 与 `id` 二选一；信号必须在核心枚举里。
+ * 反馈只写 `runs/feedback.jsonl`，不改任何笔记。
+ */
+export function recordFeedback(ctx, { id, noteIds, signal, query = '', source = '' } = {}) {
+  const ids = Array.isArray(noteIds) && noteIds.length ? noteIds : id ? [id] : [];
+  if (!ids.length) return { ok: false, reason: 'missing_notes' };
+  if (!FEEDBACK_SIGNALS.includes(signal)) return { ok: false, reason: 'invalid_signal' };
+  return appendFeedback(ctx.store, { signal, noteIds: ids, query, source });
+}
+
+/** 读反馈事件（含两个历史插件文件的迁移兼容）。 */
+export function readFeedback(ctx, { max = 5000 } = {}) {
+  return readFeedbackRows(ctx.store, { max });
+}
+
+/** 近 N 天的反馈统计；供面板/工具做「这条记忆被用了几次、被纠正几次」。 */
+export function feedbackSummary(ctx, { days = 7, now = clockNow() } = {}) {
+  const rows = readFeedbackRows(ctx.store);
+  const since = now - Math.max(0, days) * 24 * 60 * 60 * 1000;
+  const inWindow = rows.filter((row) => (Number(row.at) || 0) >= since);
+  const counts = { useful: 0, wrong: 0, stale: 0, corrected: 0 };
+  for (const row of inWindow) counts[row.signal] += 1;
+  const aggregates = aggregateFeedback(inWindow, { days, now });
+  const notes = [...aggregates.entries()]
+    .map(([noteId, slot]) => ({ id: noteId, ...slot, weight: feedbackWeight(slot) }))
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 20);
+  return { ok: true, days, total: inWindow.length, counts, notes, file: '<store>/runs/feedback.jsonl' };
 }
 
 /**
@@ -430,7 +494,7 @@ export function recallOptions(options = {}) {
 export function recallQuery(ctx, query, options = {}) {
   const normalized = recallOptions(options);
   const scan = ctx.scan();
-  const result = recall({ entries: scan.notes, query, options: normalized });
+  const result = applyRecallWeights(recall({ entries: scan.notes, query, options: normalized }), ctx, normalized);
 
   // 回执是**可选**的：默认 recall 仍然只读、也不多生成对象。只有显式
   // --receipt / --save-receipt 时才 build；--save-receipt 才落 runs/。
