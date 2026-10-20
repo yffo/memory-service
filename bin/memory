@@ -25,6 +25,9 @@ import {
   remember,
   importFrom,
   recallQuery,
+  recordFeedback,
+  readFeedback,
+  feedbackSummary,
   verifyRecallReceipt,
   explainRecall,
   consolidate,
@@ -86,6 +89,9 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio schedule uninstall [--write] [--json]
   tabellio schedule status    [--json]                # 文件在不在、launchd 里有没有加载
   tabellio import --from <旧 Engramory 库目录> [--dry] [--json]
+  tabellio feedback record --id <note-id> --signal useful|wrong|stale|corrected [--query "<词>"] [--json]
+  tabellio feedback list [--limit N] [--json]
+  tabellio feedback summary [--days N] [--json]
   tabellio recall --query "<词>" [--receipt|--save-receipt] [--budget-tokens N] [--json]
   tabellio explain (--query "<词>" | --receipt <id|path>) [--json]
   tabellio verify --receipt <id|path> [--json]
@@ -438,7 +444,7 @@ export async function main(argv, io = {}) {
     out.write(`${VERSION}\n`);
     return 0;
   }
-  if (!['status', 'index', 'search', 'read', 'remember', 'capture', 'inbox', 'doctor', 'setup', 'hook', 'schedule', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths'].includes(command)) {
+  if (!['status', 'index', 'search', 'read', 'remember', 'capture', 'inbox', 'doctor', 'setup', 'hook', 'schedule', 'import', 'recall', 'explain', 'verify', 'consolidate', 'paths', 'feedback'].includes(command)) {
     err.write(`未知命令：${command}\n\n${USAGE}\n`);
     return 2;
   }
@@ -513,6 +519,42 @@ export async function main(argv, io = {}) {
         emit(r, { json, human: humanRecall(r) });
         // 拒答是正常回答，但 --save-receipt 落盘失败是实打实的失败，不能退 0。
         return r.refused || r.receiptError ? 1 : 0;
+      }
+      case 'feedback': {
+        const action = args._[1] ?? 'summary';
+        if (action === 'record') {
+          const ids = typeof args.ids === 'string' ? args.ids.split(',') : args.id ? [args.id] : [];
+          if (!ids.length) {
+            err.write('feedback record 需要 --id <note-id> 或 --ids a,b\n');
+            return 2;
+          }
+          const saved = recordFeedback(ctx, {
+            noteIds: ids,
+            signal: args.signal,
+            query: args.query,
+            source: 'cli:feedback',
+          });
+          emit(saved, {
+            json,
+            human: saved.ok ? `已记录反馈：${saved.signal} × ${saved.noteIds.length}` : `反馈未记录：${saved.reason}`,
+          });
+          return saved.ok ? 0 : 1;
+        }
+        if (action === 'list') {
+          const rows = readFeedback(ctx, { max: numArg(args.limit, 50) });
+          emit(rows, { json, human: rows.length ? rows.map((row) => `${row.at} ${row.signal} ${row.noteIds.join(',')}${row.query ? ' · ' + row.query : ''}`).join('\n') : '没有反馈记录' });
+          return 0;
+        }
+        if (action === 'summary') {
+          const summary = feedbackSummary(ctx, { days: numArg(args.days, 7) });
+          emit(summary, {
+            json,
+            human: `近 ${summary.days} 天：${summary.total} 条反馈（有用 ${summary.counts.useful} / 不对 ${summary.counts.wrong} / 过时 ${summary.counts.stale} / 纠正 ${summary.counts.corrected}）`,
+          });
+          return 0;
+        }
+        err.write('feedback 只有 record / list / summary 三个子命令\n');
+        return 2;
       }
       case 'explain': {
         const query = args.query ?? args.q ?? args._.slice(1).join(' ');
