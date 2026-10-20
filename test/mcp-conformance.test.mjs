@@ -97,7 +97,7 @@ async function connectClient(store) {
     args: [SERVER, '--store', store],
     stderr: 'pipe',
   });
-  const client = new Client({ name: 'memory-service-conformance', version: '0.0.0' }, { capabilities: {} });
+  const client = new Client({ name: 'tabellio-conformance', version: '0.0.0' }, { capabilities: {} });
   await client.connect(transport);
   return {
     client,
@@ -214,7 +214,7 @@ test('MCP 一致性：--allow-write 才挂 remember / capture，capture 不直�
   const store = makeTempStore();
   const { Client } = await import(sdk.clientEntry);
   const { StdioClientTransport } = await import(sdk.stdioEntry);
-  const client = new Client({ name: 'memory-service-conformance-write', version: '0.0.0' }, { capabilities: {} });
+  const client = new Client({ name: 'tabellio-conformance-write', version: '0.0.0' }, { capabilities: {} });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [SERVER, '--store', store.dir, '--allow-write'],

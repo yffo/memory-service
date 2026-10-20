@@ -52,7 +52,7 @@ adapters/   宿主接口壳                data/     真相源与派生索引
 > 下面是**目标目录**，不是当前仓库布局。当前是单包 `src/`：`src/core`、`src/store`、`src/gate`、`src/mcp`、`src/import`、`bin/memory`；`packages/core`、`adapters/`、`consolidate/`、`serve` 等尚未拆分/实现。`core` / `adapters` 是逻辑分层，不是物理包。
 
 ```
-memory-service/
+tabellio/
 ├─ packages/
 │  ├─ core/                 # 零依赖纯逻辑（npm: @yffto/memory-core）
 │  │  ├─ model/             # 记录类型、frontmatter 解析、schema 版本与迁移

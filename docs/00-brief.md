@@ -1,9 +1,9 @@
-# 立项书：通用记忆服务
+# 立项书：tabellio（通用记忆服务）
 
 - 状态：M1（垂直切片 + 判据 1 评测）已完成；M2 已开工（读取回执 + `explain` + `verify` + 显式巩固 `consolidate`（invalidate / archive）+ `undo` 已实现；合并/摘要/提升的**提案层与执行层**（默认 dry-run，`--apply` 写目标/关源，内容类回执 + `undo`）已实现；上手闭环 `setup`（三宿主 MCP 配置）+ `capture` / `inbox`（显式候选 → 人工批准）已实现；Claude Code `SessionEnd` 钩子已实现（默认不装、只抓用户显式线索、只写候选）；`consolidate --auto` 与钩子 `--auto-consolidate` 能自动发现近似重复、只产待批准提案，不直接改库；`--session-start` 可在会话开始只读提示候选数与提案数；MCP 读工具补了预算感知的 `recall`（一次返回正文，拒答是正常返回）；可选 macOS launchd 定时任务（`schedule`）只是定期触发发现、默认不装、只产提案；`doctor` 只读体检可看库/宿主/钩子/定时任务状态但不自动修复；自动抽取的其余部分、自动执行/自动批准、自动衰减与常驻后台巩固未做）；M3 分发侧完成（npm 包 + MCP registry）；Claude Code 真连接、Codex 配置解析已用 `setup --verify` 实测，Cursor 无无头检查、仍需 GUI 确认，三宿主录屏/日志未齐
 - 决策时间：2026-10-16
 - 决策人：作者（「另起一个项目，要做通用」）
-- 产品名：**tabellio**（2026-10-17 定名，见 `09-naming.md`）；仓库目录仍叫 `memory-service`
+- 产品名：**tabellio**（2026-10-17 定名，见 `09-naming.md`）；仓库与本地目录 2026-10-21 起统一为 `tabellio`（原名 `memory-service`）
 
 ## 1. 一句话目标
 
@@ -114,7 +114,7 @@
 
 因此本项目**不是**旧插件的替代品，而是第二条线：
 
-| | 第一条线：`dsh-engramory-recall` | 第二条线：tabellio（仓库目录 `memory-service`，本项目） |
+| | 第一条线：`dsh-engramory-recall` | 第二条线：tabellio（仓库 `tabellio`，本项目） |
 |---|---|---|
 | 定位 | DSH 原生插件，快、可深、有真实用户 | 通用记忆服务，跨宿主、可推广 |
 | 节奏 | 持续迭代，不冻结 | 调研 → 垂直切片 → 分发 |

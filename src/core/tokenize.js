@@ -95,8 +95,8 @@ export const normalizeForIndex = normalizeForSearch;
  * 切词。返回**词项数组（含重复）**——重复是有意义的：BM25 的记录内词频靠它算。
  *
  * 规则：
- *  - 拉丁/数字/下划线连续串各算一个词（下划线**不**拆：`memory_service` 是一个词，
-    与 `bm25.js` 的实测结论一致——拆开会让 `memory_service` 这个标识符再也搜不到）；
+ *  - 拉丁/数字/下划线连续串各算一个词（下划线**不**拆：`tabellio_store` 是一个词，
+    与 `bm25.js` 的实测结论一致——拆开会让 `tabellio_store` 这个标识符再也搜不到）；
  *  - CJK 连续串 → 相邻二字组；长度 1 的串 → 该单字；
  *  - 其它字符（标点、emoji）是分隔符。
  */
