@@ -24,6 +24,7 @@
 import { createHash } from 'node:crypto';
 import { MAX_NOTE_CHARS, MAX_NOTE_TOKENS, KINDS, TRUSTS } from '../store/note.js';
 import { estimateTokens } from '../core/tokenize.js';
+import { looksLikeCredential } from '../core/secrets.js';
 // 存储侧归一化直接取自 `util/`（最底层）：core 里那个归一化是**检索侧**的
 // （不去 BOM/CRLF），拿它来判断「这句话是不是闲聊」会在首字符是 BOM 时不匹配。
 import { normalizeText } from '../util/text.js';
@@ -172,6 +173,13 @@ export function evaluateWrite({ candidate, existing = [], limits = {}, options =
       allowed_kinds: ['semantic', 'procedural'],
     });
   }
+  // ── 2.5) 凭据值：不许把真实密码/令牌写进真相源（策略句放行，见 core/secrets.js）。
+  if (looksLikeCredential(body)) {
+    return deny('credential_detected', {
+      why: '内容是凭据值；请改成「凭据存在哪里」这类策略句，不要记录真实值',
+    });
+  }
+
   if (candidate.trust === 'external' && looksLikeInstruction(body)) {
     return deny('would_promote_external_to_instruction', {
       why: 'external 内容里含命令式语句，写入后会被当成对 agent 的指令',
