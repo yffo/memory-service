@@ -3,6 +3,17 @@
 只记**看得见的行为变化**与**改了的口径**，不记「测试通过数」这类会腐烂的状态
 （要读状态就去跑 `node --test` 与 `node bench/run-eval.mjs`）。
 
+## 0.1.7（2026-10-21）
+
+把语义召回收进核心：索引格式、可索引条件、相似度排序、与词面结果的合并都由核心提供；embedding 服务由宿主注入 `embed(texts) -> vectors`，核心不联网、不保存 endpoint/Key。
+
+- 新增 `indexSemantic(ctx, {embed, model, batch, maxChars, onProgress})`：增量建/刷新 `runs/semantic-index.json`，只对新增或正文变化的笔记调用 `embed`；返回 `{ok,size,changed,removed,model,index}`。
+- 新增 `semanticRecall(ctx, query, {embed, model, top, minSimilarity})`：读索引、embed 查询、余弦 top-k，返回 `{ok,hits,size}`。
+- 新增 `mergeSemanticItems(result, {hits, readNote, maxNotes, allowedTrusts})`：纯函数；保留词面顺序、只追加未命中的条目，并在合并时再验 archived/draft/superseded/valid_to 与 trust。
+- 新增 `src/core/semantic.js`（`cosine` / `planSemanticIndex` / `rankSemantic` / `mergeSemanticItems` / `indexableEntry`）与 `src/store/semantic-index.js`（模型隔离、坏文件降级为空索引）；文档 `docs/11-semantic-recall.md`。
+- 行为不变：`recallQuery` 不自动使用语义；宿主显式调用并在失败时回退词面结果。
+- 测试：`test/semantic.test.mjs` 4 条（增量计划、生命周期排除、排序阈值、合并过滤、落盘与模型失效、假 embedder round-trip）。
+
 ## 0.1.6（2026-10-21）
 
 本次把「用错了会改」和「久了会淡」收进核心：反馈事件与遗忘衰减是**排序增强**，默认不改变任何召回结果，宿主显式开启才生效。核心只提供事件、聚合与纯函数权重，不判定归因、不删除笔记。

@@ -53,6 +53,8 @@ import {
 } from './store/note.js';
 import { ulid } from './util/ulid.js';
 import { recall, searchHits, DEFAULT_THRESHOLDS, DEFAULT_TOKENS } from './core/recall.js';
+import { planSemanticIndex, rankSemantic } from './core/semantic.js';
+import { loadSemanticIndex, saveSemanticIndex } from './store/semantic-index.js';
 import { buildRecallReceipt, explainReceipt, verifyReceipt, canonicalJson } from './core/receipt.js';
 import {
   planConsolidation,
@@ -487,6 +489,52 @@ export function feedbackSummary(ctx, { days = 7, now = clockNow() } = {}) {
     .slice(0, 20);
   return { ok: true, days, total: inWindow.length, counts, notes, file: '<store>/runs/feedback.jsonl' };
 }
+
+/**
+ * 建/增量刷新语义索引。`embed(texts)` 由调用方注入：核心不知道 embedding
+ * 服务是什么（本地 llama-swap、OpenAI 兼容网关都行），只知道「文本 → 向量」。
+ * 一个向量都不用算时（全命中旧索引）不写盘，保持只读。
+ */
+export async function indexSemantic(ctx, { embed, model = '', batch = 8, maxChars, onProgress } = {}) {
+  if (typeof embed !== 'function') throw new TypeError('indexSemantic needs an embed(texts) function');
+  const size = Math.max(1, Math.floor(batch) || 8);
+  const previous = loadSemanticIndex(ctx.store, model);
+  const scan = ctx.scan();
+  const plan = planSemanticIndex(scan.notes, previous, { maxChars });
+  const index = new Map(plan.kept);
+  for (let offset = 0; offset < plan.changed.length; offset += size) {
+    const chunk = plan.changed.slice(offset, offset + size);
+    const vectors = await embed(chunk.map((entry) => entry.text));
+    if (!Array.isArray(vectors) || vectors.length !== chunk.length) {
+      throw new Error('embed() returned ' + (Array.isArray(vectors) ? vectors.length : 'no') + ' vectors for ' + chunk.length + ' texts');
+    }
+    chunk.forEach((entry, position) => {
+      const vector = vectors[position];
+      if (!Array.isArray(vector) || vector.length === 0) throw new Error('embed() returned an empty vector');
+      index.set(entry.id, { hash: entry.hash, vector });
+    });
+    onProgress?.({ done: Math.min(plan.changed.length, offset + size), total: plan.changed.length });
+  }
+  const dirty = plan.changed.length > 0 || plan.removed.length > 0;
+  const saved = dirty ? saveSemanticIndex(ctx.store, model, index) : true;
+  return { ok: saved, size: index.size, changed: plan.changed.length, removed: plan.removed.length, model, index };
+}
+
+/**
+ * 语义召回：读索引 → embedding 查询 → 余弦 top-k。
+ * 返回 `{ok, hits, size}`；索引为空时 `hits` 为空，调用方直接沿用词面结果。
+ */
+export async function semanticRecall(ctx, query, { embed, model = '', top = 8, minSimilarity = 0 } = {}) {
+  if (typeof embed !== 'function') throw new TypeError('semanticRecall needs an embed(texts) function');
+  const index = loadSemanticIndex(ctx.store, model);
+  if (index.size === 0) return { ok: true, hits: [], size: 0 };
+  const vectors = await embed([String(query ?? '')]);
+  if (!Array.isArray(vectors) || !Array.isArray(vectors[0])) throw new Error('embed() returned no query vector');
+  return { ok: true, hits: rankSemantic(index, vectors[0], { top, minSimilarity }), size: index.size };
+}
+
+/** 语义命中的合并是纯函数（不联网、不写盘），单独导出方便宿主与测试复用。 */
+export { mergeSemanticItems } from './core/semantic.js';
 
 /**
  * `tabellio recall`（完整形状）。`§9` 的返回：`items` / `budget` / `why_not` / `nearest`。

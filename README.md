@@ -86,7 +86,7 @@ DSH 的 YAML loader patch 还不敢让程序改。`capture` / `inbox` 是「自�
 | [docs/08-eval-runbook.md](docs/08-eval-runbook.md) | 评测跑法与判据 | 已完成 |
 | [docs/09-naming.md](docs/09-naming.md) | 命名调研（为什么叫 tabellio） | 已完成 |
 
-> 状态口径（2026-10-19）：**M1**（CLI + MCP + 检索闸门 + 导入 + 判据 1 评测）已完成；**M2** 已开工（读取回执 / `explain` / `verify` / 显式巩固 `consolidate`（invalidate / archive）/ `undo` 已实现；合并、摘要、提升的**提案层与执行层**（`--apply` + 内容类回执 + `undo`）已实现；`setup` + `capture` / `inbox` 上手闭环已实现；Claude Code SessionEnd 钩子已实现、默认不装、只生成候选；`--session-start` 可在会话开始提示待批准候选（只读）；自动发现（`consolidate --auto` / 钩子）只产合并提案、仍要 `inbox` 批准；macOS launchd 定时任务（`schedule`）只是定期触发发现、默认不装、只产提案；`doctor` 提供只读体检、不自动修复；反馈排序与遗忘衰减（`recordFeedback` / `applyFeedback` / `decay`，默认关闭、只影响排序）已进核心；自动执行、自动衰减开关、写入回执与常驻后台巩固未做）；**M3** 分发侧完成（npm 包 + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐。调研文档截至 2026-10；2026 H2 的模型原生记忆与托管服务尚未纳入。
+> 状态口径（2026-10-19）：**M1**（CLI + MCP + 检索闸门 + 导入 + 判据 1 评测）已完成；**M2** 已开工（读取回执 / `explain` / `verify` / 显式巩固 `consolidate`（invalidate / archive）/ `undo` 已实现；合并、摘要、提升的**提案层与执行层**（`--apply` + 内容类回执 + `undo`）已实现；`setup` + `capture` / `inbox` 上手闭环已实现；Claude Code SessionEnd 钩子已实现、默认不装、只生成候选；`--session-start` 可在会话开始提示待批准候选（只读）；自动发现（`consolidate --auto` / 钩子）只产合并提案、仍要 `inbox` 批准；macOS launchd 定时任务（`schedule`）只是定期触发发现、默认不装、只产提案；`doctor` 提供只读体检、不自动修复；反馈排序与遗忘衰减（`recordFeedback` / `applyFeedback` / `decay`，默认关闭、只影响排序）已进核心；语义召回的核心部分（`indexSemantic` / `semanticRecall` / `mergeSemanticItems`，embedding 由宿主注入）已进核心；自动执行、自动衰减开关、写入回执与常驻后台巩固未做）；**M3** 分发侧完成（npm 包 + MCP registry），Claude Code 已实测 `connected`、Codex 只到 `configured`、Cursor 仍 `unverified`，三宿主录屏/日志未齐。调研文档截至 2026-10；2026 H2 的模型原生记忆与托管服务尚未纳入。
 
 ## 纪律（一开始就定下来，免得重蹈覆辙）
 
