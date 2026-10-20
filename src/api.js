@@ -461,11 +461,11 @@ function applyRecallWeights(result, ctx, normalized) {
  * 记一条反馈/纠正。`noteIds` 与 `id` 二选一；信号必须在核心枚举里。
  * 反馈只写 `runs/feedback.jsonl`，不改任何笔记。
  */
-export function recordFeedback(ctx, { id, noteIds, signal, query = '', source = '' } = {}) {
+export function recordFeedback(ctx, { id, noteIds, signal, query = '', source = '', at } = {}) {
   const ids = Array.isArray(noteIds) && noteIds.length ? noteIds : id ? [id] : [];
   if (!ids.length) return { ok: false, reason: 'missing_notes' };
   if (!FEEDBACK_SIGNALS.includes(signal)) return { ok: false, reason: 'invalid_signal' };
-  return appendFeedback(ctx.store, { signal, noteIds: ids, query, source });
+  return appendFeedback(ctx.store, { signal, noteIds: ids, query, source, at });
 }
 
 /** 读反馈事件（含两个历史插件文件的迁移兼容）。 */
