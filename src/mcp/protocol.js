@@ -60,6 +60,8 @@ const RECALL_INPUT = {
     budget_tokens: { type: 'integer', minimum: 1, description: '本次返回正文的 token 预算（默认 500）' },
     kinds: { type: 'array', items: { type: 'string', enum: ['core', 'semantic', 'episodic', 'procedural'] } },
     trusts: { type: 'array', items: { type: 'string', enum: ['user_stated', 'system_derived', 'external'] } },
+    apply_feedback: { type: 'boolean', description: '按历史反馈/纠正调整顺序（只影响顺序，不增删）' },
+    decay_days: { type: 'integer', minimum: 1, maximum: 3650, description: '遗忘衰减半衰期（天）；不传则关闭' },
   },
   required: ['query'],
   additionalProperties: false,
@@ -225,6 +227,8 @@ export function callTool(name, args, { ctx, allowWrite = false, ledger = false }
         budgetTokens: a.budget_tokens,
         kinds: a.kinds,
         trusts: a.trusts,
+        applyFeedback: a.apply_feedback === true,
+        decay: a.decay_days ? { halfLifeDays: a.decay_days } : null,
         ledger,
       });
       const full = r.items ?? [];
