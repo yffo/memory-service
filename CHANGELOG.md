@@ -3,6 +3,24 @@
 只记**看得见的行为变化**与**改了的口径**，不记「测试通过数」这类会腐烂的状态
 （要读状态就去跑 `node --test` 与 `node bench/run-eval.mjs`）。
 
+## 0.1.6（2026-10-21）
+
+本次把「用错了会改」和「久了会淡」收进核心：反馈事件与遗忘衰减是**排序增强**，默认不改变任何召回结果，宿主显式开启才生效。核心只提供事件、聚合与纯函数权重，不判定归因、不删除笔记。
+
+### 反馈排序：`recordFeedback` / `applyFeedback`
+
+- **修的问题**：召回的笔记被用户明确纠正后，下一次仍然按原顺序出现；插件里各自记的反馈随宿主更换而丢失。旧插件的 `panel-feedback.jsonl` / `outcome.jsonl` 也只有那个插件读得到。
+- **做法**：新增 `<store>/runs/feedback.jsonl`（`signal` ∈ `useful`/`wrong`/`stale`/`corrected`，1–6 个 `noteIds`，可带 `query`/`source`/`at`），`recordFeedback` 写入、`readFeedback` 读取（自动合并两个旧插件文件，去重排序）、`feedbackSummary` 给窗口统计。`recallQuery` 新增 `applyFeedback: true` 时按 `1 + 0.03*min(useful,3) - 0.12*min(wrong+stale,4) - 0.08*min(corrected,3)` 重排。
+- **行为**：只影响顺序——不增、不删、不越过 `minRelevance`/`minCoverage`/`minScore` 与拒答；拒绝的结果不会被反馈救回来。CLI 新增 `tabellio feedback record|list|summary`；MCP `recall` 新增 `apply_feedback` 输入（工具面仍是只读 5 / 可写 7）。
+- **边界**：核心不猜测「这句话是不是在纠错」，归因由宿主完成；90 天窗口外的反馈不再压排序。
+
+### 遗忘衰减：`decay`
+
+- **修的问题**：一条三年前的项目笔记和上周的规则按同一把尺子排序，旧信息沉不下去；但直接删或归档又不可逆。
+- **做法**：`recallQuery` 新增 `decay: { halfLifeDays, floor }`（也接受 `decayDays`），按 `clamp(0.5 ** (ageDays / halfLife), floor, 1)` 乘进排序分；`valid_from` 缺失时用创建时间，半衰期默认 180 天、floor 默认 0.6。`trust: user_stated`、`evergreen: true` 或 `tags` 含 `evergreen` 的笔记不衰减。
+- **行为**：只压排序，不归档、不删除；默认关闭，可单独关闭反馈或衰减。
+- **边界**：不做「自动衰减开关」「自动遗忘」；真要下线一条记忆仍走 `consolidate --archive` 或宿主动作。设计说明见 `docs/10-feedback-and-decay.md`。
+
 ## 0.1.5（2026-10-19）
 
 本次发布把只读体检 `doctor` 与 `setup --json` 泄露修复发出去：前者让用户一条命令看明白「哪一环没接上」，后者避免把宿主配置里其他 MCP server 的 env/token 打到 stdout。
