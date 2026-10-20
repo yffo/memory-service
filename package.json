@@ -1,6 +1,6 @@
 {
   "name": "tabellio",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "显式记忆服务（CLI + MCP）：markdown 是唯一真相源，词法检索 + 预算感知选片，写入过闸门。零运行时依赖。",
   "type": "module",
   "private": false,
@@ -33,6 +33,7 @@
   "files": [
     "bin/",
     "src/",
+    "tools/",
     "docs/07-usage.md",
     "README.md",
     "LICENSE"
@@ -49,7 +50,9 @@
     "test": "node --test",
     "test:one": "node --test --test-name-pattern",
     "status": "node bin/memory status",
-    "mcp": "node bin/memory-mcp"
+    "mcp": "node bin/memory-mcp",
+    "check:conformance": "node tools/conformance.mjs",
+    "tune:recall": "node tools/tune-recall.mjs"
   },
   "dependencies": {},
   "devDependencies": {},

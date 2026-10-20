@@ -1,5 +1,15 @@
 # 变更记录
 
+## 0.1.9（2026-10-21）
+
+把「适配器契约」和「阈值调参」做成可执行的两条命令，而不是只写在文档里。
+
+- 新增 `tools/conformance.mjs`：22 项一致性检查（写入闸/生命周期/候选漏斗/归档隔离/反馈只重排/回执校验/CLI 与 MCP 同一库），只碰临时库、不联网；CI 增加 `npm run check:conformance`。适配器契约文字版见 `docs/03-hosts-and-interfaces.md` §7。
+- 新增 `src/core/tuning.js` + `tools/tune-recall.mjs`：在冻结题集上扫阈值网格，只接受「命中不降、误注入不增、至少一项更好」的候选；退出码 3 表示有建议点，需要人批准后手动改配置，不做自动写入。
+- 新增 `src/core/secrets.js`：写入闸增加凭据值检测（sk-/ghp_/AKIA/AIza/私钥/Bearer 与「密码…是 <真值>」形态），策略句（「密钥由 KMS 管理」「统一放 1Password」）放行。
+- 文档 `docs/12-conformance-and-tuning.md`，含实测基线（`bench/core-30-v1`：hit 31/36、false-inject 5/20，无可白拿的提升）与「合成集不能外推」的声明。
+- 发布包新增 `tools/`（`npm pack` 会带上这两条命令）。
+
 只记**看得见的行为变化**与**改了的口径**，不记「测试通过数」这类会腐烂的状态
 （要读状态就去跑 `node --test` 与 `node bench/run-eval.mjs`）。
 
