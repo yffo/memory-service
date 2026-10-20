@@ -5,7 +5,7 @@
 
 ## 0. 结论先行
 
-1. **对外只暴露一个 MCP 服务器 + 一个 CLI**，不写宿主专属适配器；宿主差异全部收敛为「一段配置片段 + 一篇安装说明」。
+1. **对外只暴露一个 MCP 服务器 + 一个 CLI**，不写宿主专属适配器；宿主差异全部收敛为「一段配置片段 + 一篇安装说明」。（2026-10-19 修订：底座不变；但当宿主暴露会话生命周期时，允许一层薄原生适配器补「注入/捕获」——契约与 DSH 实测见 §7。）
 2. **协议层必须双时代兼容（Dual-era）**：最新是 2026-07-28（无状态、无 initialize），但 Zed 等仍按 2025-11-25 说话；而「Modern 客户端 × Legacy 服务器」和「Legacy 客户端 × Modern 服务器」都是直接失败（§1.5）。
 3. **进程模型走混合**：常驻本地核心（唯一写入者，管并发/嵌入/模型调用）+ 每宿主一个 stdio 薄壳（连得上核心就用核心，连不上退化为本地只读）。理由与代价见 §5。
 4. **工具面小而稳（5±2 个）且默认只读**；大输出必须分页或落盘——Claude Code 默认就有 25k token / 50k 字符 / 单响应 16MiB 三道上限（§3.1）。
@@ -299,7 +299,7 @@ tabellio hook uninstall --host claude --write
 
 ## 6. 对我们意味着什么（5 条）
 
-1. **只做 MCP + CLI 两个对外面**：不为任何宿主写代码适配；宿主差异最大只能影响我们「文档里的配置片段」和「首屏体验」，不能影响数据模型。
+1. **只做 MCP + CLI 两个对外面**：不为任何宿主写代码适配；宿主差异最大只能影响我们「文档里的配置片段」和「首屏体验」，不能影响数据模型。（修订见 §7.1：按「底座」理解——MCP+CLI 是唯一数据面；原生适配器只映射生命周期，不许改数据模型。）
 2. **协议栈必须 Dual-era**：`server/discover` 必做、legacy `initialize` 必留、2026-07-28 的新语义（`_meta` 版本协商 / `resultType` / MRTR）必须实现但不依赖客户端支持；Tools 是唯一所有宿主都认的特性，Resources/Prompts 只当加分项。
 3. **工具 5±2、默认只读、输出可截断**：`recall` / `search` / `read` / `remember`(写) / `capture`(写候选) / `list` / `status`，写工具独立且带 scope 与来源字段；`recall` 一次返回预算内的正文，`search` 只回指针。任何返回都可能被宿主截断（Claude Code 25k token / 50k 字符，Gemini CLI 10 分钟超时），所以必须分页、必须给出「还有多少」。
 4. **进程模型走混合，先把「写」的语义钉死**：常驻核心串行写 + stdio 薄壳；锁/并发/退化行为写进设计文档，不留给实现阶段临时决定。
@@ -307,4 +307,77 @@ tabellio hook uninstall --host claude --write
 
 ---
 
-`~/yffto/memory-service/docs/03-hosts-and-interfaces.md` ｜ 行数：246 ｜ 推荐接口形态一句话：**一个 Dual-era 的 MCP 服务器（stdio 薄壳接所有宿主）+ 一个常驻本地核心（唯一写者，走 127.0.0.1 + bearer），工具面 5±2 个、默认只读、写入带 scope。**
+## 7. 原生适配器契约 v0（2026-10-19 修订，DSH 实测后）
+
+> 本节是对 §0 第 1 条与 §6 第 1 条的口径修订，不改前面的调研事实。触发事件：`tabellio-dsh` 在 DSH desktop profile 实测装载，原生工具可调、事件钩子生效（详见 `/Users/yangfu/yffto/tabellio-dsh/`）。
+
+### 7.1 为什么改口
+
+原文「不写宿主专属适配器」成立在一个前提上：记忆只能由 agent **主动调工具去拉**。DSH 实测暴露了第二个前提：
+
+- `agent/pre-step` 是 waterfall，能在模型看到消息**之前**把一块召回结果插进去，且不产生新回合、不耗工具调用；
+- `agent/turn-stopping` / `agent/disposed` 能拿到轮末原文与来源，捕获不需要模型配合。
+
+这两件事 MCP 工具面做不到——MCP 只有「被调用」这一种时机。所以正确的分工是两层：
+
+| 层 | 是什么 | 谁提供 |
+|---|---|---|
+| L1 底座 | MCP server + CLI：读、写、批准、体检 | 所有宿主，唯一数据面 |
+| L2 适配器 | 生命周期映射：注入时机、捕获时机、来源标记 | 只有暴露了钩子的宿主；薄、可删、不改数据模型 |
+
+判据不是「宿主支不支持 MCP」，而是「宿主有没有**轮前注入点 + 轮末捕获点 + 来源 id**」。三者全有才值得写 L2；缺一项就退回 L1，不造伪钩子。
+
+### 7.2 契约（五个能力点）
+
+| 能力 | 时机 | 级别 | 约束 |
+|---|---|---|---|
+| `recall` | 任意 | **必须** | 与 CLI 同一实现、同一预算与拒答语义；适配器不许本地另算排名 |
+| `inject` | 模型看到消息前 | **可选** | 一条 notice、带生产者来源标记；**不得伪装系统指令**；同一轮最多一块；refused 静默 |
+| `capture` | 轮末/释放 | **可选** | 需轮末文本 + provenance；只写 `notes/candidates/`，不写正式记忆；过密钥/问句过滤；子代理不抓 |
+| `approve` | 人 | **必须由人** | 适配器只能展示待批数量，不能代批、不能自动接受 |
+| `status` | 任意 | **必须** | 只读体检；不修复、不重建、不写 |
+
+失败语义统一：任何钩子异常都 `warn` 并放行，**不许让记忆故障打断一轮对话**。
+
+### 7.3 宿主能力表
+
+| 宿主 | L1 | `inject` | `capture` | 依据 |
+|---|---|---|---|---|
+| DSH | MCP 客户端 + 原生工具 | ✅ `agent/pre-step` | ✅ `agent/turn-stopping` / `agent/disposed` | 实测（2026-10-19） |
+| Claude Code | MCP + hooks | △ `SessionStart` 注入 pending 提示（不是每轮） | ✅ `SessionEnd`（带 `transcript_path`） | §3.0.1 实测 |
+| Cursor | MCP | ✗ | ✗ | 无无头生命周期契约 |
+| Codex CLI | MCP | ✗ | ✗ | 无会话结束钩子 |
+| Zed / VS Code / Windsurf / Cline / Continue / Gemini | MCP | ✗ | ✗ | 未找到生命周期契约；不伪造 |
+
+### 7.4 一致性测试（conformance）
+
+任何 L2 适配器上线前，必须证明下面 6 条；DSH 的 `test/plugin.test.mjs`（13 例）是第一份实现证据：
+
+1. **真人判定**：只认 `source.kind === 'user'`；插件 notice 不算人，不触发递归召回。
+2. **注入形状**：notice 带生产者 id、不产生新回合、同一轮最多一条、同批笔记不重复注入。
+3. **预算与拒答**：超预算拒绝或截断；`refused` 是正常结果，不是错误。
+4. **捕获只写候选**：主库 `notes`/`index` 不变；`status: draft`、`trust: system_derived`、来源可追。
+5. **批准权在人**：适配器没有 accept 路径；批准只走 CLI `tabellio inbox`。
+6. **失败不伤回合**：库损坏/锁冲突时 warn 并继续。
+
+### 7.5 迁移边界（engramory → tabellio）
+
+用 `tabellio import --from ~/memory/engramory --dry` 实测（2026-10-19）：
+
+- 75 个源文件 → **1411 块**（reference 53→618、project 17→767、feedback 5→23、user 1→3）；
+- **12 块被写入闸门拒绝**，理由全是 `would_promote_external_to_instruction`，且**全部落在 `reference-*`**；
+- 1 个文件因 frontmatter 缺失整份未导入；8 个碎片被丢弃。
+
+结论：整库导入不是「搬家」，是**重新原子化**。旧库的 reference 是检索资料，不该进记忆核心；而闸门拒的恰好就是这一类，说明分类语义与核心闸门天然对齐。顺序应是：
+
+1. 新核心靠「写」积累：capture → `tabellio inbox` 批准；
+2. 旧库按 `user` / `feedback` / `project` 蒸馏，`reference` 只保留检索价值；
+3. 双系统并存期，tabellio 跑 **shadow**（`shadow: true`，每次召回落 `runs/rcp_*.json` 回执、不注入），同题对比后再决定谁接管注入。
+
+### 7.6 一句话
+
+MCP/CLI 决定「能不能用」，生命周期适配决定「会不会被用上」；核心只守两件事——**召回口径**和**批准权**。
+
+---
+
+`~/yffto/memory-service/docs/03-hosts-and-interfaces.md` ｜ 行数：383 ｜ 推荐接口形态一句话：**一个 Dual-era 的 MCP 服务器（stdio 薄壳接所有宿主）+ 一个常驻本地核心（唯一写者，走 127.0.0.1 + bearer），工具面 5±2 个、默认只读、写入带 scope；宿主有生命周期钩子时再加一层薄适配器（契约见 §7）。**
