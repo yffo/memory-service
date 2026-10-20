@@ -309,6 +309,8 @@ tabellio hook uninstall --host claude --write
 
 ## 7. 原生适配器契约 v0（2026-10-19 修订，DSH 实测后）
 
+> 可执行版本：`node tools/conformance.mjs`（22 项一致性检查，临时库、不联网）。适配器把这条命令放进自己的 CI 即完成契约验收；接口细节见 §7.4。
+
 > 本节是对 §0 第 1 条与 §6 第 1 条的口径修订，不改前面的调研事实。触发事件：`tabellio-dsh` 在 DSH desktop profile 实测装载，原生工具可调、事件钩子生效（详见 `/Users/yangfu/yffto/tabellio-dsh/`）。
 
 ### 7.1 为什么改口

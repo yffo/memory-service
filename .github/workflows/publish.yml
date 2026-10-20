@@ -36,6 +36,11 @@ jobs:
           TZ: Asia/Shanghai
         run: npm test
 
+      - name: 一致性自检（适配器契约）
+        env:
+          TZ: Asia/Shanghai
+        run: npm run check:conformance
+
       - name: 发布（OIDC Trusted Publisher）
         run: |
           npm config set registry https://registry.npmjs.org/
