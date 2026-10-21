@@ -318,7 +318,9 @@ function buildWarnings({ scan, index, total, oversizeChars, oversizeTokens, inde
       `索引是旧的：路由层记着 ${indexed} 条、库里有 ${total} 条（跑 \`memory status --rebuild-index\` 重建）`,
     );
   }
-  if (!index.exists) w.push('索引还没生成（跑 `tabellio status --rebuild-index`）');
+  // 空库谈不上「索引没生成」：新装、刚捕获第一条候选时都是这个状态，
+  // 报成 warning 会让面板看起来像坏了（2026-10-22 装全新用户视角发现）。
+  if (!index.exists && total > 0) w.push('索引还没生成（跑 `tabellio status --rebuild-index`）');
   return w;
 }
 
