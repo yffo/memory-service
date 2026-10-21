@@ -128,6 +128,40 @@ test('pull 优先于 push：核心档不能把检索命中挤掉', () => {
   assert.equal(r.dropped.find((d) => d.id === 'core').source, 'push');
 });
 
+test('push 单独一份额度：有检索命中时核心档最多 2 条 / 120 token', () => {
+  const core = ['c1', 'c2', 'c3', 'c4', 'c5'].map((id) => cand(id, '身份设定一小段'));
+  const r = selectBudget({
+    pulled: [cand('hit', '命中正文')],
+    core,
+    budget: { maxNotes: 8, maxTokens: 5000 },
+  });
+  assert.deepEqual(r.items.map((i) => i.id), ['hit', 'c1', 'c2']);
+  assert.deepEqual(r.split, { pull: 1, push: 2 });
+  const dropped = r.dropped.filter((d) => d.source === 'push');
+  assert.equal(dropped.length, 3);
+  assert.ok(dropped.every((d) => d.reason === 'push_budget'), '挤掉核心档的理由要说「核心额度用完了」，不能说成预算用尽');
+  assert.equal(dropped[0].limitReason, 'maxNotes');
+});
+
+test('push 的 token 额度也是硬的：超一点也要让位给 pull', () => {
+  const r = selectBudget({
+    pulled: [cand('hit', '命中正文')],
+    core: [cand('fat', '身份设定'.repeat(80))],
+    budget: { maxNotes: 8, maxTokens: 5000 },
+  });
+  assert.deepEqual(r.items.map((i) => i.id), ['hit']);
+  const d = r.dropped.find((x) => x.id === 'fat');
+  assert.equal(d.reason, 'push_budget');
+  assert.equal(d.limitReason, 'maxTokens');
+});
+
+test('没有检索命中时 push 回落到整份预算（首轮/面板要能看到身份设定）', () => {
+  const core = ['c1', 'c2', 'c3', 'c4'].map((id) => cand(id, '身份设定'));
+  const r = selectBudget({ pulled: [], core, budget: { maxNotes: 4, maxTokens: 5000 } });
+  assert.deepEqual(r.items.map((i) => i.id), ['c1', 'c2', 'c3', 'c4']);
+  assert.deepEqual(r.split, { pull: 0, push: 4 });
+});
+
 test('同一篇既被 pull 又被 push 时只算一次（不能双份占预算）', () => {
   const r = selectBudget({
     pulled: [cand('same', '正文')],

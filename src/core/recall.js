@@ -13,6 +13,7 @@
  * trust、最后才丢 core」的反面：裁剪序管的是**有证据时**先丢谁，不是「拒答时偷渡核心档」。
  * 拒答路径是一等公民，偷渡会让「问了 A 答了 B 的偏好」重新出现。
  */
+import { createHash } from 'node:crypto';
 import { expandQuery } from './tokenize.js';
 import { finiteOr } from '../util/text.js';
 import { buildIndex, scoreDocs, aggregateByNote, sectionsOf } from './bm25.js';
@@ -33,7 +34,18 @@ import { selectBudget, budgetOf, costOf } from './select.js';
 export const DEFAULT_THRESHOLDS = Object.freeze({
   minRelevance: 0.15,
   minScore: 0.18,
-  // 覆盖率闸：**这才是拒答的主力**，见下方 eligible 处的长注释。
+  // 覆盖率闸：拒答的**默认启用**方式，但它只在「这 56 题 + 单域语料」这个口径上
+  // 同时满足 recall@5 ≥ 0.80 与拒答 ≥ 0.75（0.6：0.861 / 1.00）。2026-10-22 用
+  // 5 份模拟用户语料（151 篇、5 个领域、120 查询、80 条真模型作答）复测到它的
+  // 结构性代价：
+  //  - 命中率：0.6 → 53.8%，0.33 → 80.0%，0.2 → 85.0%；gold 排第 1 也会被排除
+  //    （pm-product-q06 的 gold coverage 0.2435，输给了 coverage 0.378 的无关笔记）；
+  //  - 端到端（插件形态，带 judge，120 题）：0.33 → 63.7%，0.2 → 76.3%；
+  //  - AUC：maxCov 0.851 看着不差，但可答/不可答两组分布重叠，任何阈值都在
+  //    「多拒 1 题」换「少答 5 题」。
+  // 结论：这个闸是**面向问答的拒答闸**，不是通用检索的准入闸。默认值保持 0.6
+  // （核心自己的验收口径依赖它）；自动注入/高召回场景由调用方显式传低值
+  // （插件默认 0.2），需要「宁拒勿答」时显式抬高。别把它当成一遍就能定死的常量。
   minCoverage: 0.6,
   nearestLimit: 5,
 });
@@ -43,8 +55,69 @@ export const DEFAULT_TOKENS = 500;
 
 /** 语料达到这个篇数，覆盖率闸才按 `minCoverage` 全量生效（见 `coverageGate` 处注释）。 */
 export const COVERAGE_FULL_CORPUS = 20;
-/** 小语料（< `COVERAGE_FULL_CORPUS` 篇）时的保底覆盖率闸。 */
+/** 小语料（< `COVERAGE_FULL_CORPUS` 篇）时的保底覆盖率闸；不会把调用方的闸调严。 */
 export const COVERAGE_SMALL_CORPUS_GATE = 0.25;
+
+/**
+ * 索引 memo：`buildIndex` 是纯函数（同样的 docs → 同样的索引），但每召回一次要
+ * 重新分词 1423 段（本机实测 92ms，占一次召回 161ms 的一半以上）。
+ * 这里按 **docs 内容本身** 的 sha1 复用结果：
+ *  - 键是内容而不是路径/时间戳 —— 笔记改了内容，键就变，不可能读到旧索引；
+ *  - 上限 `INDEX_MEMO_MAX` 份，LRU 淘汰（一份 1423 段索引序列化后约 1.9MB）；
+ *  - 哈希 2MB 正文实测 3.2ms，比 92ms 的分词便宜一个数量级。
+ *
+ * 为什么不拿 `(id, mtime, size)` 当键：同一毫秒内两次写会让 mtime 相同，
+ * 改字不改长会让 size 相同 —— 两种都会变成「内容变了但键没变」。
+ */
+const INDEX_MEMO_MAX = 3;
+const indexMemo = new Map();
+
+function fingerprintDocs(docs) {
+  const hash = createHash('sha1');
+  for (const doc of docs) {
+    // 桶字段全进指纹：`id/section/title/body/tags/kind/trust/aliases` 里有任何一个
+    // 参与打分的字段变了，索引就必须重建（`identityTerms` 读 title/tags/aliases）。
+    hash.update(String(doc.id ?? ''));
+    hash.update('\u0000');
+    hash.update(String(doc.section ?? 0));
+    hash.update('\u0000');
+    hash.update(String(doc.title ?? ''));
+    hash.update('\u0000');
+    hash.update(String(doc.body ?? ''));
+    hash.update('\u0000');
+    hash.update((doc.tags ?? []).join(','));
+    hash.update('\u0000');
+    hash.update((doc.aliases ?? []).join(','));
+    hash.update('\u0000');
+    hash.update(String(doc.kind ?? ''));
+    hash.update('\u0000');
+    hash.update(String(doc.trust ?? ''));
+    hash.update('\u0001');
+  }
+  return hash.digest('hex');
+}
+
+function memoIndex(docs) {
+  const key = fingerprintDocs(docs);
+  const hit = indexMemo.get(key);
+  if (hit) {
+    // LRU 触碰：先删后插，淘汰时丢掉的是最久没被用过的那份。
+    indexMemo.delete(key);
+    indexMemo.set(key, hit);
+    return hit;
+  }
+  const index = buildIndex(docs);
+  indexMemo.set(key, index);
+  while (indexMemo.size > INDEX_MEMO_MAX) {
+    indexMemo.delete(indexMemo.keys().next().value);
+  }
+  return index;
+}
+
+/** 清空索引 memo（只用在上限/内存相关的手工诊断里；正常召回不需要调用）。 */
+export function clearIndexMemo() {
+  indexMemo.clear();
+}
 
 function normalizeList(value) {
   if (value === undefined || value === null) return null;
@@ -175,6 +248,15 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
     minCoverage: finiteOr(options.minCoverage, DEFAULT_THRESHOLDS.minCoverage),
     nearestLimit: finiteOr(options.nearestLimit, DEFAULT_THRESHOLDS.nearestLimit),
   };
+  // **两种口径**（0.1.13）：
+  //  - `refuse !== false`（QA 口径，默认）：覆盖率闸参与准入，没够格的证据就拒答；
+  //  - `refuse === false`（检索口径）：覆盖率不参与准入，只有「一个信息词都没有」
+  //    （`no_informative_term`）这种**硬拒答**才拒。宿主自己负责判断要不要答
+  //    （插件用 judge + intent gate 做这件事）。
+  // 分开的理由是实测的：同一个库上覆盖率闸从 0.6 放到 0.2，56 题 recall@5
+  // 0.861 → 1.000，但零模型 correct_refusal_rate 0.75 → 0.15 —— 一个常量
+  // 不可能同时服务「问答要敢拒」和「检索要敢给」两个目标。
+  const refuseOnMiss = options.refuse !== false;
   const budgetInput = { ...(options.budget ?? {}) };
   if (budgetInput.maxTokens === undefined && options.budgetTokens !== undefined) {
     budgetInput.maxTokens = options.budgetTokens;
@@ -188,9 +270,9 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
   // 合成一份会出事：过滤掉一批过期笔记后 idf 变了，同一句查询的覆盖率跟着变，
   // 于是「昨天答得出来、今天同一句拒答」。检索结果可以随生命周期变，
   // 但「这句话库里到底有没有讲到」不该随之漂移。
-  const index = buildIndex(toDocs(kept));
+  const index = memoIndex(toDocs(kept));
   const filtered = kept.length !== entries.length;
-  const refIndex = filtered ? buildIndex(toDocs(entries)) : index;
+  const refIndex = filtered ? memoIndex(toDocs(entries)) : index;
   const expansions = expandQuery(query);
   // **组合级共现核对**（`cooccurrence.js`）：`scoreDocs` 会把每条候选命中了几个
   // 「稀有锚点」标在桶上，这里按笔记聚合后当**准入条件**用。参数从 `options` 透传
@@ -303,7 +385,11 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
   // 小语料切换点本身也是可配的：否则「全量闸」这条路径在小语料上永远测不到，
   // 只能靠一个专门为测试编出来的 20 篇语料去撞。
   const fullCorpusAt = finiteOr(options.coverageFullCorpus, COVERAGE_FULL_CORPUS);
-  const coverGate = kept.length >= fullCorpusAt ? coverGateFull : COVERAGE_SMALL_CORPUS_GATE;
+  // 小语料用保底闸，但不能比调用方给的闸更严：`minCoverage: 0` 是「关掉」，
+  // 不该在 15 篇的库上被 0.25 重新打开。
+  const coverGate = kept.length >= fullCorpusAt
+    ? coverGateFull
+    : Math.min(COVERAGE_SMALL_CORPUS_GATE, coverGateFull);
   const eligible = scored.filter(
     (s) =>
       s.relevance > 0 &&
@@ -311,18 +397,12 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
       s.score >= thresholds.minScore &&
       // **覆盖率闸**：查询的信息量（按 idf×词权重算）里，这篇至少得覆盖 `minCoverage`。
       //
-      // 为什么非要有这一条：光看 BM25 分，拒答题和可答题根本分不开 ——
-      // 「Orchid 的数据库连接池最多允许多少个连接？」在「Orchid 数据库端口」那篇上
-      // 靠 `数据库 / 连接 / orchid` 拿到 BM25 22.4（relevance 0.937），
-      // 而它真正在问的 `连接池 / 最多允许多少` 一个都没命中。
-      // 实测 50 篇语料上：8 条拒答题的覆盖率 0.34–0.64（均值 0.50），
-      // 32 条可答题 0.48–1.00（均值 0.72）。0.6 是两组之间的分界；
-      // 取 0.5 也行（正确拒答率 0.75），0.6 留了余量（0.875）。
+      // 0.6 的取值来自 50 篇合成语料（8 条拒答题 0.34–0.64、32 条可答题 0.48–1.00）。
+      // 2026-10-22 的复测（151 篇、5 领域）证明它是**问答口径的拒答闸**：
+      // 覆盖率高的笔记未必答得上；gold 排第 1 也可能 coverage 只有 0.24 而被排除。
+      // 换场景（自动注入、CLI 高召回）就显式传低值，别指望一个常量同时服务两种口径。
       // 覆盖率对**笔记**取各段的最大值（一篇长笔记有一段正面回答了就算数）。
-      //
-      // 这个数是配置项（`tabellio search --min-coverage`）：`02-evaluation.md §6`
-      // 不许在计分集上调参，所以要能把默认值摆到命令行上，用别的语料换。
-      (!Number.isFinite(s.coverage) || s.coverage >= coverGate) &&
+      (!refuseOnMiss || !Number.isFinite(s.coverage) || s.coverage >= coverGate) &&
       // **组合级共现闸**（`cooccurrence.js`）：光「覆盖率够」还不够 ——
       // 覆盖率的分母里每个证据词只算一次，所以「提问的实体」和「被问的知识点号」
       // 分别出现在**两篇不同的笔记**里时，两篇的覆盖率都能顶到 1.000，
@@ -353,7 +433,11 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
   //    得换一种问法。实测：「量子色动力学里的胶子禁闭」在真实库上只剩 `里的`（df 96）
   //    一个词项，92 篇无关笔记覆盖率 1.0 —— 报成「分数不够」会让人一直去调阈值。
   const noInformativeTerm = informativityGateOn && queryInfo.informativeTerms.length === 0;
-  const mustRefuse = eligible.length === 0 || onlyExternal || noInformativeTerm;
+  // 检索口径下只剩硬拒答：库里一个信息词都认不出来。`only_external_low_trust`
+  // 是「有证据但不可信」，交给宿主判断（它可能就是要原文链接）。
+  const mustRefuse = refuseOnMiss
+    ? eligible.length === 0 || onlyExternal || noInformativeTerm
+    : noInformativeTerm;
   if (mustRefuse) {
     // **共现失败单独报**：有候选过了覆盖率闸，却因为「被问的那几样东西不在**同一篇**里
     // 共现」全被挡下 —— 这和「分数不够」是完全不同的诊断出口。前者是「库里有相关笔记
@@ -394,7 +478,8 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
       skipped,
       candidates: scored.length,
       thresholds,
-      // 覆盖率闸的实际门限：小语料会自动降到 `COVERAGE_SMALL_CORPUS_GATE`。
+      policy: refuseOnMiss ? 'qa' : 'search',
+      // 覆盖率闸的实际门限：小语料走 `COVERAGE_SMALL_CORPUS_GATE`，且不会比调用方的闸更严。
       // 回执要能解释「为什么这条被挡」，就必须把这次真正生效的门限记下来，
       // 而不是让读回执的人拿默认阈值去猜。
       coverageGate: coverGate,
@@ -428,7 +513,12 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
     };
   }
 
-  // 预算裁剪：pull 优先，push（核心档）兜底且最后被挤
+  // 预算裁剪：pull 优先，push（核心档）兜底且最后被挤。
+  //
+  // 曾实现过 `excerptSections`（长笔记只带命中节进预算），2026-10-22 在真实库
+  // （1412 篇，p99 = 400 字）和 151 篇模拟用户库上都量不到差异：库里没有长笔记，
+  // 而匹配本来就按 400 字分节。结论是这项改动在当前语料上没有可测收益，
+  // 代码撤掉；将来接长文档来源（PDF/网页导入）时再评估。
   const pulled = eligible.map((s) => ({
     id: s.id,
     title: s.title,
@@ -439,6 +529,7 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
     breakdown: s.breakdown,
     why: s.why,
   }));
+
   const coreCandidates = kept
     .filter((e) => e.note.kind === 'core')
     .map((e) => {
@@ -462,8 +553,12 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
     budget: { ...budget, includeCore: options.includeCore !== false },
   });
 
+  // 全库候选名次（与预算无关）：融合排序要用它，才能保证同一问题不因
+  // maxNotes/budget 变化而换答案。`scores` 已经是稳定降序。
+  const lexRankOf = new Map(scored.map((entry, index) => [String(entry.id), index + 1]));
   const items = selected.items.map((item) => ({
     id: item.id,
+    lexRank: lexRankOf.get(String(item.id)) ?? null,
     title: item.title,
     content: item.body,
     kind: item.note?.kind ?? null,
@@ -511,6 +606,7 @@ export function recall({ entries = [], query = '', options = {} } = {}) {
     skipped,
     candidates: scored.length,
     thresholds,
+    policy: refuseOnMiss ? 'qa' : 'search',
     coverageGate: coverGate,
     scores: scored.map((s) => ({
       id: s.id,

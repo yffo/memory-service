@@ -72,7 +72,8 @@ export const USAGE = `tabellio — 显式记忆服务（M1 + M2：读取回执 /
   tabellio status [--store DIR] [--rebuild-index] [--json]
   tabellio index  [--store DIR] [--rebuild] [--json]             # 索引层体检（默认只读）
   tabellio search --query "<词>" [--budget-tokens N] [--kinds a,b] [--trusts a,b]
-                 [--min-relevance F] [--min-score F] [--min-coverage F] [--ledger] [--json]
+                 [--min-relevance F] [--min-score F] [--min-coverage F] [--no-refuse]
+                 [--ledger] [--json]      # --no-refuse = 检索口径，由调用方判断要不要答
   tabellio read   --id <ulid|notes/ulid.md> [--ledger] [--json]
   tabellio remember --file <path.md> [--dry] [--json]
                    [--kind k] [--trust t] [--scope s] [--tags a,b] [--id ULID]
@@ -495,6 +496,8 @@ export async function main(argv, io = {}) {
           minCoverage: numArg(args['min-coverage'], undefined),
           minScore: numArg(args['min-score'], undefined),
           includeCore: args['no-core'] ? false : true,
+          // 检索口径：覆盖率不参与准入，只留硬拒答（认不出信息词）。默认仍是 QA 口径。
+          refuse: args['no-refuse'] ? false : undefined,
           ledger: Boolean(args.ledger),
         });
         const { diagnostics, ...frozen } = r;

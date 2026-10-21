@@ -30,6 +30,10 @@ export const DEFAULT_BUDGET = Object.freeze({
   maxTokens: 500,
   maxChars: 0, // 0 = 不限
   includeCore: true,
+  // push（核心档）单独一份额度：它和 pull 共用 `maxNotes` 时，用户问「A 怎么配置」
+  // 得到的答案里会掺进两条身份设定。额度小是刻意的——push 是基线，不是答案。
+  pushMaxNotes: 2,
+  pushMaxTokens: 120,
 });
 
 /** 裁剪序（§5.2）：episodic 最先丢，core 最后丢。 */
@@ -58,6 +62,8 @@ export function budgetOf(options = {}) {
     maxTokens: positive(b.maxTokens, DEFAULT_BUDGET.maxTokens),
     maxChars: nonNegative(b.maxChars, DEFAULT_BUDGET.maxChars),
     includeCore: b.includeCore === undefined ? DEFAULT_BUDGET.includeCore : Boolean(b.includeCore),
+    pushMaxNotes: positive(b.pushMaxNotes, DEFAULT_BUDGET.pushMaxNotes),
+    pushMaxTokens: positive(b.pushMaxTokens, DEFAULT_BUDGET.pushMaxTokens),
   };
 }
 
@@ -103,11 +109,28 @@ export function selectBudget({ pulled = [], core = [], budget = {} } = {}) {
    * 为什么要两段式：先来的一篇长笔记可能吃满预算，把后面一条更该给的
    * **高 dropRank** 短笔记挤掉。所以逐出要在收集完之后按裁剪序统一做账。
    */
+  // push / pull 分账：有检索命中时，核心档只能吃自己那一小份额度；
+  // pull 为空时（首轮/面板/没有相关记忆）才回落到整份预算，否则身份设定都进不来。
+  const pushLedger = { notes: 0, tokens: 0 };
+  const pushCap = pulled.length > 0
+    ? { notes: Math.min(cap.maxNotes, cap.pushMaxNotes), tokens: Math.min(cap.maxTokens, cap.pushMaxTokens) }
+    : { notes: cap.maxNotes, tokens: cap.maxTokens };
+
   const tryAdd = (cand, source) => {
     const id = String(cand.id);
     if (seen.has(id)) return; // 同一篇既被 pull 又被 push 时只算一次
     const body = String(cand.body ?? '');
     const cost = costOf(cand);
+    if (source === 'push') {
+      if (pushLedger.notes >= pushCap.notes) {
+        deferred.push({ cand, source, reason: 'push_budget', limitReason: 'maxNotes' });
+        return;
+      }
+      if (pushLedger.tokens + cost > pushCap.tokens) {
+        deferred.push({ cand, source, reason: 'push_budget', limitReason: 'maxTokens' });
+        return;
+      }
+    }
     if (items.length >= cap.maxNotes) {
       deferred.push({ cand, source, reason: 'maxNotes' });
       return;
@@ -123,6 +146,10 @@ export function selectBudget({ pulled = [], core = [], budget = {} } = {}) {
     seen.add(id);
     tokens += cost;
     chars += body.length;
+    if (source === 'push') {
+      pushLedger.notes += 1;
+      pushLedger.tokens += cost;
+    }
     items.push({
       id,
       title: cand.title ?? '',
@@ -150,6 +177,10 @@ export function selectBudget({ pulled = [], core = [], budget = {} } = {}) {
   // 原来这两类被合在一起：`maxTokens` 也被翻成 dropRank，于是「因为预算不够」这件事
   // 在账里彻底看不见了，`status` 报出来的是一串 dropRank。硬闸门的理由不许被改写。
   for (const d of deferred) {
+    if (d.reason === 'push_budget') {
+      dropped.push({ id: String(d.cand.id), reason: 'push_budget', limitReason: d.limitReason, source: d.source, hard: false });
+      continue;
+    }
     if (d.reason === 'maxNotes' || d.reason === 'maxChars') {
       dropped.push({ id: String(d.cand.id), reason: d.reason, source: d.source, hard: true });
       continue;
@@ -167,6 +198,7 @@ export function selectBudget({ pulled = [], core = [], budget = {} } = {}) {
     items,
     tokens,
     chars,
+    split: { pull: items.filter((item) => item.source === 'pull').length, push: items.filter((item) => item.source === 'push').length },
     truncated: dropped.length > 0,
     dropped,
     droppedCount: dropped.length,

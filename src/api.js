@@ -424,6 +424,8 @@ export function recallOptions(options = {}) {
     minRelevance: options.minRelevance,
     minCoverage: options.minCoverage,
     minScore: options.minScore,
+    // QA 口径默认：证据不够就拒答。`refuse: false` 是检索口径（宿主自己判）。
+    refuse: options.refuse !== false,
     nowMs: options.nowMs ?? clockNow(),
     includeCore: options.includeCore !== false,
     // 排序增强默认关闭：核心的默认召回仍是纯词面，宿主显式要求才叠加。

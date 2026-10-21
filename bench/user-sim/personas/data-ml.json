@@ -1,0 +1,547 @@
+{
+  "persona": "data-ml",
+  "notes": [
+    {
+      "title": "我的岗位与 rec-v2 owner 范围",
+      "body": "周野，29 岁，推荐算法工程师。\n\n## 负责\n- rec-v2 精排链路（召回不归我，归 @阿哲）\n- 特征口径、离线评估、A/B 分析、bad case 归因\n- 上线审批：@老陈 签字后才推全量\n\n## 节奏\n周三 10:30 精排周会；实验号统一 EXP-3 位数字；模型版本 rec-v2.x.y 格式。",
+      "kind": "core",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": ["身份", "rec-v2", "职责"],
+      "valid_from": "2026-06-01",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.95
+    },
+    {
+      "title": "我的记录与排期习惯",
+      "body": "## 记录\n每次离线实验当天写清：EXP 号 + config hash 前 8 位 + 主指标 GAUC + 对比 baseline，缺一项就算没跑过。缩写随手用：ds=数据集，neg=负采样，seq=序列特征，ut=用户表。\n\n## 排期\nGPU 训练按 T+2 排；线上变更避开周五和 23:00 后；回滚演练每月 1 次，结果记在 infra 的 SOP 里。",
+      "kind": "core",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": ["习惯", "排期", "记录"],
+      "valid_from": "2026-06-03",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "GAUC 按曝光≥5 用户加权",
+      "body": "## 口径\ngauc = Σ(w_u × auc_u) / Σ w_u，w_u 是该用户曝光数；只统计曝光 ≥5 的用户，曝光 <5 直接丢。\n\n## 为什么\n全量 AUC 被头部用户稀释：2026-06 对比，AUC 0.7845、GAUC 0.7213；两版模型 AUC 只差 0.0003，GAUC 差 0.0041。\n\n脚本在 eval/gauc.py，rec-v2 主线只看 GAUC。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["指标", "GAUC", "口径"],
+      "valid_from": "2026-06-08",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "序列特征截断到 30 的口径",
+      "body": "6 月定版：user_seq 只取最近 30 个 item，第 31 个以后用 item_emb 均值兜底，避免长序列用户拖慢训练。EXP-207 验证 GAUC +0.0018，显存控制在单卡 38GB。\n\n当时的结论：30 够用，再长收益不明显，等样本量上来再说。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["序列特征", "口径", "seq30"],
+      "valid_from": "2026-06-15",
+      "valid_to": "2026-08-12",
+      "supersedes": null,
+      "confidence": 0.7
+    },
+    {
+      "title": "EXP-231 序列截断改到 50",
+      "body": "## 结论\nseq_len 30 → 50，GAUC 0.7213 → 0.7255（+0.0042）。序列 >30 的长序列用户占比 11.4%，这部分 GAUC 涨 0.011。\n\n## 代价\n显存 38GB → 39.9GB，单 epoch 52min → 71min；mask 放尾部，padding 填 0。\n\nv2.3 起默认 seq_len=50。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "project:rec-v2",
+      "tags": ["序列特征", "EXP-231"],
+      "valid_from": "2026-08-12",
+      "valid_to": null,
+      "supersedes": "序列特征截断到 30 的口径",
+      "confidence": 0.85
+    },
+    {
+      "title": "负采样 1:4 是当前基准",
+      "body": "EXP-212 定下：正负样本 1:4，负样本从曝光未点击里抽，抽完不做校准，线上 CTR 直接乘 1/5 还原。\n\n理由：1:4 时 GAUC 0.7198，1:2 是 0.7186，1:8 掉到 0.7179 且训练慢 40%。1:4 兼顾效果和时长（单轮 4.2h）。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["负采样", "口径", "EXP-212"],
+      "valid_from": "2026-06-20",
+      "valid_to": "2026-08-22",
+      "supersedes": null,
+      "confidence": 0.7
+    },
+    {
+      "title": "负采样改 1:8 的结论",
+      "body": "EXP-238 重做负采样：1:4 → 1:8，GAUC +0.0029（0.7255 → 0.7284），但 top20 召回率掉 1.3pp，训练 4.2h → 6.1h。\n\n## 处理\n只在 v2.3 排序头试用，主模型仍 1:4；线上 CTR 校准系数按 1/9。等下版样本更干净再切。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["负采样", "EXP-238"],
+      "valid_from": "2026-08-22",
+      "valid_to": null,
+      "supersedes": "负采样 1:4 是当前基准",
+      "confidence": 0.8
+    },
+    {
+      "title": "数据集 v3.2 是训练基准",
+      "body": "## 现状\n训练默认 ds-v3.2：2026-05-28 导出，样本 2.1 亿，正样本率 4.7%，覆盖 2025-11 到 2026-05。\n\n## 注意\n曝光日志有重复上报，同一 request_id 出现 2 次，离线统计 CTR 偏高约 0.4pp。评估集按 v3.2-eval 单独抽，不动训练集。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["数据集", "v3.2", "口径"],
+      "valid_from": "2026-07-02",
+      "valid_to": "2026-09-12",
+      "supersedes": null,
+      "confidence": 0.75
+    },
+    {
+      "title": "v3.3 数据集正式替换 v3.2",
+      "body": "## 变更\nds-v3.3（2026-09-08 导出）按 request_id 去重，修掉曝光重复上报；样本 2.1 亿 → 1.86 亿，正样本率 4.7% → 5.2%，覆盖到 2026-08。\n\n## 影响\n基线 CTR 上移 0.4pp，旧模型分数要整体重标；EXP-233 用 v3.3 重跑 GAUC 低 0.0011。\n\n训练默认切 v3.3。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "project:rec-v2",
+      "tags": ["数据集", "v3.3", "EXP-233"],
+      "valid_from": "2026-09-12",
+      "valid_to": null,
+      "supersedes": "数据集 v3.2 是训练基准",
+      "confidence": 0.85
+    },
+    {
+      "title": "DIN-v2 仍是线上主力",
+      "body": "线上 rec-v2.2.6 跑 DIN-v2，seq_len 30，GAUC 0.7213、AUC 0.7845，P99 延迟 42ms，单卡 A100 QPS 420。\n\n短期没有替换计划：SIM 方案显存和延迟都压不住，先不动，等下个季度再说。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["模型版本", "DIN-v2", "基线"],
+      "valid_from": "2026-07-06",
+      "valid_to": "2026-10-05",
+      "supersedes": null,
+      "confidence": 0.75
+    },
+    {
+      "title": "SIM 替换 DIN-v2 上线",
+      "body": "rec-v2.4.0 于 10-05 全量，SIM-v1.2 换掉 DIN-v2（同为 seq50）：GAUC 0.7255 → 0.7298（+0.0043），P99 延迟 42ms → 50ms，单卡 QPS 420 → 360。\n\n## 代价\n显存多 3.2GB，GPU 池扩 2 张 A100 才压住延迟；老版本留 7 天可回滚。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["模型版本", "SIM", "上线"],
+      "valid_from": "2026-10-05",
+      "valid_to": null,
+      "supersedes": "DIN-v2 仍是线上主力",
+      "confidence": 0.9
+    },
+    {
+      "title": "标注一致性门槛 kappa≥0.75",
+      "body": "标注平台 2026 版规范：批次验收要求 Cohen's kappa ≥0.75，且抽检 500 条错误率 ≤3%；kappa 0.70–0.75 只能返修，不能上线。\n\n双人标注比例不低于 20%，争议样本进仲裁池，仲裁结果回写规范。",
+      "kind": "semantic",
+      "trust": "external",
+      "scope": "project:labeling",
+      "tags": ["标注", "验收", "kappa"],
+      "valid_from": "2026-07-18",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "双塔召回 topK=200 的依据",
+      "body": "离线评估（8 月）：topK=200 时 recall@200 78.4%；K=500 到 84.1% 但候选打分延迟 +35ms；K=100 只有 71.2%。\n\n## 结论\n定 K=200，是 recall 和延迟的拐点。粗排输入固定 200 条，多的直接丢，不截断补位。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "project:rec-v2",
+      "tags": ["召回", "topK", "延迟"],
+      "valid_from": "2026-07-25",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "ECE 分桶校准 12 桶",
+      "body": "## 方法\n按预估 CTR 分 12 个等频桶，每桶单独拟合 isotonic，再线性插值。\n\n## 效果\nECE 0.031 → 0.012，桶内最大偏差 0.008。试过 8 桶（ECE 0.017）和 20 桶（0.011 但月间波动大、过拟合）。桶边界每月重算一次。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "project:rec-v2",
+      "tags": ["校准", "ECE", "分桶"],
+      "valid_from": "2026-09-28",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "A/B 最小样本量算法",
+      "body": "按双侧 α=0.05、power=0.8、最小可检测提升 0.15pp（CTR 基线 4.7%）算，单组需 120 万曝光；10% 流量要跑满 7 天。\n\n## 注意\nGAUC 不走这套；离线显著不代表线上显著，A/B 只认 CTR、CVR 和人均时长。方法参考 Evan Miller 的样本量计算器。",
+      "kind": "semantic",
+      "trust": "external",
+      "scope": "project:rec-v2",
+      "tags": ["A/B", "样本量", "统计"],
+      "valid_from": "2026-08-18",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.75
+    },
+    {
+      "title": "离线实验 checklist",
+      "body": "## 跑之前\n- config 存盘：lr、batch、seq_len、neg 比、seed（0/1/2 三个）\n- 数据版本写死，v3.3 之后不允许混用\n- baseline 用上一版线上模型，同一天重跑\n\n## 跑完\nGAUC/AUC/LogLoss 三件套 + 分桶 CTR 偏差，填实验表再发群。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["实验", "checklist"],
+      "valid_from": "2026-06-12",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "上线前回滚预案 checklist",
+      "body": "## 推全量前确认\n1. 上一版模型镜像 tag 还在，5 分钟内能拉起\n2. 新特征必须带开关，默认关\n3. 回滚决策人 @老陈，值班同学只执行不决策\n4. 写清回滚后的预期指标（跌回 0.7255 属正常）\n\n演练不过不许上线，回滚演练每月 1 次。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["上线", "回滚", "checklist"],
+      "valid_from": "2026-07-09",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "bad case 分析三步",
+      "body": "## 三步\n1. 先分桶：新/老用户、序列长/短、头部/长尾品类，看 bad case 堆在哪\n2. 再看特征：取 20 条样本对特征快照，查缺失率和分布偏移\n3. 最后看标签：人工复核 50 条，排除标注错\n\n结论落到实验表，别只丢一句「效果不好」。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["bad case", "归因", "方法"],
+      "valid_from": "2026-08-30",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "标注批次评审流程",
+      "body": "## 流程\n1. 标注方交付 batch_id + 随机抽 500 条\n2. 我抽 100 条复标，算 kappa 和错误率\n3. kappa <0.75 退回返修；≥0.75 进仲裁池再抽 50 条\n4. 仲裁完更新标注规范，版本号 +0.1\n\n每批留抽查记录，按周对齐批次数。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:labeling",
+      "tags": ["标注", "评审", "流程"],
+      "valid_from": "2026-07-05",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "GPU 排队与抢占流程",
+      "body": "## 规则\n1. 训练任务提前 2 天登记：卡数、预估时长、优先级\n2. 优先级：线上故障 > 上线实验 > 离线探索；P0 可抢占 P2\n3. 被抢占任务自动存 checkpoint，从最后 step 续\n4. 单任务单次最多 8 卡 24h，超时重新排队\n\nA100 池 32 卡，周一到周四晚上最挤。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:infra",
+      "tags": ["GPU", "排队", "infra"],
+      "valid_from": "2026-06-25",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "数据集版本发布流程",
+      "body": "## 发布前\n1. 导出脚本 commit hash 写进 manifest\n2. 行数、正样本率、去重后样本量对比上一版，差 >5% 要写原因\n3. 抽 1 万条人工看 20 条，确认字段没串\n\n版本号：v3.3 → v3.4 只加数据不改口径；改口径升大版本。发完群里同步 changelog。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:infra",
+      "tags": ["数据", "版本", "流程"],
+      "valid_from": "2026-09-20",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "A/B 实验上线与停机步骤",
+      "body": "## 上线\n1. 建实验 AB-xxxx，分流 10%，先跑 1 天看埋点\n2. 确认曝光/点击日志带 experiment_id\n3. 第 7 天出中期结论，不显著就停\n\n## 停机\n停实验后对照组再留 3 天，指标回落后才推全量。哪一步不对，先停再查。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["A/B", "上线", "流程"],
+      "valid_from": "2026-08-05",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "模型版本回滚 SOP",
+      "body": "## 顺序（别搞反）\n1. 先切流量：新版本从 100% 降到 0，观察 3 分钟\n2. 再回滚模型：拉上一版镜像 tag，滚动重启\n3. 特征开关回默认关\n4. 30 分钟内出事故简报：影响面、时间线、指标\n\n回滚不算失败，硬扛才算。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:infra",
+      "tags": ["回滚", "SOP", "线上"],
+      "valid_from": "2026-10-12",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.95
+    },
+    {
+      "title": "EXP-231 跑三 seed 记录",
+      "body": "2026-08-08 到 08-10，A100 8 卡，seq_len=50，batch 2048，lr 1e-4，neg 1:4，seed 0/1/2。\n\n单 seed 4.6h，GAUC 0.7253 / 0.7257 / 0.7255，波动 ±0.0004；显存峰值 39.9GB。第三卡 OOM 一次，batch 降到 1792 后通过。config hash 3f9a2c1e。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["EXP-231", "序列", "seed"],
+      "valid_from": "2026-08-11",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "EXP-233 v3.3 重跑记录",
+      "body": "2026-09-10 用 ds-v3.3 重跑 DIN-v2 基线：样本 1.86 亿，neg 1:4，seq 50，2 卡 A100 跑 5.2h。\n\nGAUC 0.7244（v3.2 上是 0.7255，差 -0.0011），LogLoss 0.1932 → 0.1901。平台显示曝光去重生效，正样本率 5.2%；别把 -0.0011 当退化。",
+      "kind": "episodic",
+      "trust": "system_derived",
+      "scope": "project:rec-v2",
+      "tags": ["EXP-233", "数据集", "重跑"],
+      "valid_from": "2026-09-10",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "EXP-247 负样本串号 bug 复盘",
+      "body": "08-25 发现 EXP-247 负样本串到前一天分区，负样本里混进 3.1% 正样本，GAUC 虚高 0.009。\n\n## 原因\n采样脚本用日期字符串拼路径，跨天分区没对齐，跑批在 00:10 用了错误日期。\n\n## 修复\n改读 manifest 的 partition_id，加行数校验；EXP-247 作废重跑。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:rec-v2",
+      "tags": ["EXP-247", "bug", "负采样"],
+      "valid_from": "2026-08-27",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "10-08 线上 CTR 抖动 12 分钟",
+      "body": "10-08 21:14–21:26，CTR 从 4.8% 掉到 3.9%，持续 12 分钟，影响约 9.6 万次曝光。\n\n## 原因\n特征服务扩容后新实例没加载用户序列缓存，冷启动走兜底，序列特征空值率飙到 62%。\n\n## 处理\n扩容改成灰度 + 预热 5 分钟；监控加特征空值率告警，阈值 15%。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:infra",
+      "tags": ["事故", "CTR", "特征"],
+      "valid_from": "2026-10-08",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "LB-118 标注批次返工",
+      "body": "07-20 那批 LB-118，5000 条抽 500 算 kappa=0.68，没到 0.75，整批返修。分歧集中在「曝光未点击算不算负样本」和品类打标粒度。\n\n返工 3 天，重标后 kappa 0.79、错误率 2.2%。教训：这两个点规范里必须写例子，不能只写定义。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:labeling",
+      "tags": ["LB-118", "返工", "kappa"],
+      "valid_from": "2026-07-22",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "09-01 GPU 排队 17 小时",
+      "body": "09-01 09:20 提交 8 卡 A100 任务，前面排 3 个 P0 和 2 个上线实验，02:10 才跑起来，等了 16.8 小时。\n\n## 原因\n月底冲指标 P0 扎堆；排队表没填预估时长，调度没法插空。\n\n之后规定：登记必填预估时长，超 6h 的任务拆成多段跑。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:infra",
+      "tags": ["GPU", "排队", "事故"],
+      "valid_from": "2026-09-01",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "AB-0921 分流结果",
+      "body": "09-15 到 09-22，AB-0921 测 SIM 排序，10% 流量约 140 万曝光/组。CTR 4.82% vs 4.75%，+0.07pp，p=0.048，勉强显著；人均时长 +1.9s，不显著。\n\n结论：上线，但先推 50%，观察一周再全量。",
+      "kind": "episodic",
+      "trust": "system_derived",
+      "scope": "project:rec-v2",
+      "tags": ["AB-0921", "SIM", "分流"],
+      "valid_from": "2026-09-25",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "10-16 训练管线 OOM 事故",
+      "body": "10-16 下午跑 SIM-v1.3 预训练，开跑 40 分钟 OOM，卡在 embedding 表加载。新品类加了 200 万 id，embedding 初始化策略没改。\n\n## 处理\n改成分片加载 + 硬限 1.2 亿参数/卡；任务重排到 10-17 凌晨。损失约 6 个 GPU 小时。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:infra",
+      "tags": ["OOM", "训练", "事故"],
+      "valid_from": "2026-10-16",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "query": "序列特征最后截到多少步来着？",
+      "gold": ["EXP-231 序列截断改到 50"],
+      "answerable": true,
+      "why": "结论笔记记了 v2.3 起 seq_len=50"
+    },
+    {
+      "id": "q02",
+      "query": "召回那个 topK 最后定多少？",
+      "gold": ["双塔召回 topK=200 的依据"],
+      "answerable": true,
+      "why": "离线评估笔记定 K=200"
+    },
+    {
+      "id": "q03",
+      "query": "校准现在分几个桶？",
+      "gold": ["ECE 分桶校准 12 桶"],
+      "answerable": true,
+      "why": "校准笔记写 12 个等频桶"
+    },
+    {
+      "id": "q04",
+      "query": "SIM 换上去之后 GAUC 涨了多少？",
+      "gold": ["SIM 替换 DIN-v2 上线"],
+      "answerable": true,
+      "why": "上线记录有 +0.0043"
+    },
+    {
+      "id": "q05",
+      "query": "线上模型回滚第一步是啥？",
+      "gold": ["模型版本回滚 SOP"],
+      "answerable": true,
+      "why": "SOP 第一步先切流量"
+    },
+    {
+      "id": "q06",
+      "query": "线上实验要多少曝光才算够？",
+      "gold": ["A/B 最小样本量算法"],
+      "answerable": true,
+      "why": "样本量笔记写单组 120 万曝光"
+    },
+    {
+      "id": "q07",
+      "query": "效果变差的时候从哪开始查？",
+      "gold": ["bad case 分析三步"],
+      "answerable": true,
+      "why": "bad case 笔记给分桶→特征→标签三步"
+    },
+    {
+      "id": "q08",
+      "query": "10 月 8 号晚上 CTR 为什么抖？",
+      "gold": ["10-08 线上 CTR 抖动 12 分钟"],
+      "answerable": true,
+      "why": "事故记录写明缓存未加载"
+    },
+    {
+      "id": "q09",
+      "query": "EXP-247 那次到底什么 bug？",
+      "gold": ["EXP-247 负样本串号 bug 复盘"],
+      "answerable": true,
+      "why": "复盘笔记写负样本串分区"
+    },
+    {
+      "id": "q10",
+      "query": "标注交付之后我这边要过哪几关？",
+      "gold": ["标注批次评审流程"],
+      "answerable": true,
+      "why": "流程笔记写了复标、返修、仲裁四步"
+    },
+    {
+      "id": "q11",
+      "query": "线上到底看 GAUC 还是 AUC？DIN-v2 跑多少来着？",
+      "gold": ["GAUC 按曝光≥5 用户加权", "DIN-v2 仍是线上主力"],
+      "answerable": true,
+      "why": "指标口径和线上基线分别记在两条"
+    },
+    {
+      "id": "q12",
+      "query": "v3.2 和 v3.3 差在哪？现在该用哪个？",
+      "gold": ["数据集 v3.2 是训练基准", "v3.3 数据集正式替换 v3.2"],
+      "answerable": true,
+      "why": "新旧两条数据集笔记各记一半"
+    },
+    {
+      "id": "q13",
+      "query": "负采样之前几比几，后来改到多少？",
+      "gold": ["负采样 1:4 是当前基准", "负采样改 1:8 的结论"],
+      "answerable": true,
+      "why": "旧值在基准笔记、新结论在 EXP-238 笔记"
+    },
+    {
+      "id": "q14",
+      "query": "EXP-231 结论是啥？跑了几个 seed？",
+      "gold": ["EXP-231 序列截断改到 50", "EXP-231 跑三 seed 记录"],
+      "answerable": true,
+      "why": "结论和跑批细节分两条记"
+    },
+    {
+      "id": "q15",
+      "query": "标注那批返工是因为一致性没过吗？门槛多少？",
+      "gold": ["标注一致性门槛 kappa≥0.75", "LB-118 标注批次返工"],
+      "answerable": true,
+      "why": "门槛在规范笔记、返工原因在事故笔记"
+    },
+    {
+      "id": "q16",
+      "query": "GPU 排队都怎么排的？上次等了多久？",
+      "gold": ["GPU 排队与抢占流程", "09-01 GPU 排队 17 小时"],
+      "answerable": true,
+      "why": "规则和那次等待时长分两条"
+    },
+    {
+      "id": "q17",
+      "query": "EXP-255 那个多目标实验后来怎样了？",
+      "gold": [],
+      "answerable": false,
+      "why": "库里没有 EXP-255，也没记过多目标实验"
+    },
+    {
+      "id": "q18",
+      "query": "校准的 NLL 是多少来着？",
+      "gold": [],
+      "answerable": false,
+      "why": "只记了 ECE 和桶内偏差，没有 NLL"
+    },
+    {
+      "id": "q19",
+      "query": "去年双十一大盘涨了多少？",
+      "gold": [],
+      "answerable": false,
+      "why": "笔记只覆盖 2026 年 6 月之后，查不到去年大盘"
+    },
+    {
+      "id": "q20",
+      "query": "下一个数据集版本什么时候发？",
+      "gold": [],
+      "answerable": false,
+      "why": "只记了版本号语义，没记发布时间"
+    },
+    {
+      "id": "q21",
+      "query": "AB-1013 那个实验显著吗？",
+      "gold": [],
+      "answerable": false,
+      "why": "只跑过 AB-0921，没有 AB-1013"
+    },
+    {
+      "id": "q22",
+      "query": "竞品召回用的什么结构？",
+      "gold": [],
+      "answerable": false,
+      "why": "笔记里没有任何竞品信息"
+    },
+    {
+      "id": "q23",
+      "query": "下周 on-call 排到谁了？",
+      "gold": [],
+      "answerable": false,
+      "why": "没记过排班"
+    },
+    {
+      "id": "q24",
+      "query": "上个月 GPU 花销多少？",
+      "gold": [],
+      "answerable": false,
+      "why": "只记卡数和排队时长，没有费用"
+    }
+  ]
+}

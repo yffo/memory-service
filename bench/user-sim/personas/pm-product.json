@@ -1,0 +1,693 @@
+{
+  "persona": "pm-product",
+  "notes": [
+    {
+      "title": "我负责审批流和报表两条产品线",
+      "body": "林岚，34 岁，B 端 SaaS 产品经理。\n\n- 产品线：审批流（approval）和报表（reporting）\n- 客户结构：中大型企业为主，私有化占 40%\n- 当前重心：2.4 条件分支 + 报表自助取数\n\n判断标准：能不能让客户少问一句「这个数怎么来的」。",
+      "kind": "core",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "身份",
+        "产品线",
+        "B端"
+      ],
+      "valid_from": "2026-06-01",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.95
+    },
+    {
+      "title": "需求评审前的五项检查",
+      "body": "## 评审前必查\n1. 客户原话有没有？（不是销售的转述）\n2. 影响的客户数、单量占比\n3. 不做会怎样，谁承担\n4. 研发粗估人日，超过 15 人日单独过\n5. 上线后看哪个指标\n\n6 月起按这个走，评审会从 90 分钟压到 45 分钟。",
+      "kind": "procedural",
+      "trust": "system_derived",
+      "scope": "project:approval",
+      "tags": [
+        "流程",
+        "评审",
+        "清单"
+      ],
+      "valid_from": "2026-06-05",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "审批节点上限定 12 个",
+      "body": "结论：审批流单流程节点上限先定 12 个。\n\n依据：恒瑞医药的采购审批有 11 级（业务员→大区→财务→法务→副总），留 1 级余量。\n\n研发提醒节点多了性能会掉，2.3 先按 12 上，观察一个季度再说。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "审批流",
+        "节点",
+        "限制"
+      ],
+      "valid_from": "2026-06-10",
+      "valid_to": "2026-08-12",
+      "supersedes": null,
+      "confidence": 0.7
+    },
+    {
+      "title": "华润物流访谈：要按金额分级审批",
+      "body": "2026-06-12，华润物流，张经理（IT 总监）。\n\n诉求：按金额分级——5 万以下主管批，5–20 万部门总监，20 万以上副总。现在一条线全走副总，平均卡 2 天。\n\n原话：「不是慢，是不敢批。」\n\n待办：6-20 前给分级方案草图。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "华润物流",
+        "访谈",
+        "分级审批"
+      ],
+      "valid_from": "2026-06-12",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "审批流暂不做并行会签",
+      "body": "## 结论\n2.4 只做串行会签，并行会签放到 2.5 再评估。\n\n## 为什么不做\n- 驳回后的状态合并要重写，研发估 18 人日\n- 12 家客户里只有华润物流提过\n- 2.4 只剩 6 周，主线是条件分支\n\n先记着，评审会上别被带跑。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "审批流",
+        "会签",
+        "排期"
+      ],
+      "valid_from": "2026-06-18",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.82
+    },
+    {
+      "title": "报表默认按提交时间统计",
+      "body": "结论：报表默认时间口径用提交时间，不用审批完成时间。\n\n销售和客户成功对不上数就是这原因——Q2 有两个客户拿完成时间跟我对账，差了 7%。\n\n例外：财务对账单独给「完成时间」视图，不做默认。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:reporting",
+      "tags": [
+        "报表",
+        "指标口径",
+        "时间"
+      ],
+      "valid_from": "2026-06-25",
+      "valid_to": "2026-09-28",
+      "supersedes": null,
+      "confidence": 0.78
+    },
+    {
+      "title": "排期按人日乘 1.4 缓冲",
+      "body": "结论：对外排期 = 研发估的人日 × 1.4。\n\n依据：2026 上半年 18 个需求，实际耗时平均是初估的 1.38 倍，最离谱的一个 2.6 倍（条件分支）。\n\n例外：纯文案/配置类不乘系数。乘完还要跟研发对一遍，别自己拍。",
+      "kind": "procedural",
+      "trust": "system_derived",
+      "scope": "project:approval",
+      "tags": [
+        "排期",
+        "估算",
+        "缓冲"
+      ],
+      "valid_from": "2026-06-29",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "年付折扣底线 9 折",
+      "body": "结论：年付合同折扣底线 9 折，低于 9 折要单独申请。\n\n参照：星辰零售 2026-06 签的 3 年单，9 折，ARR 42 万。销售嫌折扣少，但那时候续费率还有 91%，没必要让。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:pricing",
+      "tags": [
+        "定价",
+        "折扣",
+        "年付"
+      ],
+      "valid_from": "2026-06-30",
+      "valid_to": "2026-08-26",
+      "supersedes": null,
+      "confidence": 0.78
+    },
+    {
+      "title": "客户访谈 30 分钟提纲",
+      "body": "## 开场（3 分钟）\n说明目的，不推销，不承诺路线图。\n\n## 主体（20 分钟）\n1. 现在这个流程谁在跑，跑几步\n2. 最近一次卡住是什么时候\n3. 卡住之后怎么绕过去的（这个最重要）\n4. 如果只能改一处，改哪\n\n## 收尾（7 分钟）\n复述一遍我听到的，当场确认。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "访谈",
+        "提纲",
+        "客户"
+      ],
+      "valid_from": "2026-07-01",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.88
+    },
+    {
+      "title": "私有化部署报价底线 18 万",
+      "body": "结论：标准私有化（不含定制）底价 18 万/年，低于 18 万要我和财务双签。\n\n参照：中远重工 2026-07 签 21 万，含 2 个接口。\n\n销售老周总想 15 万拿单，别松口——松一次，后面全按这个价谈。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:pricing",
+      "tags": [
+        "定价",
+        "私有化",
+        "底线"
+      ],
+      "valid_from": "2026-07-02",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "恒瑞医药访谈：分级按部门不按金额",
+      "body": "2026-07-03，恒瑞医药，采购部李工。\n\n也要分级审批，但按部门分：研发采购走研发总监，行政采购走行政。金额只做兜底（>50 万加财务）。\n\n跟华润的诉求撞了——同样是「分级」，维度不一样。条件分支得支持两种维度，不然两个都满足不了。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "恒瑞医药",
+        "访谈",
+        "分级审批"
+      ],
+      "valid_from": "2026-07-03",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "移动端审批只做通过和驳回",
+      "body": "结论：移动端 2.4 只做通过/驳回，加签、转办、改流程都不做。\n\n理由：移动端 87% 的操作是「点通过」，加签在手机上选人体验很差（访谈里 4 个客户都吐槽过）。\n\n待办：10-20 前把「请到 PC 端操作」的提示文案定了。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "移动端",
+        "审批",
+        "范围"
+      ],
+      "valid_from": "2026-07-08",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "报价审批走三步",
+      "body": "## 流程\n销售发起 → 我核折扣和交付范围 → 财务核毛利 → 出正式报价单。\n\n## 红线\n- 折扣低于底线：我 + 财务双签\n- 定制开发：必须带研发评估，不接受口头承诺\n- 报价单有效期默认 30 天\n\n平均 2 个工作日，急单走群里 @我。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:pricing",
+      "tags": [
+        "报价",
+        "流程",
+        "审批"
+      ],
+      "valid_from": "2026-07-14",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "2.4 排期会砍掉并行会签",
+      "body": "2026-07-21，跟研发过 2.4 排期。\n\n结论：并行会签砍掉，串行会签保留；条件分支是主线，占 22 人日。\n\n研发问能不能顺手把移动端加签做了，我否了——移动端只做通过/驳回。\n\n目标上线 09-15，留 2 周灰度。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "排期",
+        "2.4",
+        "研发"
+      ],
+      "valid_from": "2026-07-21",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.88
+    },
+    {
+      "title": "灰度先放 5% 华东区",
+      "body": "结论：2.4 灰度先放 5% 流量，只开华东区，跑两周。\n\n华东客户 37 家，占审批单量 31%，出问题影响面可控，客服也都在上海。\n\n待办：9-01 前把回滚开关演练一遍。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "灰度",
+        "2.4",
+        "华东"
+      ],
+      "valid_from": "2026-07-22",
+      "valid_to": "2026-10-06",
+      "supersedes": null,
+      "confidence": 0.7
+    },
+    {
+      "title": "竞品对比表固定六列",
+      "body": "## 模板\n竞品 | 版本/报价 | 审批能力 | 报表能力 | 集成方式 | 我们的差异点\n\n## 规矩\n- 每格必须有来源，销售转述标「待核」\n- 报价写清席位和年限\n- 只对比客户实际在用的 2 家，不做大全\n\n给华润做的对比表就按这个，6 列刚好一页。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:pricing",
+      "tags": [
+        "竞品",
+        "模板",
+        "对比"
+      ],
+      "valid_from": "2026-07-28",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "指标口径变更要三处同步",
+      "body": "## 流程\n改口径必须同步三处，缺一处就有人拿旧数来吵：\n1. 报表页脚的口径说明 + 版本号\n2. 客户成功/销售的群公告\n3. 给已订阅该报表的客户发站内信\n\n变更记录写进季度复盘，注明生效日期和影响范围。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:reporting",
+      "tags": [
+        "指标口径",
+        "流程",
+        "同步"
+      ],
+      "valid_from": "2026-08-04",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.82
+    },
+    {
+      "title": "蓝海教育因报表导出慢丢单",
+      "body": "2026-08-05 销售复盘听到的：蓝海教育 28 万的单子丢了。\n\n原因不是功能，是他们导 10 万行报表要等 40 秒，竞品 8 秒，销售说客户当场就不太想聊了。\n\n我的判断：导出性能排进 2.5，先做 Excel 不做 PDF——问过的 5 个客户里只有 1 个要 PDF。\n\n待办：8-15 前要一个导出耗时基线。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:reporting",
+      "tags": [
+        "蓝海教育",
+        "丢单",
+        "导出"
+      ],
+      "valid_from": "2026-08-05",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "周报就写三行",
+      "body": "## 模板\n1. 本周结论：做完了什么，没做完的卡在哪\n2. 风险：需要谁在什么时候之前决定什么\n3. 下周：只写三件最重要的事\n\n## 规矩\n不写过程，不写「持续推进」，数字要带口径。超过半页就是没想清楚。\n\n8 月开始用，第一次写花了 45 分钟。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "周报",
+        "模板",
+        "习惯"
+      ],
+      "valid_from": "2026-08-08",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "审批节点上限收到 8 个",
+      "body": "结论：单流程节点上限 12 → 8。\n\n数据：超过 8 个节点的流程平均审批时长 6.2h → 31h，完成率掉到 64%（样本 2026 上半年 1,840 条流程）。\n\n对客：建议拆主流程 + 子流程；已配 12 节点的 3 家客户给 3 个月迁移期。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "审批流",
+        "节点",
+        "限制"
+      ],
+      "valid_from": "2026-08-12",
+      "valid_to": null,
+      "supersedes": "审批节点上限定 12 个",
+      "confidence": 0.8
+    },
+    {
+      "title": "Q2 月活 3,760，口径含试用",
+      "body": "2026-08-14 运营同步的 Q2 数据：\n\n- 报表模块月活 3,760（含试用账号）\n- 去掉试用是 3,180\n- 审批模块月活 5,240\n\n注意：Q2 报给管理层的数含试用，Q3 打算改口径，到时候别拿两个数直接比。",
+      "kind": "episodic",
+      "trust": "system_derived",
+      "scope": "project:reporting",
+      "tags": [
+        "月活",
+        "Q2",
+        "指标口径"
+      ],
+      "valid_from": "2026-08-14",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.75
+    },
+    {
+      "title": "年付折扣底线降到 8.5 折",
+      "body": "结论：年付折扣底线 9 折 → 8.5 折，8.5 以下仍要双签。\n\n原因：Q3 提前续约的 7 家里 3 家拿竞品报价来压，最后两家给了 8.8 折才签。\n\n注意：报价单先报 9 折，别一上来就写 8.5。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:pricing",
+      "tags": [
+        "定价",
+        "折扣",
+        "续约"
+      ],
+      "valid_from": "2026-08-26",
+      "valid_to": null,
+      "supersedes": "年付折扣底线 9 折",
+      "confidence": 0.75
+    },
+    {
+      "title": "灰度首周通过率 92%",
+      "body": "2026-09-09 看灰度首周数据（华东 5%）：\n\n- 审批通过率 92%，大盘 89%\n- 平均审批时长 4.1 小时，灰度前 5.6 小时\n- P2 问题 2 个，都是分组权限显示错，已修\n- 回滚 0 次\n\n结论：可以扩，但先等 9-15 正式版发完。",
+      "kind": "episodic",
+      "trust": "system_derived",
+      "scope": "project:approval",
+      "tags": [
+        "灰度",
+        "通过率",
+        "数据"
+      ],
+      "valid_from": "2026-09-09",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "灰度发布检查清单",
+      "body": "## 灰度前\n- 回滚开关演练过（不是只在文档里）\n- 客服话术 + 工单标签就位\n- 埋点能按客户维度拆\n\n## 灰度中\n- 每天 10:00 看通过率、失败率、平均时长\n- P1 问题 30 分钟内回滚\n\n## 灰度后\n一周内出复盘，写清楚扩不扩、为什么。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "灰度",
+        "发布",
+        "清单"
+      ],
+      "valid_from": "2026-09-10",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "Q3 月活 4,180，去掉试用口径",
+      "body": "2026-09-17 Q3 指标复盘：\n\n- 报表月活 4,180（已去掉试用，新口径）\n- 比 Q2 的 3,760 高 11%，但口径不同，严谨说不可直接比\n- 自助取数使用率 23%，目标 30%，没达成\n- 导出失败率 0.8%\n\n待办：10-10 前把新旧口径对照表发出去。",
+      "kind": "episodic",
+      "trust": "system_derived",
+      "scope": "project:reporting",
+      "tags": [
+        "月活",
+        "Q3",
+        "指标"
+      ],
+      "valid_from": "2026-09-17",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.78
+    },
+    {
+      "title": "竞品钉钉专属版报价 12.8 万起",
+      "body": "外部信息，待核：钉钉专属版 2026 年报价 12.8 万起（50 席），含审批 + 基础报表，定制另算。\n\n来源是渠道商给的报价单截图，不是官方口径。\n\n影响：我们 18 万的私有化底线在 50 席以下客户那里会被比价，得准备「贵在哪」的话术。",
+      "kind": "semantic",
+      "trust": "external",
+      "scope": "project:pricing",
+      "tags": [
+        "竞品",
+        "钉钉",
+        "报价"
+      ],
+      "valid_from": "2026-09-20",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.6
+    },
+    {
+      "title": "报表默认口径换成完成时间",
+      "body": "结论：默认时间口径改回完成时间，推翻 6 月那版。\n\n触发：Q3 复盘时 6 家客户里 5 家按完成时间看人效，提交时间他们看不懂。\n\n切换 10-15，旧报表保留「按提交时间」筛选，提前发公告。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:reporting",
+      "tags": [
+        "报表",
+        "指标口径",
+        "时间"
+      ],
+      "valid_from": "2026-09-28",
+      "valid_to": null,
+      "supersedes": "报表默认按提交时间统计",
+      "confidence": 0.72
+    },
+    {
+      "title": "灰度扩到全区域 10%",
+      "body": "结论：灰度从华东 5% 扩到全区域 10%，10-06 起。\n\n首周没出 P1/P2 问题，华东通过率 92%（大盘 89%），没必要继续缩着。\n\n保留开关，出问题 30 分钟内回滚到 5%。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "灰度",
+        "范围",
+        "2.4"
+      ],
+      "valid_from": "2026-10-06",
+      "valid_to": null,
+      "supersedes": "灰度先放 5% 华东区",
+      "confidence": 0.8
+    },
+    {
+      "title": "我的习惯：先问「不做会怎样」",
+      "body": "## 习惯\n任何需求先问：不做会怎样？答不上来就是伪需求。\n\n## 配套\n- 写结论必须带理由和「为什么不做」\n- 待办用日期开头，比如「10-20 前给华润回复」\n- 会上当场记结论，不靠回忆补\n\n用了一年多，砍掉的伪需求大概占三成。",
+      "kind": "core",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "习惯",
+        "决策",
+        "备忘"
+      ],
+      "valid_from": "2026-10-08",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "华润物流续约有风险",
+      "body": "2026-10-14 客户成功同步：华润物流续约意向不明。\n\n原因两条：\n1. 他们 11 月要过等保，我们私有化版本的安全报告还没给\n2. 竞品报价比我们低 30%\n\n合同 12-31 到期，金额 36 万。我的意见：先给安全报告，价格等他们开口再谈，别主动降。\n\n待办：10-20 前推动安全报告。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:approval",
+      "tags": [
+        "华润物流",
+        "续约",
+        "风险"
+      ],
+      "valid_from": "2026-10-14",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.82
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "query": "一条审批流最多能放几个节点来着？",
+      "gold": [
+        "审批节点上限收到 8 个"
+      ],
+      "answerable": true,
+      "why": "库里有新旧两个上限，只有 8 月的新结论给出当前答案 8 个。"
+    },
+    {
+      "id": "q02",
+      "query": "移动端现在能加签吗？",
+      "gold": [
+        "移动端审批只做通过和驳回"
+      ],
+      "answerable": true,
+      "why": "明确写了移动端只做通过/驳回，不加签。"
+    },
+    {
+      "id": "q03",
+      "query": "私有化最低报到多少？",
+      "gold": [
+        "私有化部署报价底线 18 万"
+      ],
+      "answerable": true,
+      "why": "私有化底价 18 万写在报价底线那条里。"
+    },
+    {
+      "id": "q04",
+      "query": "年付最低能打到几折？",
+      "gold": [
+        "年付折扣底线降到 8.5 折"
+      ],
+      "answerable": true,
+      "why": "8 月更新后的底线是 8.5 折。"
+    },
+    {
+      "id": "q05",
+      "query": "并行会签上次为啥说不做？",
+      "gold": [
+        "审批流暂不做并行会签"
+      ],
+      "answerable": true,
+      "why": "笔记写清了不做的三条理由。"
+    },
+    {
+      "id": "q06",
+      "query": "灰度现在放到多大比例了？",
+      "gold": [
+        "灰度扩到全区域 10%"
+      ],
+      "answerable": true,
+      "why": "10-06 的决定把灰度扩到全区域 10%。"
+    },
+    {
+      "id": "q07",
+      "query": "报表默认按哪个时间算？",
+      "gold": [
+        "报表默认口径换成完成时间"
+      ],
+      "answerable": true,
+      "why": "9-28 的新结论把默认口径换成完成时间。"
+    },
+    {
+      "id": "q08",
+      "query": "华润那个续约风险是咋回事？",
+      "gold": [
+        "华润物流续约有风险"
+      ],
+      "answerable": true,
+      "why": "华润续约风险有单独一条，含等保和竞品报价两条原因。"
+    },
+    {
+      "id": "q09",
+      "query": "渠道商给的钉钉报价是多少来着？",
+      "gold": [
+        "竞品钉钉专属版报价 12.8 万起"
+      ],
+      "answerable": true,
+      "why": "钉钉报价记在外部信息那条，12.8 万起。"
+    },
+    {
+      "id": "q10",
+      "query": "排期一般要加多少缓冲？",
+      "gold": [
+        "排期按人日乘 1.4 缓冲"
+      ],
+      "answerable": true,
+      "why": "排期缓冲系数 1.4 写在流程笔记里。"
+    },
+    {
+      "id": "q11",
+      "query": "华润和恒瑞都要分级审批，差在哪？",
+      "gold": [
+        "华润物流访谈：要按金额分级审批",
+        "恒瑞医药访谈：分级按部门不按金额"
+      ],
+      "answerable": true,
+      "why": "两个访谈各给了一种分级维度，必须两条合起来才比得出来。"
+    },
+    {
+      "id": "q12",
+      "query": "Q3 月活跟 Q2 比涨了多少，能直接比吗？",
+      "gold": [
+        "Q3 月活 4,180，去掉试用口径",
+        "Q2 月活 3,760，口径含试用"
+      ],
+      "answerable": true,
+      "why": "涨幅要用 Q3 的 4,180 和 Q2 的 3,760 两个数，口径差异也分记在两条里。"
+    },
+    {
+      "id": "q13",
+      "query": "报表默认口径之前不是提交时间吗，怎么又改了？",
+      "gold": [
+        "报表默认按提交时间统计",
+        "报表默认口径换成完成时间"
+      ],
+      "answerable": true,
+      "why": "旧口径和推翻它的新结论分别在两条笔记，要对照才知道为什么改。"
+    },
+    {
+      "id": "q14",
+      "query": "上次排期会为什么把并行会签砍了，移动端加签也否了？",
+      "gold": [
+        "2.4 排期会砍掉并行会签",
+        "移动端审批只做通过和驳回"
+      ],
+      "answerable": true,
+      "why": "一条讲排期会怎么砍的，一条讲移动端范围，合起来才答全。"
+    },
+    {
+      "id": "q15",
+      "query": "年付折扣谈到 8 折，后面要走什么流程？",
+      "gold": [
+        "报价审批走三步",
+        "年付折扣底线降到 8.5 折"
+      ],
+      "answerable": true,
+      "why": "8 折低于 8.5 的底线，走的是报价流程里的双签，两条缺一不可。"
+    },
+    {
+      "id": "q16",
+      "query": "灰度扩到 10% 是看了什么数据定的？",
+      "gold": [
+        "灰度扩到全区域 10%",
+        "灰度首周通过率 92%"
+      ],
+      "answerable": true,
+      "why": "扩量的决定和支撑它的首周数据分属两条。"
+    },
+    {
+      "id": "q17",
+      "query": "上次跟众安保险聊的移动端需求，后来怎么定的？",
+      "gold": [],
+      "answerable": false,
+      "why": "笔记里没有众安保险这个客户。"
+    },
+    {
+      "id": "q18",
+      "query": "去年 Q4 的续费率是多少？",
+      "gold": [],
+      "answerable": false,
+      "why": "笔记只从 2026 年 6 月开始，没有 2025 年 Q4 的续费率。"
+    },
+    {
+      "id": "q19",
+      "query": "海外版什么时候上线？",
+      "gold": [],
+      "answerable": false,
+      "why": "没有任何海外版或上线时间的记录。"
+    },
+    {
+      "id": "q20",
+      "query": "蓝海教育续约谈到哪一步了？",
+      "gold": [],
+      "answerable": false,
+      "why": "蓝海只有一条丢单记录，没有续约进展。"
+    },
+    {
+      "id": "q21",
+      "query": "1.8 版本当时为什么没做条件分支？",
+      "gold": [],
+      "answerable": false,
+      "why": "笔记里最早只提到 2.3 和 2.4，没有 1.8 版本。"
+    },
+    {
+      "id": "q22",
+      "query": "销售老周上季度的提成怎么算的？",
+      "gold": [],
+      "answerable": false,
+      "why": "老周只在定价笔记里出现，没有提成规则。"
+    },
+    {
+      "id": "q23",
+      "query": "2026 年 5 月的月活是多少？",
+      "gold": [],
+      "answerable": false,
+      "why": "月活只有 Q2、Q3 汇总，没有 2026 年 5 月单月。"
+    },
+    {
+      "id": "q24",
+      "query": "飞书审批的报价是多少？",
+      "gold": [],
+      "answerable": false,
+      "why": "竞品报价只记了钉钉，没有飞书。"
+    }
+  ]
+}

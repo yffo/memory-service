@@ -412,6 +412,38 @@ test('覆盖率闸是配置项：--min-coverage 调低就放行，调高就拦�
   assert.equal(loose.refused, false, '把闸门放到 0 必须能放行；否则说明它根本没接上');
 });
 
+test('refuse:false 是检索口径：覆盖率不够也把最像的给出去，但不许把「不拒」当成「证据足」', () => {
+  const q = '代理节点的数据库连接池最多允许多少个连接';
+  const qa = recall({ entries: BIG, query: q, options: { nowMs: NOW } });
+  const search = recall({ entries: BIG, query: q, options: { nowMs: NOW, refuse: false } });
+  assert.equal(qa.refused, true, 'QA 口径该拒');
+  assert.equal(qa.policy, 'qa');
+  assert.equal(search.refused, false, '检索口径不拒答');
+  assert.equal(search.policy, 'search');
+  assert.ok(search.items.length > 0, '检索口径必须给出候选，否则调用方没东西可用');
+  // 关键：放出去不等于证据充分 —— 每条仍要带 coverage，宿主据此自己判断。
+  assert.ok(search.items.every((it) => typeof it.score.coverage === 'number'));
+  assert.ok(
+    search.items.every((it) => it.score.coverage < qa.thresholds.minCoverage),
+    '这几条本来就过不了覆盖率闸，否则这个用例是空转的',
+  );
+});
+
+test('refuse:false 不推翻「只有外部低信任命中」：那是宿主自己的判断', () => {
+  const external = entry('ext', '第三方评测：widget 的构建命令是 make -j8。');
+  external.note = { ...external.note, trust: 'external' };
+  const entries = [
+    external,
+    ...Array.from({ length: 5 }, (_, i) => entry(`fill-${i}`, `无关记录 ${i}：天气和日程。`)),
+  ];
+  const qa = recall({ entries, query: 'widget 构建命令', options: { nowMs: NOW } });
+  const search = recall({ entries, query: 'widget 构建命令', options: { nowMs: NOW, refuse: false } });
+  assert.equal(qa.refused, true);
+  assert.equal(qa.reason, 'only_external_low_trust');
+  assert.equal(search.refused, false, '检索口径把原文交给宿主，由宿主决定信不信');
+  assert.equal(search.items[0].trust, 'external');
+});
+
 test('覆盖率闸传 null/NaN 不能把闸门悄悄关掉（fail-closed）', () => {
   const q = '代理节点的数据库连接池最多允许多少个连接';
   // 先确认默认阈值下这条会被拦（否则这个用例是空转的）

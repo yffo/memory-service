@@ -1,0 +1,693 @@
+{
+  "persona": "personal-ops",
+  "notes": [
+    {
+      "title": "我的基本资料",
+      "body": "陈默，1985 年 3 月生，今年 41 岁。住城西梧桐路 62 号 3 单元 502，租的。身高 175，体重 78 公斤，O 型血。青霉素过敏，看病要跟医生说。身份证和医保卡放在书桌右边第一个抽屉。",
+      "kind": "core",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "本人",
+        "基本信息"
+      ],
+      "valid_from": "2026-06-01",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.95
+    },
+    {
+      "title": "家人和紧急联系人",
+      "body": "老婆林岚，手机 139 0000 8866，紧急联系人填她。妈 67 岁，在湖州老家，有高血压，每天吃药。爸 68 岁，膝盖不好，走路多了会疼。家里有事先打林岚电话，她白天上班也能接。",
+      "kind": "core",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "家人",
+        "紧急联系人"
+      ],
+      "valid_from": "2026-06-03",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.9
+    },
+    {
+      "title": "房东电话-维修",
+      "body": "房东姓周，平时叫他周哥，电话 137 8890 2145。房子月租 4200，押一付三。东西坏了先微信他说一声，水管、电路这些他找人修，别自己拆，拆坏了算我们的。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:home",
+      "tags": [
+        "租房",
+        "房东",
+        "电话"
+      ],
+      "valid_from": "2026-06-08",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.9
+    },
+    {
+      "title": "物业电话-旧",
+      "body": "小区物业前台 0571-8830 2214，报修上午 8:30 到 11:30 有人接；晚上停水停电打值班手机 137 5566 0219。电梯里的对讲按三秒就通，交物业费也在前台办。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:home",
+      "tags": [
+        "物业",
+        "报修",
+        "旧号"
+      ],
+      "valid_from": "2026-06-12",
+      "valid_to": "2026-08-20",
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "通勤地铁换乘",
+      "body": "早上从家走 8 分钟到地铁站，坐 2 号线到凤起路换 1 号线，滨江路站 C 口出，再走 8 分钟到公司。全程 42 分钟左右，7 点 40 前上车基本不挤。周二早上人多，最好再提前五分钟出门。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "personal",
+      "tags": [
+        "通勤",
+        "地铁"
+      ],
+      "valid_from": "2026-06-16",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.8
+    },
+    {
+      "title": "旧健身房卡",
+      "body": "原来办的“力健”健身房年卡 1980，到 7 月底就不续了，离得远，来回路上要一个小时。前台电话 0571-8622 1180。卡里好像还剩两次体验课，懒得去了。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "健身",
+        "旧卡",
+        "年卡"
+      ],
+      "valid_from": "2026-06-18",
+      "valid_to": "2026-07-25",
+      "supersedes": [],
+      "confidence": 0.8
+    },
+    {
+      "title": "公司体检",
+      "body": "6 月 18 号公司体检，抽了 5 管血，B 超说我轻度脂肪肝，血脂也偏高。医生让少吃夜宵、多动，所以后来才想着去办健身卡。那会儿体重 80 公斤。报告单还在我抽屉里，下次看病带上。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:health",
+      "tags": [
+        "体检",
+        "公司",
+        "脂肪肝"
+      ],
+      "valid_from": "2026-06-19",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "猫粮和喂法",
+      "body": "橘猫叫豆豆，现在吃“渴望”六种鱼那款，5.4kg 一袋 620 块，能吃两个多月。一天两顿，早上 40 克，晚上 40 克再加半包湿粮，水碗每天换。剩下半袋放阳台柜子里，别受潮。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "猫",
+        "豆豆",
+        "喂食"
+      ],
+      "valid_from": "2026-06-25",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "红烧肉做法",
+      "body": "五花肉两斤切块，冷水下锅焯一下。锅里放冰糖 30 克炒糖色，颜色变枣红就下肉，别炒糊。加生抽 3 勺、老抽 1 勺、八角两个，倒热水没过肉，小火 50 分钟，最后大火收汁。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "做饭",
+        "红烧肉",
+        "菜谱"
+      ],
+      "valid_from": "2026-06-29",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.8
+    },
+    {
+      "title": "厨房水管爆了",
+      "body": "7 月 3 号晚上厨房水管接头崩了，水漫到客厅，我摸了半天才找到总阀。第二天房东叫人来换了根管子，花了 260，他付的。地板泡翘了一块，房东说先不管。那天物业早下班了，只能自己先拿盆接水。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:home",
+      "tags": [
+        "维修",
+        "漏水"
+      ],
+      "valid_from": "2026-07-05",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "妈妈的降压药",
+      "body": "妈吃苯磺酸氨氯地平，5mg 一片，一天一次，早上饭后吃。社区医院开的，一盒 28 片，快吃完提前三天去开。血压量出来高也别自己加量，先问医生。药盒是白色小圆盒，放在电视柜第二层。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:health",
+      "tags": [
+        "用药",
+        "妈妈",
+        "血压"
+      ],
+      "valid_from": "2026-07-06",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.9
+    },
+    {
+      "title": "报修流程-水管",
+      "body": "家里漏水先关厨房水槽下面的总阀，再拍个视频发房东微信。房东电话打不通就打物业，物业下班了找楼下五金店老李，137 0581 2244，上门费 80 起，材料另算。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:home",
+      "tags": [
+        "维修",
+        "水管",
+        "流程"
+      ],
+      "valid_from": "2026-07-07",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "陪妈复查血压",
+      "body": "7 月 8 号陪妈去社区医院复查血压，量出来 145/92，还是偏高。医生说药别停，盐少放，腌菜少吃，一个月后再来。那天挂号排队排了四十分钟。医生说下次复查前在家量三天，记下来带去。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:health",
+      "tags": [
+        "妈妈",
+        "复查",
+        "血压"
+      ],
+      "valid_from": "2026-07-09",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "爸爸的止痛药",
+      "body": "爸膝盖疼吃塞来昔布，200mg 一粒，一天一次，必须饭后吃，空腹吃伤胃。胃不舒服就停，换贴膏药。一盒 6 粒，吃完再买，别连着吃超过两周。药是社区医院开的，一盒 38 块，医保能报一点。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:health",
+      "tags": [
+        "用药",
+        "爸爸",
+        "膝盖"
+      ],
+      "valid_from": "2026-07-14",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "下雨天坐37路",
+      "body": "下雨就不坐地铁换乘了，直接在家门口坐 37 路，7:20 那班最稳，到公司后门下来，走路 3 分钟。不堵 35 分钟，堵起来 50 分钟，得早点出门。站牌在小区北门对面，别走到南门去了。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "通勤",
+        "公交",
+        "下雨"
+      ],
+      "valid_from": "2026-07-19",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.8
+    },
+    {
+      "title": "腌鸡胸肉",
+      "body": "鸡胸肉 500 克切薄片，加盐 3 克、黑胡椒一点、料酒 1 勺、淀粉半勺，抓匀放冰箱 20 分钟。平底锅中火，每面煎 2 分钟，别煎老。一次腌两天的量，分袋冻起来。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "做饭",
+        "健身餐",
+        "鸡胸肉"
+      ],
+      "valid_from": "2026-07-20",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.8
+    },
+    {
+      "title": "换到悦动健身房",
+      "body": "换到楼下新开的“悦动”健身房，年卡 2680，比原来那家贵点但走路 5 分钟。营业 6:00 到 22:30，周末 8 点才开。教练小吴 186 5710 3322，人挺实在，没硬推销课。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "健身",
+        "年卡",
+        "教练"
+      ],
+      "valid_from": "2026-07-25",
+      "valid_to": null,
+      "supersedes": [
+        "旧健身房卡"
+      ],
+      "confidence": 0.85
+    },
+    {
+      "title": "视频会员自动续费",
+      "body": "视频会员年卡 2027 年 3 月 8 号到期，每月 25 号自动扣 19 块，绑的是招行尾号 6382 的卡。不想续的话，到期前 3 天在“我的-自动续费”里关掉，别等扣了再退。",
+      "kind": "procedural",
+      "trust": "system_derived",
+      "scope": "personal",
+      "tags": [
+        "订阅",
+        "会员",
+        "扣费"
+      ],
+      "valid_from": "2026-08-06",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.8
+    },
+    {
+      "title": "猫洗澡步骤",
+      "body": "给豆豆洗澡，水温调到 38 度左右，用宠物沐浴露，别用人用的。洗完马上吹干，吹风机开小档，它怕大声。耳朵用棉球轻轻擦，别让水进去，洗完给条冻干。它怕水，洗的时候把浴室门关上，别让它跑。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "猫",
+        "洗澡",
+        "豆豆"
+      ],
+      "valid_from": "2026-08-12",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.75
+    },
+    {
+      "title": "青岛玩",
+      "body": "8 月 15 到 17 号去青岛，住火车站旁边的如家，两晚 458，含双早，前台 0532-8890 1122。栈桥人太多，啤酒博物馆门票 60，信号山看日落最好。回来高铁晚点 40 分钟。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:travel",
+      "tags": [
+        "旅行",
+        "青岛",
+        "住宿"
+      ],
+      "valid_from": "2026-08-18",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.8
+    },
+    {
+      "title": "物业换号了",
+      "body": "8 月 20 号起物业换号了，前台改成 0571-8899 1020，原号打不通。值班手机 137 5566 0219 没变。新号是物业在业主群里发的，让存一下。",
+      "kind": "semantic",
+      "trust": "external",
+      "scope": "project:home",
+      "tags": [
+        "物业",
+        "电话",
+        "新号"
+      ],
+      "valid_from": "2026-08-20",
+      "valid_to": null,
+      "supersedes": [
+        "物业电话-旧"
+      ],
+      "confidence": 0.85
+    },
+    {
+      "title": "爸妈体检预约",
+      "body": "爸妈体检约在 9 月 12 号早上 7:30，市一医院体检中心 3 楼。两个人的套餐一共 1860，已经付了。要空腹，带身份证和医保卡，提前十分钟到就行。体检中心在门诊楼后面那栋，别跑错。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "project:health",
+      "tags": [
+        "体检",
+        "爸妈",
+        "预约"
+      ],
+      "valid_from": "2026-08-28",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.9
+    },
+    {
+      "title": "第一次私教课",
+      "body": "8 月 31 号第一次上私教，练腿。深蹲空杆都发抖，教练小吴让我先别加重量，先把动作做对。课后又走了 20 分钟跑步机，第二天大腿疼得下不了楼。小吴说一周练两次就够，别天天来。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "健身",
+        "私教"
+      ],
+      "valid_from": "2026-09-01",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.8
+    },
+    {
+      "title": "豆豆吐毛球",
+      "body": "9 月 6 号晚上豆豆吐了两次毛球，没什么精神，带去宠物医院看，说是毛球，开了支化毛膏 60 块，让每天梳毛。回来第二天就好了，化毛膏现在每周喂两次。现在每天梳一次毛，沙发上还是到处是毛。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "猫",
+        "豆豆",
+        "宠物医院"
+      ],
+      "valid_from": "2026-09-07",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.8
+    },
+    {
+      "title": "体检前准备",
+      "body": "体检前一天晚上 8 点以后别吃东西，水也少喝。当天带身份证、医保卡，先抽血再做 B 超，B 超要憋尿。降压药照常吃，别停，用一小口水送服就行。B 超做完才能吃东西，包里带个面包。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:health",
+      "tags": [
+        "体检",
+        "流程",
+        "空腹"
+      ],
+      "valid_from": "2026-09-10",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "国庆回老家车票",
+      "body": "国庆回老家买了 10 月 1 号 G7502，早上 7:12 开，到湖州 8:40，二等座 168。候补了两天才买到，靠窗。到时候提前四十分钟到东站，节假日人多。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:travel",
+      "tags": [
+        "车票",
+        "国庆",
+        "回老家"
+      ],
+      "valid_from": "2026-09-12",
+      "valid_to": "2026-09-25",
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "体检报告复查",
+      "body": "爸的体检报告出来了，前列腺有点增生，医生说 10 月 20 号去泌尿外科复查，挂 8:00 到 8:30 的号。报告单和之前的片子都带上，别吃饭，可能要抽血。泌尿外科在门诊 4 楼，电梯上去右转。",
+      "kind": "semantic",
+      "trust": "external",
+      "scope": "project:health",
+      "tags": [
+        "爸爸",
+        "复查",
+        "体检"
+      ],
+      "valid_from": "2026-09-16",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "国庆车票改签",
+      "body": "国庆车票改签了，从 10 月 1 号早上改到 9 月 30 号晚上 G7526，18:40 开，20:55 到湖州，二等座 174，补了 6 块差价。改签费没收，就是座位变成过道了。",
+      "kind": "episodic",
+      "trust": "system_derived",
+      "scope": "project:travel",
+      "tags": [
+        "车票",
+        "改签",
+        "国庆"
+      ],
+      "valid_from": "2026-09-25",
+      "valid_to": null,
+      "supersedes": [
+        "国庆回老家车票"
+      ],
+      "confidence": 0.9
+    },
+    {
+      "title": "出差报销流程",
+      "body": "出差回来 7 天内把票贴好：高铁票、酒店发票、打车票，按时间顺序贴 A4 纸上，写清事由和金额。先在企业微信提差旅申请，再把单子给财务小周。超过 30 天就不给报了。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "报销",
+        "出差",
+        "流程"
+      ],
+      "valid_from": "2026-09-28",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.85
+    },
+    {
+      "title": "电饭煲预约",
+      "body": "电饭煲是美的 MB-FB40，晚上 10 点放米和水，1 杯米配 1.2 杯水，按“预约”设 7 小时，早上 5 点开始煮，6 点半起来刚好温的。煮粥的话水加到 1 比 8，别溢出来。",
+      "kind": "procedural",
+      "trust": "system_derived",
+      "scope": "personal",
+      "tags": [
+        "做饭",
+        "电饭煲"
+      ],
+      "valid_from": "2026-10-02",
+      "valid_to": null,
+      "supersedes": [],
+      "confidence": 0.75
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "query": "姓周的房东电话多少？",
+      "gold": [
+        "房东电话-维修"
+      ],
+      "answerable": true,
+      "why": "房东电话-维修里记了周哥的号 137 8890 2145。"
+    },
+    {
+      "id": "q02",
+      "query": "妈那个降压药一天吃几片、什么时候吃？",
+      "gold": [
+        "妈妈的降压药"
+      ],
+      "answerable": true,
+      "why": "妈妈的降压药写了 5mg 一天一次、早上饭后吃。"
+    },
+    {
+      "id": "q03",
+      "query": "爸膝盖疼的药是饭前还是饭后？",
+      "gold": [
+        "爸爸的止痛药"
+      ],
+      "answerable": true,
+      "why": "爸爸的止痛药写明了必须饭后吃。"
+    },
+    {
+      "id": "q04",
+      "query": "豆豆现在一顿喂多少克？",
+      "gold": [
+        "猫粮和喂法"
+      ],
+      "answerable": true,
+      "why": "猫粮和喂法记了每顿 40 克、晚上加半包湿粮。"
+    },
+    {
+      "id": "q05",
+      "query": "悦动健身房年卡多少钱来着？",
+      "gold": [
+        "换到悦动健身房"
+      ],
+      "answerable": true,
+      "why": "换到悦动健身房写了年卡 2680。"
+    },
+    {
+      "id": "q06",
+      "query": "我那个视频会员几号到期？",
+      "gold": [
+        "视频会员自动续费"
+      ],
+      "answerable": true,
+      "why": "视频会员自动续费写了 2027 年 3 月 8 号到期。"
+    },
+    {
+      "id": "q07",
+      "query": "出差回来最晚几天内要报销？",
+      "gold": [
+        "出差报销流程"
+      ],
+      "answerable": true,
+      "why": "出差报销流程写了 7 天内贴票、超过 30 天不报。"
+    },
+    {
+      "id": "q08",
+      "query": "豆豆上次吐是因为啥？",
+      "gold": [
+        "豆豆吐毛球"
+      ],
+      "answerable": true,
+      "why": "豆豆吐毛球那条写了是毛球，开了化毛膏。"
+    },
+    {
+      "id": "q09",
+      "query": "爸复查挂哪个科、几点的号？",
+      "gold": [
+        "体检报告复查"
+      ],
+      "answerable": true,
+      "why": "体检报告复查写了 10 月 20 号泌尿外科、8:00 到 8:30 的号。"
+    },
+    {
+      "id": "q10",
+      "query": "红烧肉里冰糖放多少？",
+      "gold": [
+        "红烧肉做法"
+      ],
+      "answerable": true,
+      "why": "红烧肉做法写了冰糖 30 克。"
+    },
+    {
+      "id": "q11",
+      "query": "早上地铁怎么换乘，下雨天坐哪路车？",
+      "gold": [
+        "通勤地铁换乘",
+        "下雨天坐37路"
+      ],
+      "answerable": true,
+      "why": "通勤地铁换乘给换乘路线，下雨天坐37路给雨天备选。"
+    },
+    {
+      "id": "q12",
+      "query": "水管再漏先关哪个阀，房东电话多少？",
+      "gold": [
+        "报修流程-水管",
+        "房东电话-维修"
+      ],
+      "answerable": true,
+      "why": "报修流程-水管写了先关厨房总阀，房东电话-维修给了号码。"
+    },
+    {
+      "id": "q13",
+      "query": "爸妈体检几点到，前一天晚上要注意啥？",
+      "gold": [
+        "爸妈体检预约",
+        "体检前准备"
+      ],
+      "answerable": true,
+      "why": "爸妈体检预约给了 7:30 和地点，体检前准备给了空腹等注意事项。"
+    },
+    {
+      "id": "q14",
+      "query": "我妈的降压药和我爸膝盖的药，都是饭后吃吗？",
+      "gold": [
+        "妈妈的降压药",
+        "爸爸的止痛药"
+      ],
+      "answerable": true,
+      "why": "两条用药笔记分别写了早上饭后吃和必须饭后吃。"
+    },
+    {
+      "id": "q15",
+      "query": "给豆豆洗澡水温多少？上次开的化毛膏还要喂吗？",
+      "gold": [
+        "猫洗澡步骤",
+        "豆豆吐毛球"
+      ],
+      "answerable": true,
+      "why": "猫洗澡步骤写了 38 度，豆豆吐毛球写了化毛膏每周喂两次。"
+    },
+    {
+      "id": "q16",
+      "query": "公司体检查出啥以后才办的健身卡？年卡多少？",
+      "gold": [
+        "公司体检",
+        "换到悦动健身房"
+      ],
+      "answerable": true,
+      "why": "公司体检写了脂肪肝和血脂偏高，换到悦动健身房给了年卡价格。"
+    },
+    {
+      "id": "q17",
+      "query": "上次洗衣机不转，修一下花了多少？",
+      "gold": [],
+      "answerable": false,
+      "why": "只记过水管维修，没记洗衣机修理。"
+    },
+    {
+      "id": "q18",
+      "query": "城东那家宠物医院周末几点开门？",
+      "gold": [],
+      "answerable": false,
+      "why": "笔记里只提过去宠物医院，没记名字、位置和营业时间。"
+    },
+    {
+      "id": "q19",
+      "query": "我那张游泳卡什么时候到期？",
+      "gold": [],
+      "answerable": false,
+      "why": "只办过健身房年卡，没有游泳卡。"
+    },
+    {
+      "id": "q20",
+      "query": "去年去成都住的那家民宿叫什么？",
+      "gold": [],
+      "answerable": false,
+      "why": "旅行只记了青岛和回老家，没去过成都。"
+    },
+    {
+      "id": "q21",
+      "query": "老王家孩子满月酒是哪天？",
+      "gold": [],
+      "answerable": false,
+      "why": "这是别人家的事，笔记里没有。"
+    },
+    {
+      "id": "q22",
+      "query": "妈那个降糖药是饭前吃还是饭后？",
+      "gold": [],
+      "answerable": false,
+      "why": "妈只有降压药记录，没有降糖药。"
+    },
+    {
+      "id": "q23",
+      "query": "上个月电费交了多少？",
+      "gold": [],
+      "answerable": false,
+      "why": "没有记水电费账单。"
+    },
+    {
+      "id": "q24",
+      "query": "我车牌号是多少来着？",
+      "gold": [],
+      "answerable": false,
+      "why": "笔记里没有车和车牌的信息。"
+    }
+  ]
+}

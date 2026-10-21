@@ -135,7 +135,8 @@ $ node bin/memory search --query "索引上限是多少行" --json
   比如问了「Kestrel 的重试次数」，库里只有「同步失败重试 5 次」而 Kestrel 是另一家的，
   被问的那两样从没写在**同一篇**里；见 `06-architecture.md §5.5.3`）。
 - 常用开关：`--budget-tokens N`（默认 500）/ `--kinds core,semantic` / `--trusts user_stated`
-  / `--min-relevance F` / `--min-score F` / `--min-coverage F` / `--as-of YYYY-MM-DD` / `--ledger`。
+  / `--min-relevance F` / `--min-score F` / `--min-coverage F` / `--as-of YYYY-MM-DD` / `--ledger`
+  / `--no-refuse`（检索口径：覆盖率不参与准入、只保留硬拒答，由调用方判断要不要答；默认是问答口径）。
   阈值可调是**评测纪律**要求的：不许在计分集上调参，所以要能把参数摆到命令行上。
   这些阈值传 `null`/空值一律**退回默认**，不会把闸门悄悄关掉（fail-closed）。
 

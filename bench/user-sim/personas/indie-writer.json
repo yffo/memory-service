@@ -1,0 +1,693 @@
+{
+  "persona": "indie-writer",
+  "notes": [
+    {
+      "title": "身份-沈知微-独立写作者",
+      "body": "沈知微，38 岁，住杭州拱墅。2019 年从《城市中国》编辑岗离开，转独立写作。\n\n## 日常\n主写科技与城市交叉的长文，合作过《城市中国》、澎湃「市政厅」、腾讯谷雨、端传媒。每天三件事：找题、约采访、把采访变成能发表的字。空下来学杭州话，目前能听懂菜场砍价。",
+      "kind": "core",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "身份",
+        "写作",
+        "杭州"
+      ],
+      "valid_from": "2026-06-02",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.95
+    },
+    {
+      "title": "身份-城市三部曲与收入结构",
+      "body": "「城市三部曲」：第一本《回路之城》写城市更新与回迁，2027 年春交稿，走自出版；第二本《平台之城》写政务平台与数据外包；第三本暂名《退场》，写离开大城市的人。\n\n收入结构：60% 媒体稿费、30% 企业特稿、10% 讲座和工作坊。2026 年计划采访 24 人，到 10 月实际做了 14 次。",
+      "kind": "core",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "身份",
+        "三部曲",
+        "收入"
+      ],
+      "valid_from": "2026-10-18",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "引用规范-直接引语一个字不改",
+      "body": "直接引语一个字不改：删节用「……」并标注；受访者口头禅保留，比如陈工爱说「说白了」；转述标「大意」。引用他人文章要注版本和页码，统一 Chicago 17th 注释体例。\n\n二次引用必须找到原文，找不到就不引。2026-06 有篇稿子转引《城市的胜利》差点写错，后来改回 Glaeser 2011 原书核对。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "引用",
+        "规范",
+        "引语"
+      ],
+      "valid_from": "2026-06-05",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "阅读-2026 上半年 23 本",
+      "body": "系统按豆瓣标记和购书记录统计：2026 上半年读完 23 本，其中 17 本有田野或一手访谈。最常翻的三本：Craig Taylor《Londoners》（2011，Granta）、Matthew Desmond《Evicted》（2016）、Jane Jacobs《The Death and Life of Great American Cities》（1961）。纯理论只读了 2 本，都没读完。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "personal",
+      "tags": [
+        "阅读",
+        "书单",
+        "统计"
+      ],
+      "valid_from": "2026-06-11",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.7
+    },
+    {
+      "title": "工具-主库 Obsidian 文献 Zotero",
+      "body": "主库 Obsidian：一个项目一个文件夹，素材用 [[ ]] 链到人物和地点。文献进 Zotero，装 Better BibTeX，引用键统一「作者+年份」。Obsidian Sync 年付 $48，坚果云只备份 Zotero 附件。\n\n长文用 Pandoc 转 docx，给编辑的版本另存 PDF。手机端只读不写，避免碎片笔记污染主库。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "工具",
+        "Obsidian",
+        "Zotero"
+      ],
+      "valid_from": "2026-06-18",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "稿费底线-千字 450 元",
+      "body": "2026 年报价底线：千字 450 元，低于 300 不接。采访成本另算：交通、咖啡、转写，一般 200–400 元一篇。给《城市中国》千字 450，给谷雨千字 800，两家都按发表字数结算。\n\n被压价时让对方减字数，不降单价；这一条是 2025 年被拖过两次稿费之后定的。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:freelance",
+      "tags": [
+        "稿费",
+        "报价",
+        "底线"
+      ],
+      "valid_from": "2026-06-25",
+      "valid_to": "2026-10-10",
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "报价-2027 年起千字 600",
+      "body": "2027 年起报价调到千字 600，采访成本仍另计。理由：转写、交通、查资料的成本都涨了，而且长文平均要写 11 天。老客户《城市中国》提前打招呼，谷雨按项目谈。\n\n底线：低于 450 不接；公益性选题可以降到 300，但要在合同里写明。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:freelance",
+      "tags": [
+        "稿费",
+        "报价",
+        "2027"
+      ],
+      "valid_from": "2026-10-10",
+      "valid_to": null,
+      "supersedes": "稿费底线-千字 450 元",
+      "confidence": 0.85
+    },
+    {
+      "title": "采访伦理-匿名与发稿前核对",
+      "body": "匿名只在涉及失业、拆迁、举报时用。正文第一次出现要写「应受访者要求化名」，结尾加一句说明。录音前口头讲清用途、发表平台和大概篇幅。\n\n不承诺审稿，但发稿前把事实性引语发回去核对，一般给 48 小时。受访者要求删掉整段时，先问能不能改成背景。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "采访",
+        "伦理",
+        "匿名"
+      ],
+      "valid_from": "2026-07-02",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "选题判断-宏大叙事要落到合同",
+      "body": "不写「AI 改变一切」这种题。判断标准：能不能落到一个具体场景、一份采购合同或一个预算数字。\n\n## 可写的例子\n- 某区政务热线 2025 年中标价 486 万\n- 某园区能耗平台每年省 37 万电费\n\n采访不到一线使用者的题，再热也不接；纯发布会通稿一律不做。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:tech-essay",
+      "tags": [
+        "选题",
+        "AI",
+        "判断"
+      ],
+      "valid_from": "2026-07-09",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "订阅-2026 只留三个付费",
+      "body": "2026 年保留三个付费：The New Yorker 数字版 $119.99/年、端传媒年费 HK$598、Readwise Reader $9.99/月。退掉 The Atlantic（$59.99/年）和 Midjourney（$10/月），用得少。\n\nReadwise 主要用来抓摘录，年底前决定要不要换回免费版；端传媒续费在 11 月，记得关自动扣款。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "订阅",
+        "成本",
+        "媒体"
+      ],
+      "valid_from": "2026-07-15",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "编辑意见-先结构后句子",
+      "body": "拿到编辑意见先分三层：结构、事实、句子。结构问题当天回邮件确认，别急着改字；事实问题逐条标出处；句子问题最后统一润色。\n\n不接受「再活泼一点」这种没标准的意见，请对方举一个已发表例子。三次改稿后还要大改，就重谈稿费或撤稿。2026-07-22 记：上次给澎湃「市政厅」改稿，先动结构省了两天。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:freelance",
+      "tags": [
+        "编辑",
+        "改稿",
+        "反馈"
+      ],
+      "valid_from": "2026-07-22",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "数据出处-统计局与规划文件",
+      "body": "统计口径一律用统计局原文。杭州 2025 年常住人口 1262.6 万，出处是《2025 年杭州市国民经济和社会发展统计公报》，2026-03 发布。\n\n规划文件要标文号，比如《杭州市城市更新专项规划（2024—2035）》。二手新闻里的数字只当线索，回到原文再写；查不到原始文件的数字宁可不用。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "数据",
+        "出处",
+        "统计"
+      ],
+      "valid_from": "2026-08-03",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "常引来源-统计局与规划院",
+      "body": "系统统计 2026-06 至 2026-10 的引用记录：杭州市统计局公报被引 11 次，市规划院报告 6 次，《城市中国》旧刊 4 次，学术论文 3 次。二手新闻转引 4 次，其中 2 次被编辑要求补原文。\n\n结论：一手来源够用，缺的是学术文献；下一步把知网账号续上。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "project:city-book",
+      "tags": [
+        "引用",
+        "来源",
+        "统计"
+      ],
+      "valid_from": "2026-09-14",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.7
+    },
+    {
+      "title": "摘录-雅各布斯 1961 原话",
+      "body": "Jane Jacobs《The Death and Life of Great American Cities》，Random House，1961。原文：「Cities have the capability of providing something for everybody, only because, and only when, they are created by everybody.」\n\n自译：城市能为所有人提供东西，只因为它由所有人创造。准备放在《回路之城》第二章开头，别和「多样性」那句混了。",
+      "kind": "semantic",
+      "trust": "external",
+      "scope": "project:city-book",
+      "tags": [
+        "摘录",
+        "雅各布斯",
+        "引用"
+      ],
+      "valid_from": "2026-08-30",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.75
+    },
+    {
+      "title": "转写-讯飞听见按分钟计费",
+      "body": "讯飞听见按分钟计费，0.3 元/分钟。2026 上半年转了 7.2 小时采访，共花 129.6 元；1 小时采访约 18 元。\n\n转完先导出台词稿，标时间码；杭州话段落机器识别差，要人工补。超过 2 小时的录音分两段传，不然排队久。",
+      "kind": "procedural",
+      "trust": "system_derived",
+      "scope": "project:city-book",
+      "tags": [
+        "转写",
+        "工具",
+        "成本"
+      ],
+      "valid_from": "2026-06-15",
+      "valid_to": "2026-08-08",
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "转写-飞书妙记初稿+人工校对",
+      "body": "改用飞书妙记出初稿，免费额度够一个月 10 小时，但自动分段差、说话人常标错。流程：妙记初稿 → 人工听关键段 → 标时间码 → 存 Obsidian。\n\n方言和多人对话还是手动听打。每天最多处理 2 小时录音，否则第二天耳朵疼。8 月试了三篇，转写费省了约 60 元。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "转写",
+        "工具",
+        "流程"
+      ],
+      "valid_from": "2026-08-08",
+      "valid_to": null,
+      "supersedes": "转写-讯飞听见按分钟计费",
+      "confidence": 0.8
+    },
+    {
+      "title": "自出版-先做电子书试水",
+      "body": "自出版先做电子书试水：豆瓣阅读上架，定价 12.8 元，平台分成 70%，先看三个月销量再决定要不要印纸书。封面找阿禾做，预算 1500 元。电子书排版用 Sigil，导出 EPUB 3。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "自出版",
+        "电子书",
+        "试水"
+      ],
+      "valid_from": "2026-07-05",
+      "valid_to": "2026-08-25",
+      "supersedes": null,
+      "confidence": 0.75
+    },
+    {
+      "title": "自出版-决定先印纸书",
+      "body": "决定先印纸书，电子书往后放。首印 500 册，单册成本 18 元，定价 68 元，首印货款 9000 元。\n\nISBN 用合作出版社的丛书号，排版 InDesign，正文 9.5pt、行距 15pt。摩点众筹目标 8 万，档位 68／128／298，9 月先做预热页。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "自出版",
+        "纸书",
+        "预算"
+      ],
+      "valid_from": "2026-08-25",
+      "valid_to": null,
+      "supersedes": "自出版-先做电子书试水",
+      "confidence": 0.8
+    },
+    {
+      "title": "采访提纲-提前三天发全稿",
+      "body": "采访提纲提前三天发全稿，让对方知道每个问题。提纲列 12–15 个问题，按时间线排；敏感问题放后半段；附一句「不方便回答的可以跳过」。\n\n发之前自己先答一遍，删掉能查到答案的问题。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "采访",
+        "提纲",
+        "流程"
+      ],
+      "valid_from": "2026-06-08",
+      "valid_to": "2026-10-06",
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "采访提纲-只给话题清单",
+      "body": "提纲改成只给话题清单，不再发完整问题。原因：提前给全稿，受访者会准备标准答案，现场没细节。\n\n现在发 5–7 个话题加预计时长，敏感问题现场再问。10 月 9 日采访湖滨街道一位副主任时第一次这么用，对方反而讲了 40 分钟没停。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "采访",
+        "提纲",
+        "流程"
+      ],
+      "valid_from": "2026-10-06",
+      "valid_to": null,
+      "supersedes": "采访提纲-提前三天发全稿",
+      "confidence": 0.8
+    },
+    {
+      "title": "交稿-提前一天附核查表",
+      "body": "系统看了 2026 年 12 次交稿记录：10 次在 deadline 前一天 18:00 前发出，2 次当天早上才发。固定附件：采访对象清单、字数、图片版权说明、事实核查表。\n\n交稿后 48 小时待命改稿；发票随稿开，备注合同号。",
+      "kind": "procedural",
+      "trust": "system_derived",
+      "scope": "project:freelance",
+      "tags": [
+        "交稿",
+        "核查",
+        "流程"
+      ],
+      "valid_from": "2026-07-18",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "合同与发票-稿费走对公",
+      "body": "单篇稿费超 5000 元签电子合同，用「杭州知微文化工作室」对公账户收款。开增值税普通发票，税率 1%；平台代扣的保留结算单，季度末汇总给会计。\n\n合同里写清字数、交稿日、改稿次数（一般 2 次）和署名方式；电子签用「上上签」。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:freelance",
+      "tags": [
+        "合同",
+        "发票",
+        "稿费"
+      ],
+      "valid_from": "2026-10-05",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "采访-陈工-城市更新",
+      "body": "2026-06-19 下午，拱墅区城市更新办，陈工（化名，城市更新工程师，45 岁）。原话：「拆得动的都是没人的地方。」\n\n他给了 2023 年一份内部评估表，上塘街道某项目签约率 97%。要求不写具体楼盘名，可以用街道。聊了 100 分钟，录音。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "采访",
+        "城市更新",
+        "陈工"
+      ],
+      "valid_from": "2026-06-20",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "采访-周工-始版桥回迁",
+      "body": "2026-07-03 下午，周工（结构工程师，52 岁）在始版桥附近茶馆。他说：「回迁房最难的是户型和原来的生活习惯对不上。」\n\n带了 2019 年的三张施工图照片。不同意录音，只能笔记，记了 6 页。约 8 月看现场。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "采访",
+        "回迁",
+        "周工"
+      ],
+      "valid_from": "2026-07-06",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "改稿-城市中国第三次退修",
+      "body": "《城市中国》李竞第三次退修：7000 字压到 5000，删第二节整段采访。我不同意删陈工那句「拆得动的都是没人的地方」，最后折中保留一句。\n\n2026-08-03 定稿，按 5000 字 × 千字 450 结 2250 元。改稿一共花了 4 天，比写初稿还久。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:freelance",
+      "tags": [
+        "改稿",
+        "城市中国",
+        "稿费"
+      ],
+      "valid_from": "2026-07-30",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "采访取消-宋老师改线上",
+      "body": "2026-08-12 约好下午 2 点采访宋老师（智慧城市研究者），他临时开会取消，改到 8-20 线上。\n\n他说：「智慧城市最大的问题是数据不共享。」线上录音质量差，后半段靠笔记。腾讯会议录屏只存了 20 分钟。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:tech-essay",
+      "tags": [
+        "采访",
+        "线上",
+        "宋老师"
+      ],
+      "valid_from": "2026-08-14",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.75
+    },
+    {
+      "title": "现场-始版桥回迁小区",
+      "body": "2026-08-19 跟周工看始版桥回迁小区。电梯间贴 2025 年物业费 2.8 元/㎡；底商 7 家关了 3 家。\n\n遇到 72 岁回迁户王阿姨，她说「回来住不惯，但医院近」。拍了 40 张照片。王阿姨这句留给书里第三章，周工的施工图细节改写成《城市中国》短稿。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:city-book",
+      "tags": [
+        "现场",
+        "回迁",
+        "素材"
+      ],
+      "valid_from": "2026-08-21",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "改稿-谷雨补对照城市",
+      "body": "谷雨赵小满意见：第一节缺对照城市，补深圳 2025 年政务热线数据，共 600 字。2026-09-12 二稿过。\n\n6000 字 × 千字 800，稿费 4800 元。她建议把「AI 巡查车」那段留作下一篇，别塞进来。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:tech-essay",
+      "tags": [
+        "改稿",
+        "谷雨",
+        "稿费"
+      ],
+      "valid_from": "2026-09-08",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "拒稿-澎湃市政厅选题不符",
+      "body": "2026-09-24 投澎湃「市政厅」选题「AI 巡查车」，编辑回复：栏目今年只做历史街区，建议改成 1500 字短稿给周报栏目，稿费 500 元。没接。\n\n编辑说「市政厅」明年一季度会开科技栏目，让我到时再报。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:freelance",
+      "tags": [
+        "拒稿",
+        "澎湃",
+        "选题"
+      ],
+      "valid_from": "2026-09-26",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "分享会-晓风书屋实到 27 人",
+      "body": "2026-10-12 晓风书屋体育场路店分享会，实到 27 人，卖出《回路之城》试读本 19 本。\n\n试读本 48 页，印 200 册，成本 12 元/册，售价 48 元；书店分成 30%。有人问「陈工是真人吗」，我说是化名。下一场 11-08 上海多抓鱼循环商店。",
+      "kind": "episodic",
+      "trust": "system_derived",
+      "scope": "project:city-book",
+      "tags": [
+        "活动",
+        "分享会",
+        "试读本"
+      ],
+      "valid_from": "2026-10-15",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "query": "上次陈工说的那句关于拆迁的原话，到底怎么讲的？",
+      "gold": [
+        "采访-陈工-城市更新"
+      ],
+      "answerable": true,
+      "why": "陈工的原话和签约率只记在这次采访里。"
+    },
+    {
+      "id": "q02",
+      "query": "谷雨最后是按多少字结的稿费？",
+      "gold": [
+        "改稿-谷雨补对照城市"
+      ],
+      "answerable": true,
+      "why": "谷雨的字数、单价和实收 4800 元都在谷雨改稿那条。"
+    },
+    {
+      "id": "q03",
+      "query": "匿名的人，正文里第一次出现要怎么标？",
+      "gold": [
+        "采访伦理-匿名与发稿前核对"
+      ],
+      "answerable": true,
+      "why": "匿名写法、正文标注和 48 小时核对都在这条伦理规范里。"
+    },
+    {
+      "id": "q04",
+      "query": "晓风书屋那天实到多少人？",
+      "gold": [
+        "分享会-晓风书屋实到 27 人"
+      ],
+      "answerable": true,
+      "why": "分享会实到人数和试读本销量只记在晓风书屋那条。"
+    },
+    {
+      "id": "q05",
+      "query": "自出版现在到底先出纸书还是电子书？",
+      "gold": [
+        "自出版-决定先印纸书"
+      ],
+      "answerable": true,
+      "why": "8 月已推翻电子书试水，改成一上来就印纸书；答案在新决定里。"
+    },
+    {
+      "id": "q06",
+      "query": "雅各布斯那句原文怎么说的来着？",
+      "gold": [
+        "摘录-雅各布斯 1961 原话"
+      ],
+      "answerable": true,
+      "why": "雅各布斯原句、版本和自译只在这条摘录里。"
+    },
+    {
+      "id": "q07",
+      "query": "今年的付费订阅还剩哪几个？",
+      "gold": [
+        "订阅-2026 只留三个付费"
+      ],
+      "answerable": true,
+      "why": "2026 年保留和退掉的订阅都在这条清单里。"
+    },
+    {
+      "id": "q08",
+      "query": "澎湃那个 AI 巡查车的题后来为什么没做？",
+      "gold": [
+        "拒稿-澎湃市政厅选题不符"
+      ],
+      "answerable": true,
+      "why": "澎湃拒稿的原因和建议转投方向只记在这条。"
+    },
+    {
+      "id": "q09",
+      "query": "周工当时同意录音了吗？",
+      "gold": [
+        "采访-周工-始版桥回迁"
+      ],
+      "answerable": true,
+      "why": "周工不同意录音、只能笔记的细节只在这条采访记录里。"
+    },
+    {
+      "id": "q10",
+      "query": "杭州常住人口我最后用的哪个数？",
+      "gold": [
+        "数据出处-统计局与规划文件"
+      ],
+      "answerable": true,
+      "why": "1262.6 万及统计公报出处只在这条数据规范里。"
+    },
+    {
+      "id": "q11",
+      "query": "城市中国和谷雨两篇的稿费各是多少？",
+      "gold": [
+        "改稿-城市中国第三次退修",
+        "改稿-谷雨补对照城市"
+      ],
+      "answerable": true,
+      "why": "2250 元和 4800 元分别记在城市中国、谷雨两次改稿里，要合并。"
+    },
+    {
+      "id": "q12",
+      "query": "陈工和周工对拆迁、回迁分别怎么说的？",
+      "gold": [
+        "采访-陈工-城市更新",
+        "采访-周工-始版桥回迁"
+      ],
+      "answerable": true,
+      "why": "陈工讲拆迁、周工讲回迁，两个观点分在两次采访里。"
+    },
+    {
+      "id": "q13",
+      "query": "陈工给的数据和现场看到的，能对上吗？",
+      "gold": [
+        "采访-陈工-城市更新",
+        "现场-始版桥回迁小区"
+      ],
+      "answerable": true,
+      "why": "签约率在陈工采访、底商空置在现场记录，两条合起来才能判断。"
+    },
+    {
+      "id": "q14",
+      "query": "试读本和正式书的首印、成本分别是多少？",
+      "gold": [
+        "自出版-决定先印纸书",
+        "分享会-晓风书屋实到 27 人"
+      ],
+      "answerable": true,
+      "why": "正式书首印和成本在自出版决定，试读本在分享会记录，分开记的。"
+    },
+    {
+      "id": "q15",
+      "query": "我现在报价多少，上次城市中国给的是多少？",
+      "gold": [
+        "报价-2027 年起千字 600",
+        "改稿-城市中国第三次退修"
+      ],
+      "answerable": true,
+      "why": "新报价在 10 月那条，城市中国的旧结算在 7 月改稿里。"
+    },
+    {
+      "id": "q16",
+      "query": "AI 巡查车那个题，按我自己的选题标准该不该接？",
+      "gold": [
+        "选题判断-宏大叙事要落到合同",
+        "拒稿-澎湃市政厅选题不符"
+      ],
+      "answerable": true,
+      "why": "一条是选题判断标准，一条是 AI 巡查车实际被拒的经过。"
+    },
+    {
+      "id": "q17",
+      "query": "上次采访的那个深圳规划师叫什么来着？",
+      "gold": [],
+      "answerable": false,
+      "why": "没有采访过深圳规划师；深圳只在谷雨稿里作为对照数据出现。"
+    },
+    {
+      "id": "q18",
+      "query": "《平台之城》第二章的参考文献列表放哪儿了？",
+      "gold": [],
+      "answerable": false,
+      "why": "《平台之城》还只是计划，没写过章节和参考文献。"
+    },
+    {
+      "id": "q19",
+      "query": "2026 年 3 月那篇关于城中村的稿子，编辑给了多少稿费？",
+      "gold": [],
+      "answerable": false,
+      "why": "2026-03 早于笔记起始的 6 月，没有那篇稿子的记录。"
+    },
+    {
+      "id": "q20",
+      "query": "香港那次城市漫步的路线是谁给的？",
+      "gold": [],
+      "answerable": false,
+      "why": "没去过香港城市漫步，也没有相关路线记录。"
+    },
+    {
+      "id": "q21",
+      "query": "端传媒那篇的合同编号是多少？",
+      "gold": [],
+      "answerable": false,
+      "why": "端传媒只出现在合作平台清单里，没有合同编号。"
+    },
+    {
+      "id": "q22",
+      "query": "宋老师推荐的智慧城市书单我记哪了？",
+      "gold": [],
+      "answerable": false,
+      "why": "宋老师采访里没提书单，库里没有这份资料。"
+    },
+    {
+      "id": "q23",
+      "query": "去年双十一买的那个录音笔多少钱？",
+      "gold": [],
+      "answerable": false,
+      "why": "录音笔购买发生在 2025 双十一，不在笔记时间范围内。"
+    },
+    {
+      "id": "q24",
+      "query": "上海多抓鱼那场分享会的场地费多少？",
+      "gold": [],
+      "answerable": false,
+      "why": "上海场只记了日期和地点，没记场地费。"
+    }
+  ]
+}

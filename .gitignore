@@ -8,3 +8,7 @@
 
 # 本地临时目录（评测/调试的 scratch）
 .tmp/
+
+# 模拟用户评测的生成物（build-store / e2e 可重建；报告 .md 保留）
+bench/user-sim/runs/*
+!bench/user-sim/runs/*.md

@@ -264,6 +264,20 @@ test('CLI search：拒答也走正常返回（refused:true 而不是报错退出
   }
 });
 
+test('CLI search --no-refuse：检索口径不拒答，但也不许凭空造命中', () => {
+  const { dir } = seeded('memory-cli-norefuse-');
+  try {
+    const qa = cli(['search', '--query', '量子纠缠退相干时间', '--json'], { store: dir });
+    assert.equal(qa.json.refused, true);
+    const r = cli(['search', '--query', '量子纠缠退相干时间', '--json', '--no-refuse'], { store: dir });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.json.refused, false, '检索口径不替调用方判拒答');
+    assert.deepEqual(r.json.hits, [], '不拒答 ≠ 编造命中：没词面证据就返回空');
+  } finally {
+    rm(dir);
+  }
+});
+
 test('CLI remember --dry：闸门判定照走，但一个字都不写', () => {
   const dir = tempDir('memory-cli-dry-');
   try {

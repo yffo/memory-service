@@ -1,0 +1,691 @@
+{
+  "persona": "sre-backend",
+  "notes": [
+    {
+      "title": "杨帆：三个服务、两个集群",
+      "body": "杨帆，31，后端 SRE，base 杭州。\n\n管三个服务：orders（订单）、payments（支付）、notify（通知）；生产集群 prod-hz-01（杭州主力）、prod-sh-02（上海容灾）。\n\n值班每周四 10:00 交接，下一棒是张昊（SRE Lead）。习惯缩写：ord/pay/ntf，变更单写 CR-2026-xxx。",
+      "kind": "core",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "身份",
+        "值班",
+        "集群"
+      ],
+      "valid_from": "2026-06-02",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.95
+    },
+    {
+      "title": "值班红线：P1 15 分钟 ack",
+      "body": "P1：15 分钟内 ack + 拉 war room（飞书会议），别在群里问「有人看吗」。\nP2：30 分钟内响应；P3 次日处理。\n\n先止血再定位，30 分钟没进展就升级给张昊。凌晨一样打电话，别等天亮。复盘 48h 内出文档，模板在 Confluence 的 SRE/Postmortem。",
+      "kind": "core",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "值班",
+        "p1",
+        "升级"
+      ],
+      "valid_from": "2026-06-05",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.95
+    },
+    {
+      "title": "支付证书 7 月 15 到期",
+      "body": "pay.corp.example 现在的证书 2026-07-15 到期，还剩一个多月。\n\nCA 是 GlobalSign，链上中间证书好像少配了一张，换的时候一起看。\n\n待办：7 月第一周把新证书申请下来，别拖到过期。",
+      "kind": "semantic",
+      "trust": "external",
+      "scope": "project:payments",
+      "tags": [
+        "证书",
+        "payments",
+        "待办"
+      ],
+      "valid_from": "2026-06-06",
+      "valid_to": "2026-07-02",
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "订单生产 8080，预发 8081",
+      "body": "## 端口\n- 生产 orders-api：8080（svc `orders-api.orders-prod:8080`）\n- 预发 orch-stg：8081，本地 docker-compose 也是 8081\n\n健康检查用 `/healthz`，别拿 `/metrics` 当探针。生产在 prod-hz-01 的 orders-prod 命名空间。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "orders",
+        "端口",
+        "k8s"
+      ],
+      "valid_from": "2026-06-08",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "订单限流 1200 rps",
+      "body": "网关 orders 路由先按 1200 rps 单 pod 配，burst 1.5 倍；预发 200 rps。\n\n这个数是压测出来的，理论上够日常 3 倍峰值，大促前再评估。\n\n配置在 gateway/limits/orders.yaml，别直接改线上。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "orders",
+        "限流",
+        "压测"
+      ],
+      "valid_from": "2026-06-10",
+      "valid_to": "2026-08-19",
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "证书轮换步骤（支付）",
+      "body": "每季度第一个周二检查 pay.corp.example。\n\n1. Vault 里生成 CSR，CA 签完拿回 fullchain\n2. 先更预发 8444，`curl -v` 看链完整\n3. 生产先更一台 SLB 后端，观察 10 分钟 mTLS 握手失败率\n4. 全量下发，旧证书留档 30 天\n5. 更新证书台账和到期提醒",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:payments",
+      "tags": [
+        "证书",
+        "payments",
+        "runbook"
+      ],
+      "valid_from": "2026-06-12",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "支付只开 8443，双向 TLS",
+      "body": "payments-gw 生产只监听 8443，强制 mTLS，客户端证书由内部 CA 签，CN 要带服务名。\n\n预发 8444，用同一套根 CA 的测试证书。\n\n443 只做 301 跳转，不承载业务流量。SLB 后端两台：10.20.3.21 / 10.20.3.22。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:payments",
+      "tags": [
+        "payments",
+        "端口",
+        "mtls"
+      ],
+      "valid_from": "2026-06-15",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "订单 P99 过 1s 就告警",
+      "body": "监控模板里 orders 配的是 P99 > 1000ms 就 page，连续 3 分钟。\n\n大促期间误报多，一天能响 6 次；先记下来，等阈值方案定了再改。\n\n规则在 rules/orders-alert.yaml，改之前先拍板。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "project:orders",
+      "tags": [
+        "prometheus",
+        "告警"
+      ],
+      "valid_from": "2026-06-20",
+      "valid_to": "2026-09-15",
+      "supersedes": null,
+      "confidence": 0.7
+    },
+    {
+      "title": "第一次主班就碰支付 503",
+      "body": "2026-06-21 第一次独立值班，凌晨 1:40 支付 503 告警。\n\n手忙脚乱先重启 pod，没用；后来发现是 SLB 后端摘除后没加回来，DNS 解析到空地址。张昊电话里让我先看 `kubectl get endpoints`，两分钟定位。\n\n教训：先看流量和 endpoints，再动 pod。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:payments",
+      "tags": [
+        "值班",
+        "复盘",
+        "payments"
+      ],
+      "valid_from": "2026-06-22",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "周四值班交接清单",
+      "body": "10:00 和张昊交接，按这个顺序：\n\n1. 过一遍未关闭告警和正在静默的项\n2. 看三个服务昨天错误率/P99 有没有异常\n3. 确认变更窗口（周五不发版）\n4. 交接值班手机（3 楼前台柜子，密码问行政）\n5. 群里发一句「本周值班：杨帆」",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "personal",
+      "tags": [
+        "值班",
+        "交接",
+        "清单"
+      ],
+      "valid_from": "2026-06-26",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "支付证书换新，2027-06-28 到期",
+      "body": "pay.corp.example 的证书 2026-07-02 已换新，到期 2027-06-28，链是 GlobalSign R3。\n\n私钥在 Vault `secret/payments/tls`，别拷到本地。\n\nmTLS 客户端证书同批换过，旧证书留档到 2026-07-31 再删。",
+      "kind": "semantic",
+      "trust": "external",
+      "scope": "project:payments",
+      "tags": [
+        "证书",
+        "payments",
+        "vault"
+      ],
+      "valid_from": "2026-07-02",
+      "valid_to": null,
+      "supersedes": "支付证书 7 月 15 到期",
+      "confidence": 0.9
+    },
+    {
+      "title": "0703 订单超时：连接池打满",
+      "body": "2026-07-03 14:20 订单创建 P99 冲到 8s，大量超时。\n\n根因：批量任务把连接池占满，HikariCP maxPoolSize 当时是 100，MySQL 侧 Threads_running 直接 380。\n\n止血：先重启两个 pod，再把批量任务挪到从库。\n\n复盘结论：池子不是越大越好，加连接等待监控，具体值按连接池 SOP 调。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "复盘",
+        "orders",
+        "超时"
+      ],
+      "valid_from": "2026-07-05",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "支付限流 300 rps，不做排队",
+      "body": "网关 pay 路由单实例 300 rps，burst 2 倍但只放 3 秒；超了直接 429，不排队。\n\n支付上游硬上限 500 TPS，超了会触发银行侧风控，所以这边宁可少放。\n\n大促前不调这个数，只加实例；2026 年两次大促都没动过。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:payments",
+      "tags": [
+        "payments",
+        "限流",
+        "429"
+      ],
+      "valid_from": "2026-07-11",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "慢查询 2 秒以上才看",
+      "body": "MySQL 慢查询先按 long_query_time=2s 配，王凯（DBA）说先抓大的。\n\n文件在 /var/log/mysql/slow.log，本地用 pt-query-digest 看。\n\n订单库主库 10.20.8.11，别连错。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "project:orders",
+      "tags": [
+        "mysql",
+        "慢查询"
+      ],
+      "valid_from": "2026-07-18",
+      "valid_to": "2026-10-09",
+      "supersedes": null,
+      "confidence": 0.7
+    },
+    {
+      "title": "通知限流按 msg/s 算",
+      "body": "notify 不按 QPS 算，按 msg/s：生产总入口 5000 msg/s，短信通道单独 800 条/s。\n\n营销短信走独立队列 marketing，不占事务通知额度；超了进 retry 队列，最多重试 3 次，再超落库人工补。\n\n降级开关：配置中心 `switch.sms_off`。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:notify",
+      "tags": [
+        "notify",
+        "限流",
+        "短信"
+      ],
+      "valid_from": "2026-07-22",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "大促扩容 SOP 与容量基线",
+      "body": "订单：读 12k QPS、写 3.5k TPS 是大促基线，按 1.5 倍冗余备。\n\nHPA max 24 个 pod（8c32g），提前 2 天手动拉底到 16 个，别等 HPA 慢慢扩。\n\nDB 主从延迟 >1s 就降级读本地缓存；支付和通知不跟着扩，按各自峰值。\n\n扩容窗口：大促前 3 天，之后只缩不扩。",
+      "kind": "procedural",
+      "trust": "system_derived",
+      "scope": "project:orders",
+      "tags": [
+        "大促",
+        "容量",
+        "hpa"
+      ],
+      "valid_from": "2026-07-28",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.75
+    },
+    {
+      "title": "灰度发布/回滚怎么做",
+      "body": "订单走 5% → 25% → 100%，每步至少看 10 分钟（错误率、P99）。\n\n5% 阶段 P99 不降就回滚：`kubectl argo rollouts undo orders-api -n orders-prod`。\n\n支付不能灰度，只能蓝绿，因为 mTLS 会话会断。\n\n发布窗口 14:00–17:00，周五和节前不发。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "灰度",
+        "发布",
+        "回滚"
+      ],
+      "valid_from": "2026-08-05",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "慢查询四步定位法",
+      "body": "1. `pt-query-digest /var/log/mysql/slow.log` 按总耗时排序\n2. 取 Top3 跑 `EXPLAIN`，看 type 和 rows\n3. 能加索引就加，orders 表动索引前先找王凯（DBA）确认\n4. 改完观察 30 分钟，看还有没有新增慢查询\n\n不要直接 kill 长事务，先看是不是备份任务。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "mysql",
+        "慢查询",
+        "步骤"
+      ],
+      "valid_from": "2026-08-08",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "0811 支付回调 502：证书链不全",
+      "body": "2026-08-11 早上支付回调 5xx 到 12%，持续 18 分钟。\n\n查下来是新证书只下发了 leaf，中间证书没带，银行侧 TLS 握手失败。\n\n临时把旧 fullchain 贴回去恢复，下午重新按正确顺序拼链。\n\n教训：换证书必须 `openssl s_client -showcerts` 验证链。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:payments",
+      "tags": [
+        "复盘",
+        "payments",
+        "tls"
+      ],
+      "valid_from": "2026-08-12",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "0814 大促预演：限流被打满",
+      "body": "2026-08-14 全链路预演，13:05 订单网关开始 429，1200 rps 顶不住。\n\n实际峰值 1850 rps，P99 从 600ms 涨到 2s，预演提前结束。\n\n结论：限流上调、burst 1.5；预发不改；扩容提前到 T-3 天。报告在 Confluence，编号 CR-2026-0814。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "复盘",
+        "大促",
+        "限流"
+      ],
+      "valid_from": "2026-08-15",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "订单限流提到 2000 rps",
+      "body": "2026-08-19 起网关 orders 路由限流 2000 rps 单 pod，burst 1.5；预发保持 200 rps。\n\n改因：8 月预演 1200 被打满，P99 冲到 2s。\n\n配置 `gateway/limits/orders.yaml`，回滚就是 revert 那个 commit；改完同步到 Grafana 注释。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "orders",
+        "限流",
+        "网关"
+      ],
+      "valid_from": "2026-08-19",
+      "valid_to": null,
+      "supersedes": "订单限流 1200 rps",
+      "confidence": 0.9
+    },
+    {
+      "title": "告警静默怎么申请",
+      "body": "发布/演练要静默，先在变更单写清楚窗口和 CR 号。\n\n1. 打开 Alertmanager（ops-alert 集群）选对应 alertname\n2. 填 CR-2026-xxx，静默时长最多 2 小时\n3. 超过 2 小时或非发布静默，找张昊批\n4. 到期前 10 分钟群里提醒，别自动过期忘了恢复",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "告警",
+        "静默",
+        "alertmanager"
+      ],
+      "valid_from": "2026-09-04",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "0906 通知堆积：consumer 重启风暴",
+      "body": "2026-09-06 通知延迟 40 分钟，backlog 到 120 万条。\n\nKafka 三个 consumer 因滚动重启同时掉线，rebalance 反复触发，消费速度掉到 1/5。\n\n处理：先停发布，consumer 从 6 加到 12，清到 10 万以下再恢复。\n\n以后通知服务发布必须一批一批滚，不能整组重启。",
+      "kind": "episodic",
+      "trust": "system_derived",
+      "scope": "project:notify",
+      "tags": [
+        "复盘",
+        "notify",
+        "kafka"
+      ],
+      "valid_from": "2026-09-07",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.8
+    },
+    {
+      "title": "告警阈值重订：P99 800/1500",
+      "body": "orders P99：warn 800ms，page 1500ms（原来 1000ms 就 page，太吵）。\n\n错误率：warn 1%，page 5%。\n\npayments 不用这个，单看成功率 <99.9% 才告警。\n\nGrafana 看板 `ord-overview-v3`，阈值在 rules/orders-alert.yaml，2026-09-15 生效。",
+      "kind": "semantic",
+      "trust": "system_derived",
+      "scope": "project:orders",
+      "tags": [
+        "prometheus",
+        "告警",
+        "阈值"
+      ],
+      "valid_from": "2026-09-15",
+      "valid_to": null,
+      "supersedes": "订单 P99 过 1s 就告警",
+      "confidence": 0.85
+    },
+    {
+      "title": "连接池调小到 50 的步骤",
+      "body": "1. 先看 MySQL `max_connections`（订单库现在 800）和 Threads_connected\n2. 改 orders-api HikariCP：maxPoolSize=50、minIdle=10、connectionTimeout=3000\n3. 按 25% 分批滚动重启，每批看 5 分钟错误率\n4. 观察 wait_threads 和 P99，OK 再推下一批\n\n结论：16 个 pod × 50 = 800，正好卡满，别再往上加。",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "mysql",
+        "连接池",
+        "步骤"
+      ],
+      "valid_from": "2026-09-22",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "0927 订单列表慢查询：补索引",
+      "body": "2026-09-27 订单列表页 P99 2.4s，慢查询日志里同一条 SQL 一天 8 万次。\n\nSQL 按 user_id + status 查，status 选择性低，原索引只用上 user_id。\n\n加联合索引 `idx_user_status (user_id, status, created_at)`，上线后 P99 回 400ms。\n\n王凯提醒：加索引走 online DDL，别在高峰期。",
+      "kind": "episodic",
+      "trust": "system_derived",
+      "scope": "project:orders",
+      "tags": [
+        "复盘",
+        "mysql",
+        "索引"
+      ],
+      "valid_from": "2026-09-28",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.85
+    },
+    {
+      "title": "短信通道加量的操作步骤",
+      "body": "短信通道要加量，按这个来：\n\n1. 看近 7 天峰值和 429 次数（Grafana ntf-backlog）\n2. 改 notify 配置 `channel.sms.qps`（当前值现查配置中心，别照抄旧文档），一次最多加 200\n3. 灰度一个实例，失败率 <0.5% 再全量\n4. marketing 队列不动，事务通知优先",
+      "kind": "procedural",
+      "trust": "user_stated",
+      "scope": "project:notify",
+      "tags": [
+        "notify",
+        "短信",
+        "限流"
+      ],
+      "valid_from": "2026-10-02",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.75
+    },
+    {
+      "title": "慢查询阈值改成 0.5 秒",
+      "body": "2026-10-09 起 long_query_time=0.5s，之前 2s，漏了太多 1s 左右的。\n\nslow log 在 /var/log/mysql/slow.log，Loki 采集；orders 库主 10.20.8.11，从 10.20.8.12。\n\n单条超 1s 会额外打到 #db-slow 群。",
+      "kind": "semantic",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "mysql",
+        "慢查询",
+        "loki"
+      ],
+      "valid_from": "2026-10-09",
+      "valid_to": null,
+      "supersedes": "慢查询 2 秒以上才看",
+      "confidence": 0.88
+    },
+    {
+      "title": "1010 预发证书过期，丢人",
+      "body": "2026-10-10 预发 8444 全挂，查了半小时发现证书 10-09 过期，没进监控。\n\n生产那套 2027-06-28 才到期，预发是 90 天的测试证书。\n\n已加到期提醒（提前 30 天发值班群），检查项也写进交接清单。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:payments",
+      "tags": [
+        "复盘",
+        "证书",
+        "stg"
+      ],
+      "valid_from": "2026-10-11",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.9
+    },
+    {
+      "title": "1016 凌晨告警误报排查",
+      "body": "2026-10-16 02:10 被 P99 告警叫醒，看监控只是 3 分钟尖刺到 1.6s。\n\n根因：报表任务整点扫订单表，没资源限制。\n\n处理：给报表任务加 2 核限制、错峰到 03:30；告警规则补 `for: 5m`，别一过线就打电话。阈值 1500ms 没动。",
+      "kind": "episodic",
+      "trust": "user_stated",
+      "scope": "project:orders",
+      "tags": [
+        "告警",
+        "复盘",
+        "值班"
+      ],
+      "valid_from": "2026-10-17",
+      "valid_to": null,
+      "supersedes": null,
+      "confidence": 0.6
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "query": "支付网关的 443 到底走不走业务",
+      "gold": [
+        "支付只开 8443，双向 TLS"
+      ],
+      "answerable": true,
+      "why": "笔记写明 443 只做 301 跳转，业务全在 8443。"
+    },
+    {
+      "id": "q02",
+      "query": "notify 总入口一秒能过多少条",
+      "gold": [
+        "通知限流按 msg/s 算"
+      ],
+      "answerable": true,
+      "why": "通知限流笔记给了总入口 5000 msg/s。"
+    },
+    {
+      "id": "q03",
+      "query": "上回那个列表页卡，后来加了啥索引",
+      "gold": [
+        "0927 订单列表慢查询：补索引"
+      ],
+      "answerable": true,
+      "why": "复盘里写了新加的联合索引 idx_user_status。"
+    },
+    {
+      "id": "q04",
+      "query": "静默最长能挂多久",
+      "gold": [
+        "告警静默怎么申请"
+      ],
+      "answerable": true,
+      "why": "静默申请流程限制单次最多 2 小时。"
+    },
+    {
+      "id": "q05",
+      "query": "头一回自己值班碰上啥",
+      "gold": [
+        "第一次主班就碰支付 503"
+      ],
+      "answerable": true,
+      "why": "第一次主班那次就是支付 503、endpoints 为空。"
+    },
+    {
+      "id": "q06",
+      "query": "Kafka 那次积压了多少条",
+      "gold": [
+        "0906 通知堆积：consumer 重启风暴"
+      ],
+      "answerable": true,
+      "why": "复盘记录了 backlog 峰值 120 万条。"
+    },
+    {
+      "id": "q07",
+      "query": "大促订单读的量按多少备",
+      "gold": [
+        "大促扩容 SOP 与容量基线"
+      ],
+      "answerable": true,
+      "why": "容量基线写了读 12k QPS、写 3.5k TPS。"
+    },
+    {
+      "id": "q08",
+      "query": "上回支付回调挂 18 分钟是啥原因",
+      "gold": [
+        "0811 支付回调 502：证书链不全"
+      ],
+      "answerable": true,
+      "why": "复盘说是新证书没带中间证书，TLS 握手失败。"
+    },
+    {
+      "id": "q09",
+      "query": "stg 环境 8444 挂了那次查出来是啥",
+      "gold": [
+        "1010 预发证书过期，丢人"
+      ],
+      "answerable": true,
+      "why": "预发证书 10-09 过期，且没进监控。"
+    },
+    {
+      "id": "q10",
+      "query": "P99 到多少才会真打电话",
+      "gold": [
+        "告警阈值重订：P99 800/1500"
+      ],
+      "answerable": true,
+      "why": "现行阈值里 P99 的 page 线是 1500ms。"
+    },
+    {
+      "id": "q11",
+      "query": "orders-api 监听哪个端口，网关放多少量",
+      "gold": [
+        "订单生产 8080，预发 8081",
+        "订单限流提到 2000 rps"
+      ],
+      "answerable": true,
+      "why": "端口在一条、2000 rps 在另一条，得合起来。"
+    },
+    {
+      "id": "q12",
+      "query": "pay 的限流封顶多少，证书哪天到期",
+      "gold": [
+        "支付限流 300 rps，不做排队",
+        "支付证书换新，2027-06-28 到期"
+      ],
+      "answerable": true,
+      "why": "限流 300 rps 与证书到期日分属两条笔记。"
+    },
+    {
+      "id": "q13",
+      "query": "交接是周几，P1 要多久内回",
+      "gold": [
+        "周四值班交接清单",
+        "值班红线：P1 15 分钟 ack"
+      ],
+      "answerable": true,
+      "why": "交接日在交接清单，ack 时限在值班红线。"
+    },
+    {
+      "id": "q14",
+      "query": "SQL 慢了先看啥，现在超过多久算慢",
+      "gold": [
+        "慢查询四步定位法",
+        "慢查询阈值改成 0.5 秒"
+      ],
+      "answerable": true,
+      "why": "定位步骤和 0.5s 阈值分属两条。"
+    },
+    {
+      "id": "q15",
+      "query": "7 月初订单卡死那次根因是啥，现在数据库连接开多少",
+      "gold": [
+        "0703 订单超时：连接池打满",
+        "连接池调小到 50 的步骤"
+      ],
+      "answerable": true,
+      "why": "复盘给根因，SOP 给现在的 maxPoolSize=50。"
+    },
+    {
+      "id": "q16",
+      "query": "8 月 14 号预演那次 429 到多少，灰度现在几档",
+      "gold": [
+        "0814 大促预演：限流被打满",
+        "灰度发布/回滚怎么做"
+      ],
+      "answerable": true,
+      "why": "预演峰值 1850 在复盘，5/25/100 在灰度流程。"
+    },
+    {
+      "id": "q17",
+      "query": "支付预发环境的限流是多少",
+      "gold": [],
+      "answerable": false,
+      "why": "只记了支付生产的 300 rps，预发限流没记过。"
+    },
+    {
+      "id": "q18",
+      "query": "去年双十一订单峰值多少",
+      "gold": [],
+      "answerable": false,
+      "why": "笔记从 2026-06 才开始，去年的数据没记。"
+    },
+    {
+      "id": "q19",
+      "query": "张昊手机号多少",
+      "gold": [],
+      "answerable": false,
+      "why": "只记了他的角色，号码没记过。"
+    },
+    {
+      "id": "q20",
+      "query": "通知的 Kafka broker 列表发我",
+      "gold": [],
+      "answerable": false,
+      "why": "只有消费积压复盘，没有 broker 地址。"
+    },
+    {
+      "id": "q21",
+      "query": "订单主库是 MySQL 5.7 还是 8.0",
+      "gold": [],
+      "answerable": false,
+      "why": "所有笔记都没记 MySQL 版本号。"
+    },
+    {
+      "id": "q22",
+      "query": "支付对账任务每天几点跑",
+      "gold": [],
+      "answerable": false,
+      "why": "对账任务从来没写进笔记。"
+    },
+    {
+      "id": "q23",
+      "query": "618 大促的复盘放哪了",
+      "gold": [],
+      "answerable": false,
+      "why": "只有 8 月预演和 7/9/10 月故障，618 没记。"
+    },
+    {
+      "id": "q24",
+      "query": "短信通道是哪家供应商",
+      "gold": [],
+      "answerable": false,
+      "why": "只记了限额和降级开关，没记供应商。"
+    }
+  ]
+}

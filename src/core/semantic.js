@@ -91,7 +91,28 @@ export function rankSemantic(index, queryVector, { top = 8, minSimilarity = 0 } 
  * 无论哪种方式，合并前都会再验一遍生命周期/信任（索引可能比库里状态旧）。
  * `readNote(id)` 由调用方给；`rrfK` 默认 60（与常见 RRF 实现一致）。
  */
-export function mergeSemanticItems(result, { hits = [], readNote, maxNotes = 6, allowedTrusts = null, fusion = 'rrf', rrfK = 60 } = {}) {
+/**
+ * 词法名次从哪来：优先用调用方给的 `lexRanks`（全库候选的稳定名次），
+ * 其次用条目自带的 `lexRank`，最后才退回「它在这一批里的位置」。
+ *
+ * 为什么前两种存在：RRF 的分数只该由「这条记忆在全库排第几」决定。用批次
+ * 内位置会让同一个笔记在预算松紧不同时拿到不同分数——同一问题、同一库，
+ * 换 `maxNotes` 就可能换答案，这不是可以被解释的行为。
+ */
+function rankFromMap(lexRanks, id) {
+  if (!lexRanks) return null;
+  const value = typeof lexRanks.get === 'function' ? lexRanks.get(id) : lexRanks[id];
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function lexicalRankOf(lexRanks, item, index) {
+  const fromMap = rankFromMap(lexRanks, item.id);
+  if (fromMap !== null) return fromMap;
+  if (Number.isFinite(item.lexRank) && item.lexRank > 0) return item.lexRank;
+  return index + 1;
+}
+
+export function mergeSemanticItems(result, { hits = [], readNote, maxNotes = 6, allowedTrusts = null, fusion = 'rrf', rrfK = 60, lexRanks = null } = {}) {
   const items = Array.isArray(result?.items) ? result.items : [];
   if (!Array.isArray(hits) || hits.length === 0 || typeof readNote !== 'function') return result;
   const known = new Set(items.map((item) => item.id));
@@ -131,7 +152,7 @@ export function mergeSemanticItems(result, { hits = [], readNote, maxNotes = 6, 
     const k = Math.max(1, Math.floor(rrfK) || 60);
     const slots = new Map();
     items.forEach((item, index) => {
-      slots.set(item.id, { item, lex: index + 1, sem: null });
+      slots.set(item.id, { item, lex: lexicalRankOf(lexRanks, item, index), sem: null });
     });
     // 语义命中按原始顺序给名次（rankSemantic 已按相似度降序）。
     hits.forEach((hit, index) => {
@@ -140,7 +161,8 @@ export function mergeSemanticItems(result, { hits = [], readNote, maxNotes = 6, 
     });
     added.forEach((item) => {
       const index = hits.findIndex((hit) => hit.id === item.id);
-      const slot = slots.get(item.id) ?? { item, lex: null, sem: null };
+      // 语义补进来的条目也要能查到全库名次：它被预算裁掉过，不代表它没有名次。
+      const slot = slots.get(item.id) ?? { item, lex: rankFromMap(lexRanks, item.id), sem: null };
       slot.sem = index >= 0 ? index + 1 : Number.MAX_SAFE_INTEGER;
       slots.set(item.id, slot);
     });
