@@ -6,12 +6,12 @@
     "url": "https://github.com/yffo/tabellio",
     "source": "github"
   },
-  "version": "0.1.12",
+  "version": "0.1.13",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "tabellio",
-      "version": "0.1.12",
+      "version": "0.1.13",
       "transport": {
         "type": "stdio"
       },
